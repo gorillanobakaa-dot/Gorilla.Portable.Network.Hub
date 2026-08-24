@@ -47,6 +47,11 @@ pub struct Transfer {
     pub rate: f64,
     pub finished: bool,
     updated: Instant,
+    /// Rate is measured over a window rather than between writes. A 256 KB
+    /// write can complete in microseconds, and bytes divided by that is a
+    /// number in the thousands that means nothing.
+    window_bytes: u64,
+    window_start: Instant,
 }
 
 /// A plain Vec, not a map. A classroom is thirty devices, and a linear scan of
@@ -79,27 +84,49 @@ pub fn is_running() -> bool {
     RUNNING.load(Ordering::Relaxed)
 }
 
-fn note(peer: &str, file: &str, done: u64, total: u64, rate: f64, finished: bool) {
+/// One row per DEVICE, not per connection.
+///
+/// This was keyed on `peer`, which is what the socket reports: an address AND a
+/// port. A single laptop downloading with four parallel connections therefore
+/// appeared as four separate devices, each stuck at 1%, and the screen said
+/// "5 devices getting files" when one child was in the room. For a teacher that
+/// is worse than showing nothing: it looks like five children are stuck.
+///
+/// `delta` is the bytes just written, not a running total, because the running
+/// total of one connection says nothing about what the device as a whole has.
+fn note(peer: &str, file: &str, delta: u64, total: u64) {
+    let ip = peer.split(':').next().unwrap_or(peer).to_string();
     let mut t = TRANSFERS.lock().unwrap_or_else(|e| e.into_inner());
-    // Match on the device, not on device+file: one row per child is what a
-    // teacher wants to read, and a device only fetches one file at a time in
-    // any case.
-    if let Some(e) = t.iter_mut().find(|e| e.peer == peer) {
-        e.file = file.to_string();
-        e.done = done;
+    if let Some(e) = t.iter_mut().find(|e| e.peer == ip) {
+        // A device that moves on to a second file starts again from zero.
+        if e.file != file {
+            e.file = file.to_string();
+            e.done = 0;
+            e.window_bytes = 0;
+            e.window_start = Instant::now();
+        }
+        e.done = (e.done + delta).min(total.max(1));
         e.total = total;
-        e.rate = rate;
-        e.finished = finished;
+        e.window_bytes += delta;
+        let secs = e.window_start.elapsed().as_secs_f64();
+        if secs >= 1.0 {
+            e.rate = e.window_bytes as f64 / secs;
+            e.window_bytes = 0;
+            e.window_start = Instant::now();
+        }
+        e.finished = e.done >= total;
         e.updated = Instant::now();
     } else {
         t.push(Transfer {
-            peer: peer.to_string(),
+            peer: ip,
             file: file.to_string(),
-            done,
+            done: delta.min(total.max(1)),
             total,
-            rate,
-            finished,
+            rate: 0.0,
+            finished: false,
             updated: Instant::now(),
+            window_bytes: delta,
+            window_start: Instant::now(),
         });
     }
 }
@@ -260,16 +287,8 @@ hub serve  -  hand out the files in a folder to every device in the room
     // here would outlive the process and leave the teacher's wifi replaced by
     // a network with nobody serving on it. systemd owns the restore, we do not.
     if let Some(h) = &hotspot {
-        h.arm_restore(30);
-        let ssid = h.ssid.clone();
-        let iface = h.iface.clone();
-        thread::spawn(move || {
-            let _ = (&ssid, &iface);
-            loop {
-                thread::sleep(std::time::Duration::from_secs(HEARTBEAT));
-                crate::net::rearm_restore(RESTORE_FUSE);
-            }
-        });
+        h.arm_restore(crate::net::RESTORE_FUSE);
+        crate::net::start_heartbeat();
     }
 
     accept_loop(listener, root, helpers);
@@ -290,11 +309,6 @@ pub fn default_helpers() -> usize {
     let t = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
     (t * 8).max(16)
 }
-
-/// Re-armed on a heartbeat, so the fuse is always longer than the gap between
-/// heartbeats but shorter than a teacher's patience.
-const HEARTBEAT: u64 = 60;
-const RESTORE_FUSE: u64 = 180;
 
 /// A peer that stops consuming must not own a worker forever.
 ///
@@ -443,7 +457,6 @@ fn send_file(out: &mut BufWriter<TcpStream>, path: &Path, range: Option<&str>, p
     // Progress is reported against the WHOLE file, not against this range.
     // A client asking for 2 MB pieces would otherwise show thirty separate
     // transfers racing from 0 to 100, which tells a teacher nothing.
-    let mut sent_here = 0u64;
     while left > 0 {
         let want = std::cmp::min(left as usize, buf.len());
         let n = f.read(&mut buf[..want])?;
@@ -452,14 +465,11 @@ fn send_file(out: &mut BufWriter<TcpStream>, path: &Path, range: Option<&str>, p
         }
         out.write_all(&buf[..n])?;
         left -= n as u64;
-        sent_here += n as u64;
-        let secs = t0.elapsed().as_secs_f64().max(0.001);
-        note(peer, &name, start + sent_here, total, sent_here as f64 / secs, false);
+        note(peer, &name, n as u64, total);
     }
     out.flush()?;
     let secs = t0.elapsed().as_secs_f64().max(0.001);
     SERVED.fetch_add(len, Ordering::Relaxed);
-    note(peer, &name, start + sent_here, total, len as f64 / secs, end + 1 >= total);
     if QUIET.load(Ordering::Relaxed) {
         // The screen is drawing. A println from a worker thread here scrolls
         // the frame out from under itself and the display tears.

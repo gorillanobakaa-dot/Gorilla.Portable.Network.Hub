@@ -64,10 +64,10 @@ ANSI has drawn since 1979.
 |---|---|
 | three separate command-line tools | 1,262,576 |
 | merged into one binary | 514,480 |
-| **with the whole screen added** | **597,648** |
-| the same thing built for Windows | **520,704** |
+| **with the whole screen added** | **596,960** |
+| the same thing built for Windows | **521,216** |
 
-The screen cost 83,168 bytes. On the connections this is for, that is about ten
+The screen cost 82,480 bytes. On the connections this is for, about ten seconds. On the connections this is for, that is about ten
 seconds.
 
 The access point rig used to take the measurements lives separately in

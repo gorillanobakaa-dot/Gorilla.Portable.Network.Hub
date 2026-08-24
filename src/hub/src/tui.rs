@@ -300,12 +300,18 @@ impl App {
         f.blank();
         let live = serve::transfers();
         let sent = serve::total_sent();
-        f.push(&format!(
-            "  {} device{} getting files, {} sent so far",
-            live.iter().filter(|t| !t.finished).count(),
-            if live.iter().filter(|t| !t.finished).count() == 1 { "" } else { "s" },
-            human(sent)
-        ));
+        // "0 devices getting files" next to a row saying 100% done is a screen
+        // arguing with itself. Count both states and say whichever is true.
+        let active = live.iter().filter(|t| !t.finished).count();
+        let complete = live.iter().filter(|t| t.finished).count();
+        let devices = |n: usize| if n == 1 { "device" } else { "devices" };
+        f.push(&match (active, complete) {
+            (0, 0) => format!("  Nothing sent yet."),
+            (0, c) => format!("  {c} {} finished, {} sent so far", devices(c), human(sent)),
+            (a, 0) => format!("  {a} {} getting files, {} sent so far", devices(a), human(sent)),
+            (a, c) => format!("  {a} {} getting files, {c} finished, {} sent so far",
+                              devices(a), human(sent)),
+        });
         f.blank();
         if live.is_empty() {
             f.push_dim("  Nobody has connected yet.");
@@ -319,8 +325,8 @@ impl App {
         for t in live.iter().take(room) {
             let pct = if t.total > 0 { t.done as f64 / t.total as f64 } else { 0.0 };
             f.push(&format!(
-                "  {:<16}{} {:>3}%  {:>9}  {}",
-                t.peer.split(':').next().unwrap_or(&t.peer),
+                "  {:<16}{} {:>3}%  {:>12}  {}",
+                t.peer,
                 bar(pct, 16),
                 (pct * 100.0) as u64,
                 if t.finished { "done".to_string() } else { format!("{:.1} MB/s", t.rate / 1e6) },
@@ -747,9 +753,9 @@ impl App {
                     // Armed BEFORE anything else can go wrong. systemd owns
                     // the timer, so the wifi comes back even if this program is
                     // killed outright, which Drop and panic hooks cannot cover.
-                    h.arm_restore(RESTORE_FUSE);
+                    h.arm_restore(net::RESTORE_FUSE);
                     self.hotspot = Some(h);
-                    start_heartbeat();
+                    net::start_heartbeat();
                 }
                 Err(e) => {
                     self.note(&e);
@@ -849,18 +855,6 @@ impl App {
         self.screen = Screen::Receiving;
         self.row = 0;
     }
-}
-
-/// Longer than the heartbeat, shorter than a teacher's patience.
-const RESTORE_FUSE: u64 = 180;
-const HEARTBEAT: u64 = 60;
-
-/// Push the wifi restore back out while a lesson is actually running.
-fn start_heartbeat() {
-    std::thread::spawn(|| loop {
-        std::thread::sleep(Duration::from_secs(HEARTBEAT));
-        net::rearm_restore(RESTORE_FUSE);
-    });
 }
 
 // ---------------------------------------------------------------- formatting

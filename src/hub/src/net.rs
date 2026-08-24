@@ -345,6 +345,23 @@ pub fn suggest_password() -> String {
 /// well as from the guard. Set once, when a hotspot is actually created.
 static PREVIOUS_WIFI: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
+/// How long the restore timer waits, and how often it is pushed back.
+///
+/// The fuse must be comfortably longer than the heartbeat, or a slow tick
+/// restores the wifi in the middle of a lesson. Defined once: the command line
+/// and the screen both start the same heartbeat, and two copies of these
+/// numbers is how one of them ends up shorter than the other.
+pub const RESTORE_FUSE: u64 = 180;
+pub const HEARTBEAT: u64 = 60;
+
+/// Keep pushing the restore back for as long as this program is alive.
+pub fn start_heartbeat() {
+    std::thread::spawn(|| loop {
+        std::thread::sleep(std::time::Duration::from_secs(HEARTBEAT));
+        rearm_restore(RESTORE_FUSE);
+    });
+}
+
 /// Push the restore back out to `seconds` from now.
 ///
 /// Called on a heartbeat while a lesson is running. If the tool stops for any

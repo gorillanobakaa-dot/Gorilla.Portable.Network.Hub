@@ -462,6 +462,14 @@ found three faults in one evening:
    with no message. Capped at 8 MB, derived from the real shape: one ~71-byte
    line per 2 MB piece covers a ~230 GB download.
 
+A fourth, found only once both screens were driven at the same time: the live
+transfer table was keyed on the socket's peer address, which includes the
+**port**. One laptop downloading with four parallel connections therefore
+appeared as four devices, each stuck at 1%, and the header said "5 devices
+getting files" with one child in the room. Keyed on the address alone now, with
+each write adding its delta to that device's total and the rate measured over a
+one-second window rather than between writes.
+
 And one found by a test written to **lie** to the program: a `.parts` sidecar
 claiming pieces the file was never long enough to hold was believed, and the
 download reported success at **2,861 MB/s having fetched nothing**, differing
