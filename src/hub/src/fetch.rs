@@ -50,6 +50,35 @@ const RETRY_MAX_MS: u64 = 15_000;
 
 static DONE_BYTES: AtomicU64 = AtomicU64::new(0);
 static TOTAL: AtomicU64 = AtomicU64::new(0);
+static CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// The screen is drawing; a println from a worker thread scrolls the frame out
+/// from under itself and the display tears.
+static QUIET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// The last few things that happened, for the screen to show. Retries and
+/// damaged pieces are exactly what a teacher needs to see and exactly what
+/// scrolls past unread on a command line.
+static MESSAGES: Mutex<Vec<(String, u32)>> = Mutex::new(Vec::new());
+/// Counted rather than listed. Twelve identical retry lines fill a screen and
+/// say exactly as much as one line saying twelve.
+static RETRIES: AtomicU64 = AtomicU64::new(0);
+static DAMAGED: AtomicU64 = AtomicU64::new(0);
+
+/// (pieces asked for again, pieces that arrived damaged).
+pub fn counts() -> (u64, u64) {
+    (RETRIES.load(Ordering::Relaxed), DAMAGED.load(Ordering::Relaxed))
+}
+
+pub fn set_quiet(q: bool) {
+    QUIET.store(q, Ordering::Relaxed);
+    if q {
+        MESSAGES.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+}
+
+/// The recent messages, each with how many times it has just happened.
+pub fn messages() -> Vec<(String, u32)> {
+    MESSAGES.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
 
 struct Url {
     host: String,
@@ -328,6 +357,20 @@ fn fetch_sums(u: &Url) -> std::io::Result<HashMap<u64, String>> {
     let (status, len) = request_on(&mut c, &su, None)?;
     let mut m = HashMap::new();
     if status != 200 { return Ok(m); }
+    // The length comes from the other machine, and this allocates it. A
+    // fingerprint file holds one short line per 2 MB piece, so 8 MB covers a
+    // download of about 230 GB; anything larger is a wrong answer or a server
+    // that means harm, and on a classroom laptop with 2 GB of memory an
+    // unbounded allocation here is the whole machine.
+    //
+    // Found 2026-08-24: a test server that answered every path with the file
+    // itself made this try to read 400 MB as a fingerprint list, and the
+    // download sat at 0 bytes with no message for as long as anyone watched.
+    const SUMS_LIMIT: u64 = 8 * 1024 * 1024;
+    if len > SUMS_LIMIT {
+        log(&format!("ignoring a fingerprint list of {len} bytes, which is not a fingerprint list"));
+        return Ok(m);
+    }
     let mut body = vec![0u8; len as usize];
     c.r.read_exact(&mut body)?;
     for line in String::from_utf8_lossy(&body).lines() {
@@ -406,8 +449,36 @@ fn backoff(fails: u32) -> std::time::Duration {
 /// and silently discards stderr, where every retry message was going. A person
 /// handing out files should not have to know what a stream is to end up with a
 /// usable record of what happened.
+/// Same sentence, different numbers.
+fn same_shape(a: &str, b: &str) -> bool {
+    let strip = |s: &str| s.chars().filter(|c| !c.is_ascii_digit()).collect::<String>();
+    strip(a) == strip(b)
+}
+
 fn log(msg: &str) {
-    println!("{msg}");
+    if QUIET.load(Ordering::Relaxed) {
+        let mut m = MESSAGES.lock().unwrap_or_else(|e| e.into_inner());
+        // Two messages that differ only in a piece number are the same event
+        // happening again, so they collapse to one line and a count. Without
+        // this, a link that is dropping fills the whole screen with the same
+        // sentence and hides everything else on it.
+        if let Some(last) = m.last_mut() {
+            if same_shape(&last.0, msg) {
+                last.1 += 1;
+                last.0 = msg.to_string();
+                return;
+            }
+        }
+        // Bounded: a transfer that retries for an hour must not grow a log in
+        // memory on a machine that has 2 GB of it.
+        if m.len() >= 40 {
+            m.remove(0);
+        }
+        m.push((msg.to_string(), 1));
+        return;
+    } else {
+        println!("{msg}");
+    }
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open("fetch.log") {
         let _ = writeln!(f, "{msg}");
     }
@@ -497,38 +568,81 @@ fetch  -  download a file, resuming if it was interrupted
         return;
     }
 
+    match download(&args[1], &out, workers, verify) {
+        Ok(rate) => println!("done: {:.2} MB/s", rate),
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Fetch a file, resuming whatever is already on disk.
+///
+/// Returns megabytes per second, or a sentence a teacher can act on. It does
+/// NOT exit the process and it does NOT print progress: both of those belong to
+/// the caller, because the same function is driven from a command line and from
+/// a screen that is redrawing four times a second.
+pub fn download(url_str: &str, out: &str, workers: usize, verify: bool) -> Result<f64, String> {
+    let url = parse_url(url_str).ok_or_else(|| format!("That is not a web address: {url_str}"))?;
+
     // Held until main returns, so it covers the entire transfer and is
     // released automatically however we exit.
     let _awake = StayAwake::new();
 
-    let total = probe_total(&url).unwrap_or(0);
+    let total = probe_total(&url).map_err(|e| describe(&e))?;
     if total == 0 {
-        eprintln!("could not determine size, or the server does not support ranges");
-        std::process::exit(1);
+        return Err("That computer answered, but not with a file. \
+                    Check the name is right.".into());
     }
+    TOTAL.store(total, Ordering::Relaxed);
+    DONE_BYTES.store(0, Ordering::Relaxed);
+    CANCEL.store(false, Ordering::Relaxed);
+    RETRIES.store(0, Ordering::Relaxed);
+    DAMAGED.store(0, Ordering::Relaxed);
     // Per-chunk digests, if the server offers them. A mismatch requeues that
     // chunk alone; there is no whole-file rehash and no all-or-nothing verdict.
     let sums: Arc<HashMap<u64, String>> = Arc::new(if verify {
         match fetch_sums(&url) {
-            Ok(m) if !m.is_empty() => { println!("verifying against {} chunk digests", m.len()); m }
-            _ => { eprintln!("warning: no .sums available, continuing WITHOUT verification"); HashMap::new() }
+            Ok(m) if !m.is_empty() => { log(&format!("checking every piece against {} fingerprints", m.len())); m }
+            _ => { log("no fingerprints offered, so the pieces cannot be checked"); HashMap::new() }
         }
     } else { HashMap::new() });
 
     let chunks: u64 = total.div_ceil(CHUNK);
-    println!("{} bytes, {} chunks of {} MB, {} workers ({} threads detected)",
-             total, chunks, CHUNK / 1048576, workers,
-             std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0));
+    log(&format!("{:.1} MB in {} pieces, {} at a time",
+                 total as f64 / 1e6, chunks, workers));
 
     // Preallocate, then load whatever a previous run finished.
-    let f = OpenOptions::new().create(true).write(true).read(true).open(&out).expect("open output");
-    f.set_len(total).expect("preallocate");
+    // How much is actually on disk, read BEFORE the file is grown to full size.
+    // After set_len the file is `total` bytes of mostly zeroes and there is no
+    // way left to tell what really arrived.
+    let existing_len = fs::metadata(out).map(|m| m.len()).unwrap_or(0);
+    let f = OpenOptions::new().create(true).write(true).read(true).open(out)
+        .map_err(|e| format!("Cannot write to {out}: {e}"))?;
+    f.set_len(total).map_err(|e| format!("Not enough room on the disk for {out}: {e}"))?;
     let parts_path = format!("{out}.parts");
     let mut done: BTreeSet<u64> = fs::read_to_string(&parts_path)
         .map(|s| s.split_whitespace().filter_map(|t| t.parse().ok()).collect())
         .unwrap_or_default();
     if !done.is_empty() {
-        println!("resuming: {} of {} chunks already complete", done.len(), chunks);
+        // A piece cannot be complete if the file was never long enough to hold
+        // it. This costs one stat and needs nothing from the server, so unlike
+        // the digest check below it always runs.
+        //
+        // Found 2026-08-24 by a deliberately wrong test: a file truncated to
+        // 1,000,000 bytes with a sidecar claiming both 2 MB pieces were done
+        // was reported complete, at 2,861 MB/s, having fetched nothing. A
+        // sidecar is a CLAIM. Anything checkable about it should be checked.
+        let before = done.len();
+        done.retain(|c| existing_len >= std::cmp::min((c + 1) * CHUNK, total));
+        if done.len() != before {
+            log(&format!("{} pieces were recorded but not actually here, fetching them again",
+                         before - done.len()));
+        }
+    }
+    if !done.is_empty() {
+        log(&format!("carrying on: {} of {} pieces are already here", done.len(), chunks));
         // VERIFY WHAT WE ALREADY HAVE, do not merely trust the sidecar.
         //
         // Found 2026-08-24 by a test that corrupted a chunk on disk, marked it
@@ -543,7 +657,7 @@ fetch  -  download a file, resuming if it was interrupted
         if !sums.is_empty() {
             let bad = verify_existing(&out, &done, total, &sums);
             if !bad.is_empty() {
-                println!("  {} of those failed verification and will be refetched", bad.len());
+                log(&format!("{} of those were damaged and will be fetched again", bad.len()));
                 for c in &bad { done.remove(c); }
             }
         }
@@ -553,7 +667,7 @@ fetch  -  download a file, resuming if it was interrupted
     // The sidecar is rewritten from the VERIFIED set, so a chunk that failed
     // is not silently trusted again by the next run.
     {
-        let mut p = File::create(&parts_path).expect("rewrite parts");
+        let mut p = File::create(&parts_path).map_err(|e| format!("Cannot write {parts_path}: {e}"))?;
         for c in &done { let _ = writeln!(p, "{c}"); }
     }
 
@@ -561,7 +675,8 @@ fetch  -  download a file, resuming if it was interrupted
     let queue = Arc::new(Mutex::new(queue));
     let done = Arc::new(Mutex::new(done));
     let parts_file = Arc::new(Mutex::new(
-        OpenOptions::new().create(true).append(true).open(&parts_path).expect("open parts"),
+        OpenOptions::new().create(true).append(true).open(&parts_path)
+            .map_err(|e| format!("Cannot write {parts_path}: {e}"))?,
     ));
 
     let t0 = Instant::now();
@@ -570,7 +685,7 @@ fetch  -  download a file, resuming if it was interrupted
         let (q, d, pf) = (Arc::clone(&queue), Arc::clone(&done), Arc::clone(&parts_file));
         let sums = Arc::clone(&sums);
         let (host, port, path) = (url.host.clone(), url.port, url.path.clone());
-        let outfile = out.clone();
+        let outfile = out.to_string();
         handles.push(thread::spawn(move || {
             let u = Url { host, port, path };
             // read(true) as well as write(true): chunk_digest reads the bytes
@@ -589,6 +704,13 @@ fetch  -  download a file, resuming if it was interrupted
             // is not hammered by every worker at once.
             let mut fails: u32 = 0;
             loop {
+                // Stopping is "stop taking work", not "kill the thread". A
+                // half-written chunk left behind by a killed thread would be
+                // recorded as done, and the damage would only show up the next
+                // time someone opened the file.
+                if CANCEL.load(Ordering::Relaxed) {
+                    break;
+                }
                 let chunk = { q.lock().unwrap().pop() };
                 let Some(c) = chunk else { break };
                 let start = c * CHUNK;
@@ -598,7 +720,8 @@ fetch  -  download a file, resuming if it was interrupted
                     match Conn::open(&u) {
                         Ok(k) => conn = Some(k),
                         Err(e) => {
-                            log(&format!("connect failed ({e}), backing off"));
+                            RETRIES.fetch_add(1, Ordering::Relaxed);
+                            log(&format!("lost contact ({}), waiting to try again", plain_error(&e)));
                             q.lock().unwrap().push(c);
                             fails += 1;
                             thread::sleep(backoff(fails));
@@ -615,8 +738,9 @@ fetch  -  download a file, resuming if it was interrupted
                                 Ok(got) if &got == expect => {}
                                 Ok(got) => {
                                     fails += 1;
-                                    log(&format!("chunk {c} DIGEST MISMATCH (got {}, want {}), refetching",
-                                                 &got[..16], &expect[..16]));
+                                    DAMAGED.fetch_add(1, Ordering::Relaxed);
+                                    log(&format!("piece {c} arrived damaged (fingerprint {} not {}), asking again",
+                                                 &got[..8], &expect[..8]));
                                     q.lock().unwrap().push(c);
                                     thread::sleep(backoff(fails));
                                     continue;
@@ -643,7 +767,9 @@ fetch  -  download a file, resuming if it was interrupted
                         // reconnect rather than trying to reuse a broken one.
                         conn = None;
                         fails += 1;
-                        log(&format!("chunk {c} failed ({e}), retry in {:?}", backoff(fails)));
+                        RETRIES.fetch_add(1, Ordering::Relaxed);
+                        log(&format!("piece {c} did not arrive ({}), asking again",
+                                     plain_error(&e)));
                         q.lock().unwrap().push(c);
                         thread::sleep(backoff(fails));
                     }
@@ -652,36 +778,27 @@ fetch  -  download a file, resuming if it was interrupted
         }));
     }
 
-    let reporter = thread::spawn(move || {
-        let mut last = 0u64;
-        loop {
-            thread::sleep(std::time::Duration::from_secs(2));
-            let n = DONE_BYTES.load(Ordering::Relaxed);
-            if n >= total {
-                break;
-            }
-            println!(
-                "  {:.2} GB / {:.2} GB   {:.2} MB/s",
-                n as f64 / 1e9,
-                total as f64 / 1e9,
-                (n - last) as f64 / 2.0 / 1_048_576.0
-            );
-            last = n;
-        }
-    });
-
+    // No progress thread here. On the command line `run` prints; on the screen
+    // the draw loop reads DONE_BYTES itself. A library that prints is a library
+    // that fights whatever is drawing.
     for h in handles {
         let _ = h.join();
     }
     let secs = t0.elapsed().as_secs_f64().max(0.001);
-    let _ = reporter.join();
-    println!(
-        "done: {:.2} GB in {:.1}s = {:.2} MB/s",
-        total as f64 / 1e9,
-        secs,
-        total as f64 / secs / 1_048_576.0
-    );
+    if CANCEL.load(Ordering::Relaxed) {
+        // The .parts file stays. That is the entire point: the next run reads
+        // it and continues instead of starting the file again.
+        return Err("Stopped. Run the same thing again to carry on from here.".into());
+    }
+    let got = DONE_BYTES.load(Ordering::Relaxed);
+    if got < total {
+        return Err(format!(
+            "Only {} of {} bytes arrived. The signal was lost. \
+             Ask for it again and it will carry on from here.",
+            got, total));
+    }
     let _ = fs::remove_file(&parts_path);
+    Ok(total as f64 / secs / 1_048_576.0)
 }
 
 fn fetch_chunk(c: &mut Conn, u: &Url, start: u64, end: u64, fh: &mut File) -> std::io::Result<u64> {
@@ -705,4 +822,40 @@ fn fetch_chunk(c: &mut Conn, u: &Url, start: u64, end: u64, fh: &mut File) -> st
         written += n as u64;
     }
     Ok(written)
+}
+
+/// Ask the transfer to stop. Checked between pieces, so it takes effect within
+/// one piece rather than instantly, and nothing half-written is ever recorded
+/// as complete.
+pub fn cancel() {
+    CANCEL.store(true, Ordering::Relaxed);
+}
+
+/// (bytes so far, bytes expected) for whatever is downloading.
+pub fn progress() -> (u64, u64) {
+    (DONE_BYTES.load(Ordering::Relaxed), TOTAL.load(Ordering::Relaxed))
+}
+
+/// "Connection reset by peer (os error 104)" tells a teacher nothing, and the
+/// number at the end is the part that looks most alarming.
+fn plain_error(e: &std::io::Error) -> String {
+    let s = e.to_string();
+    match s.split_once(" (os error") {
+        Some((head, _)) => head.to_string(),
+        None => s,
+    }
+}
+
+/// Network errors say "Connection refused (os error 111)". A teacher needs to
+/// know which of the three things to try.
+fn describe(e: &std::io::Error) -> String {
+    use std::io::ErrorKind::*;
+    match e.kind() {
+        ConnectionRefused => "Nothing is handing out files at that address. \
+                              Is the teacher's computer still running it?".into(),
+        TimedOut | WouldBlock => "No answer. The signal may be too weak, \
+                                  or you may be on a different network.".into(),
+        NotFound => "That computer is handing files out, but not that one.".into(),
+        _ => format!("Could not reach it: {e}"),
+    }
 }

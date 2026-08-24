@@ -20,64 +20,112 @@ use std::fs;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Instant;
 use std::{env, thread};
 
-/// Workers scale with the machine this is RUNNING on, not with the one it was
-/// written on. 64 was hardcoded here, and it is exactly what this Sony's 8
-/// threads produce, which is why the assumption stayed invisible: it was right
-/// for the development machine and wrong as a constant. The fleet ranges from a
-/// 4-thread 2011 MacBook Air to a 12-thread ThinkPad.
-///
-/// Eight per thread rather than one, because serving files is I/O-bound: a
-/// worker spends most of its life blocked on a socket, not computing.
-/// Override with FILESERVE_WORKERS.
-fn workers() -> usize {
-    if let Some(n) = std::env::var("FILESERVE_WORKERS").ok().and_then(|v| v.parse().ok()) {
-        return n;
-    }
-    let t = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
-    (t * 8).max(16)
-}
 const BUF: usize = 256 * 1024;
 
 static LIVE: AtomicU64 = AtomicU64::new(0);
 static SERVED: AtomicU64 = AtomicU64::new(0);
+/// Set once the accept loop is up, so a caller that did not block on `run` can
+/// tell the difference between "starting" and "started".
+static RUNNING: AtomicBool = AtomicBool::new(false);
+/// Quiet mode: the screen draws the numbers, so the server must not also print
+/// them. A println from a worker thread while a frame is being drawn scrolls
+/// the whole terminal.
+static QUIET: AtomicBool = AtomicBool::new(false);
 
-pub fn run(args: Vec<String>) {
-    // args, NOT env::args(). This was a mechanical refactor from main() to
-    // run(args) and the body still reached for the global, so `hub serve
-    // /folder 1.2.3.4:80` tried to serve a folder called "serve" and bind to
-    // "/folder". It compiled and ran and did the wrong thing silently.
-    let root: PathBuf = args.get(1).cloned().unwrap_or_else(|| ".".into()).into();
-    let addr = args.get(2).cloned().unwrap_or_else(|| "0.0.0.0:8080".into());
-    if args.iter().any(|a| a == "-h" || a == "--help") {
-        println!("fileserve  -  hand out the files in a folder over the network\n");
-        println!("  fileserve <folder> [address:port]     default 0.0.0.0:8080\n");
-        println!("  Serves byte ranges, so an interrupted download can resume.");
-        return;
+/// One device, mid-download, as the teacher sees it.
+#[derive(Clone)]
+pub struct Transfer {
+    pub peer: String,
+    pub file: String,
+    pub done: u64,
+    pub total: u64,
+    pub rate: f64,
+    pub finished: bool,
+    updated: Instant,
+}
+
+/// A plain Vec, not a map. A classroom is thirty devices, and a linear scan of
+/// thirty entries is faster than hashing the key. Const Mutex::new so there is
+/// no lazy initialisation to get wrong.
+static TRANSFERS: Mutex<Vec<Transfer>> = Mutex::new(Vec::new());
+
+/// What is happening right now, for the screen to draw.
+pub fn transfers() -> Vec<Transfer> {
+    let mut t = TRANSFERS.lock().unwrap_or_else(|e| e.into_inner());
+    // A device that walked out of range leaves a row that would otherwise sit
+    // there forever claiming 43%. Finished rows linger briefly so the teacher
+    // sees them complete, then go.
+    t.retain(|x| {
+        let age = x.updated.elapsed().as_secs();
+        if x.finished { age < 20 } else { age < 60 }
+    });
+    t.clone()
+}
+
+pub fn total_sent() -> u64 {
+    SERVED.load(Ordering::Relaxed)
+}
+
+pub fn live_connections() -> u64 {
+    LIVE.load(Ordering::Relaxed)
+}
+
+pub fn is_running() -> bool {
+    RUNNING.load(Ordering::Relaxed)
+}
+
+fn note(peer: &str, file: &str, done: u64, total: u64, rate: f64, finished: bool) {
+    let mut t = TRANSFERS.lock().unwrap_or_else(|e| e.into_inner());
+    // Match on the device, not on device+file: one row per child is what a
+    // teacher wants to read, and a device only fetches one file at a time in
+    // any case.
+    if let Some(e) = t.iter_mut().find(|e| e.peer == peer) {
+        e.file = file.to_string();
+        e.done = done;
+        e.total = total;
+        e.rate = rate;
+        e.finished = finished;
+        e.updated = Instant::now();
+    } else {
+        t.push(Transfer {
+            peer: peer.to_string(),
+            file: file.to_string(),
+            done,
+            total,
+            rate,
+            finished,
+            updated: Instant::now(),
+        });
     }
-    let root = match root.canonicalize() {
-        Ok(r) => r,
-        Err(e) => { eprintln!("Cannot use that folder: {} ({e})", root.display()); std::process::exit(1); }
-    };
-    let listener = match TcpListener::bind(&addr) {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("Cannot listen on {addr}: {e}");
-            eprintln!("Something else may already be using that port.");
-            std::process::exit(1);
-        }
-    };
-    let nworkers = workers();
-    println!("serving {} on {} with {nworkers} workers ({} threads detected)",
-             root.display(), addr, std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0));
+}
 
+/// Bind, then serve on background threads and return.
+///
+/// `run` blocks in the accept loop, which is right for a command line and
+/// impossible for a screen that has to keep drawing. Binding happens BEFORE the
+/// thread is spawned so that "the port is already in use" is reported to the
+/// caller as an error rather than appearing on a background thread after the
+/// screen has already said the network is ready.
+pub fn start(root: &Path, addr: &str, helpers: usize) -> std::io::Result<()> {
+    let root = root.canonicalize()?;
+    let listener = TcpListener::bind(addr)?;
+    QUIET.store(true, Ordering::Relaxed);
+    thread::spawn(move || {
+        accept_loop(listener, root, helpers);
+    });
+    RUNNING.store(true, Ordering::Relaxed);
+    Ok(())
+}
+
+fn accept_loop(listener: TcpListener, root: PathBuf, helpers: usize) {
     let (tx, rx) = mpsc::channel::<TcpStream>();
     let rx = Arc::new(Mutex::new(rx));
-    for _ in 0..nworkers {
+    for _ in 0..helpers {
         let rx = Arc::clone(&rx);
         let root = root.clone();
         thread::spawn(move || loop {
@@ -97,6 +145,156 @@ pub fn run(args: Vec<String>) {
         let _ = tx.send(s);
     }
 }
+
+pub fn run(args: Vec<String>) {
+    const USAGE: &str = "\
+hub serve  -  hand out the files in a folder to every device in the room
+
+  hub serve <folder> [options]
+
+  --name <network>      create a wifi network with this name and serve over it
+  --password <word>     password for that network (at least 8 characters)
+  --helpers <number>    how many devices to serve at once (default: 8 per core)
+  --port <number>       which port to listen on (default 8080)
+  --address <ip:port>   listen on one address only
+  -h, --help            this text
+
+  examples:
+    hub serve ~/lessons
+    hub serve ~/lessons --name Classroom --password chalkdust
+
+  Without --name it hands files out over whatever network already exists.
+  With --name it creates one, which needs administrator rights.
+
+  Files are served in pieces that can be asked for individually, so a device
+  that loses the signal carries on from where it stopped instead of starting
+  the whole file again.";
+
+    if args.iter().any(|a| a == "-h" || a == "--help") {
+        println!("{USAGE}");
+        return;
+    }
+
+    // args, NOT env::args(). This was a mechanical refactor from main() to
+    // run(args) and the body still reached for the global, so `hub serve
+    // /folder 1.2.3.4:80` tried to serve a folder called "serve" and bind to
+    // "/folder". It compiled and ran and did the wrong thing silently.
+    let mut root: PathBuf = ".".into();
+    let mut addr: Option<String> = None;
+    let mut port: u16 = 8080;
+    let mut helpers = default_helpers();
+    let mut ssid: Option<String> = None;
+    let mut password: Option<String> = None;
+
+    let mut i = 1;
+    let mut positional = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        let value = || -> Option<String> { args.get(i + 1).cloned() };
+        match a {
+            "--name" => { ssid = value(); i += 2; }
+            "--password" => { password = value(); i += 2; }
+            "--helpers" | "--workers" => {
+                helpers = value().and_then(|v| v.parse().ok()).unwrap_or(helpers).clamp(1, 512);
+                i += 2;
+            }
+            "--port" => { port = value().and_then(|v| v.parse().ok()).unwrap_or(port); i += 2; }
+            "--address" => { addr = value(); i += 2; }
+            other if other.starts_with('-') => {
+                eprintln!("Not an option: {other}\n");
+                eprintln!("{USAGE}");
+                std::process::exit(2);
+            }
+            other => {
+                // Second positional was the address in the bench tool. Keep
+                // accepting it so old notes and scripts still work.
+                if positional == 0 { root = other.into(); } else if addr.is_none() { addr = Some(other.to_string()); }
+                positional += 1;
+                i += 1;
+            }
+        }
+    }
+
+    let root = match root.canonicalize() {
+        Ok(r) => r,
+        Err(e) => { eprintln!("Cannot use that folder: {} ({e})", root.display()); std::process::exit(1); }
+    };
+    let addr = addr.unwrap_or_else(|| format!("0.0.0.0:{port}"));
+
+    // The network first, because there is no point binding a port if the
+    // network the class is supposed to reach it on never comes up.
+    let hotspot = match (&ssid, &password) {
+        (Some(name), Some(pass)) => match crate::net::hotspot_up(name, pass) {
+            Ok(h) => Some(h),
+            Err(e) => { eprintln!("{e}"); std::process::exit(1); }
+        },
+        (Some(_), None) => {
+            eprintln!("--name needs --password as well. An open network lets anyone");
+            eprintln!("in range reach this computer, so this tool does not make one.");
+            std::process::exit(2);
+        }
+        _ => None,
+    };
+
+    let listener = match TcpListener::bind(&addr) {
+        Ok(l) => l,
+        Err(e) => {
+            if let Some(h) = &hotspot { h.down(); }
+            eprintln!("Cannot listen on {addr}: {e}");
+            eprintln!("Something else may already be using that port.");
+            std::process::exit(1);
+        }
+    };
+
+    if let Some(h) = &hotspot {
+        println!("network \"{}\" is up on {}", h.ssid, h.iface);
+    }
+    for ip in crate::net::local_addresses() {
+        println!("  tell the class to open   http://{ip}:{port}");
+    }
+    println!("serving {} with {helpers} helpers ({} threads detected)",
+             root.display(), std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0));
+    println!("press ctrl-c to stop");
+
+    // Ctrl-C on the command line skips every destructor, so a hotspot started
+    // here would outlive the process and leave the teacher's wifi replaced by
+    // a network with nobody serving on it. systemd owns the restore, we do not.
+    if let Some(h) = &hotspot {
+        h.arm_restore(30);
+        let ssid = h.ssid.clone();
+        let iface = h.iface.clone();
+        thread::spawn(move || {
+            let _ = (&ssid, &iface);
+            loop {
+                thread::sleep(std::time::Duration::from_secs(HEARTBEAT));
+                crate::net::rearm_restore(RESTORE_FUSE);
+            }
+        });
+    }
+
+    accept_loop(listener, root, helpers);
+}
+
+/// Serving files is I/O-bound: a helper spends most of its life blocked on a
+/// socket, not computing, so there are eight per hardware thread rather than
+/// one.
+///
+/// 64 was hardcoded here, and it is exactly what this Sony's 8 threads produce,
+/// which is why the assumption stayed invisible: right for the development
+/// machine, wrong as a constant. The fleet ranges from a 4-thread 2011 MacBook
+/// Air to a 12-thread ThinkPad.
+pub fn default_helpers() -> usize {
+    if let Some(n) = std::env::var("FILESERVE_WORKERS").ok().and_then(|v| v.parse().ok()) {
+        return n;
+    }
+    let t = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    (t * 8).max(16)
+}
+
+/// Re-armed on a heartbeat, so the fuse is always longer than the gap between
+/// heartbeats but shorter than a teacher's patience.
+const HEARTBEAT: u64 = 60;
+const RESTORE_FUSE: u64 = 180;
 
 /// A peer that stops consuming must not own a worker forever.
 ///
@@ -158,6 +356,27 @@ fn serve_one(
     let mut parts = request.split_whitespace();
     let method = parts.next().unwrap_or("");
     let raw_path = parts.next().unwrap_or("/");
+    let version = parts.next().unwrap_or("HTTP/1.1");
+
+    // Whether this connection may be reused, decided from what the CLIENT
+    // asked for.
+    //
+    // This was hardcoded to "yes" and it broke discovery outright: a client
+    // that sent `Connection: close` and then read until end of file waited for
+    // a close that never came, so every attempt to list the files on a machine
+    // timed out. The probe uses a 400 ms timeout, so nothing was ever found and
+    // the screen said "nothing on this network" while a server sat there
+    // answering. Found 2026-08-24 by driving the real screen through a pty;
+    // it could not be seen in the source and both halves looked correct alone.
+    let wants_close = text
+        .lines()
+        .any(|l| {
+            let l = l.to_ascii_lowercase();
+            l.starts_with("connection:") && l.contains("close")
+        })
+        || (version == "HTTP/1.0"
+            && !text.to_ascii_lowercase().contains("connection: keep-alive"));
+    let keep = !wants_close;
 
     // Range: bytes=START-[END]
     // Take the whole header VALUE ("bytes=0-99"), not the part after the first
@@ -175,24 +394,31 @@ fn serve_one(
 
     let target = match target {
         Some(t) => t,
-        None => return respond(&mut out, 403, "text/plain", b"forbidden").map(|_| true),
+        None => return respond(&mut out, 403, "text/plain", b"forbidden").map(|_| keep),
     };
     if !target.exists() {
-        return respond(&mut out, 404, "text/plain", b"not found").map(|_| true);
+        return respond(&mut out, 404, "text/plain", b"not found").map(|_| keep);
     }
     if target.is_dir() {
-        return respond(&mut out, 200, "text/html; charset=utf-8", listing(&target, root).as_bytes()).map(|_| true);
+        // `?list` is what another copy of this program asks for: one line per
+        // file, size then a tab then the name. The HTML index is for a phone
+        // with only a browser, which is most of the room.
+        if raw_path.contains("?list") {
+            return respond(&mut out, 200, "text/plain; charset=utf-8", plain_listing(&target, root).as_bytes()).map(|_| keep);
+        }
+        return respond(&mut out, 200, "text/html; charset=utf-8", listing(&target, root).as_bytes()).map(|_| keep);
     }
     if method == "HEAD" {
         let len = fs::metadata(&target)?.len();
         write!(out, "HTTP/1.1 200 OK\r\nAccept-Ranges: bytes\r\nContent-Length: {len}\r\n\r\n")?;
         out.flush()?;
-        return Ok(true);
+        return Ok(keep);
     }
-    send_file(&mut out, &target, range.as_deref(), peer).map(|_| true)
+    send_file(&mut out, &target, range.as_deref(), peer).map(|_| keep)
 }
 
 fn send_file(out: &mut BufWriter<TcpStream>, path: &Path, range: Option<&str>, peer: &str) -> std::io::Result<()> {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let total = fs::metadata(path)?.len();
     let (start, end) = match range.and_then(|r| parse_range(r, total)) {
         Some(v) => v,
@@ -214,6 +440,10 @@ fn send_file(out: &mut BufWriter<TcpStream>, path: &Path, range: Option<&str>, p
     let mut left = len;
     let mut buf = vec![0u8; BUF];
     let t0 = Instant::now();
+    // Progress is reported against the WHOLE file, not against this range.
+    // A client asking for 2 MB pieces would otherwise show thirty separate
+    // transfers racing from 0 to 100, which tells a teacher nothing.
+    let mut sent_here = 0u64;
     while left > 0 {
         let want = std::cmp::min(left as usize, buf.len());
         let n = f.read(&mut buf[..want])?;
@@ -222,10 +452,19 @@ fn send_file(out: &mut BufWriter<TcpStream>, path: &Path, range: Option<&str>, p
         }
         out.write_all(&buf[..n])?;
         left -= n as u64;
+        sent_here += n as u64;
+        let secs = t0.elapsed().as_secs_f64().max(0.001);
+        note(peer, &name, start + sent_here, total, sent_here as f64 / secs, false);
     }
     out.flush()?;
     let secs = t0.elapsed().as_secs_f64().max(0.001);
     SERVED.fetch_add(len, Ordering::Relaxed);
+    note(peer, &name, start + sent_here, total, len as f64 / secs, end + 1 >= total);
+    if QUIET.load(Ordering::Relaxed) {
+        // The screen is drawing. A println from a worker thread here scrolls
+        // the frame out from under itself and the display tears.
+        return Ok(());
+    }
     println!(
         "{peer} {} bytes in {:.1}s = {:.2} MB/s   live={} total={:.2} GB",
         len,
@@ -285,6 +524,27 @@ fn percent_decode(s: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+/// size<TAB>name, one file per line. Folders are skipped: the tool hands out
+/// a folder of files, and a teacher who nests them can say so and we can walk
+/// them later.
+fn plain_listing(dir: &Path, root: &Path) -> String {
+    let mut s = String::new();
+    if let Ok(rd) = fs::read_dir(dir) {
+        let mut items: Vec<_> = rd.flatten().collect();
+        items.sort_by_key(|e| e.file_name());
+        for e in items {
+            let Ok(md) = e.metadata() else { continue };
+            if !md.is_file() {
+                continue;
+            }
+            let rel = e.path().strip_prefix(root).map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| e.file_name().to_string_lossy().into_owned());
+            s.push_str(&format!("{}\t{}\n", md.len(), rel));
+        }
+    }
+    s
 }
 
 fn listing(dir: &Path, root: &Path) -> String {
