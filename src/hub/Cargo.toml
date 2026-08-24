@@ -1,0 +1,19 @@
+[package]
+name = "hub"
+version = "0.1.0"
+edition = "2021"
+
+# One binary, three subcommands. Measured 2026-08-24: the same code as three
+# separate executables came to 1,233 KB, because each carried its own copy of
+# the Rust runtime, the panic machinery and SHA-256. Merged, it shares them
+# once. Half the bytes and one file for a teacher to copy instead of three.
+[[bin]]
+name = "hub"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

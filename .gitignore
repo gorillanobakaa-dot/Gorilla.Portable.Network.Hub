@@ -1,0 +1,21 @@
+# build output
+target/
+*.rlib
+*.rmeta
+
+# test artefacts and captures: large, and they contain MAC addresses,
+# network names and hostnames from the machines they were taken on
+*.bin
+*.pcap
+*.sums
+*.parts
+*.csv
+*.log
+session-*/
+rate-test-*/
+data-rate-*/
+
+# never
+*.pem
+*.key
+.env
