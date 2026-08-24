@@ -1,4 +1,4 @@
-<!-- Version: 1.0.0 · updated 26-08-24-19-48 -->
+<!-- Version: 1.1.0 · updated 26-08-24-22-16 -->
 # Why this exists
 
 Draft of the layman track, written 2026-08-24, destined for the repository
@@ -127,3 +127,77 @@ Nothing here has been tested beyond two machines, and the broadcast-to-everyone
 design is measured only at the transmitter, never at a receiver. Those are
 honest gaps and they are listed in
 `bench/results-26-08-24-12-20.md` and `bench/results-26-08-24-17-00.md`.
+
+## Somebody other than us can use it now
+
+Everything above worked before this was written, and that is not the same as
+being usable. It meant knowing what a subcommand is, what an address is, that
+the folder has to be handed out before anyone can ask for it, and which of six
+options to type. A teacher standing in front of a class does not have that, and
+should not need it.
+
+Now the program opens a screen. There are two things on it:
+
+- **Hand out files to the class.** Point it at a folder. Give the wifi network a
+  name and a password if you want it to make one. It shows you the address to
+  write on the board, and one line per child as they connect, with how far along
+  each of them is.
+- **Get files from another computer.** It goes and looks for the teacher by
+  itself. If it cannot find them, you can type the address.
+
+On Windows the program is a single file on a memory stick. Double-clicking it
+opens the screen. That matters more than it sounds: a program started that way
+is given no instructions at all, and the old version answered by printing a page
+of help into a window that closed again, which is indistinguishable from being
+broken.
+
+## What it deliberately does not do
+
+**No boxes, no lines, no borders.** Not a style choice. A terminal window is a
+fixed number of rows and columns, and every line drawn round something takes
+some of them away. When the contents no longer fit, the usual tools do not
+complain, they fold the text onto the next line, so the mess turns up somewhere
+other than the thing that caused it. Nothing is drawn round anything. The line
+you are on is shown by swapping the colours, which takes no space at all.
+
+**No jargon on the screen.** No addresses called sockets, no checksums, no
+binding. "12 pieces had to be asked for again. That is normal on a weak signal
+and nothing is lost by it." A teacher reading their third language should not
+have to decode a message before they can act on it.
+
+**Every failure says what to do next.** Not "connection refused". "Nothing is
+handing out files at that address. Is the teacher's computer still running it?"
+
+## The wifi always comes back
+
+Making a network takes over the teacher's own wifi for as long as the lesson
+lasts. Giving it back cannot be left to the program tidying up after itself,
+because a program that is killed does not get to tidy up. Instead the operating
+system is asked to hold a three-minute countdown that the program pushes back
+every minute while it is running. Stop the program however you like, including
+pulling the plug on it, and the wifi returns on its own.
+
+This is written this way because the machine it was built on locked itself off
+its own network twice, both times because the cleanup lived somewhere that never
+ran. A teacher whose laptop loses its wifi after a lesson will not use the tool
+a second time, and will never know what did it.
+
+## The network needs a password
+
+There is no option for an open network. Anyone in range of an open one can reach
+the teacher's own laptop, and the teacher has no way of seeing who is on it. The
+program offers a password of eight letters and numbers with nothing in it that
+can be misread: no capital O next to a zero, no lowercase L next to a one. Write
+it on the board.
+
+## How we know the screen works
+
+You cannot check a screen by reading the code that draws it. A small harness was
+written that opens a real terminal, presses the keys a person would press, and
+reads back what actually appeared on it.
+
+It found three faults in one evening that careful reading had missed. One of
+them meant that **looking for the teacher's computer had never worked at all**:
+the screen said "nothing found on this network" while a computer sat there
+answering the whole time. Two halves of the program were each correct on their
+own and wrong together, which is exactly the kind of thing reading cannot catch.

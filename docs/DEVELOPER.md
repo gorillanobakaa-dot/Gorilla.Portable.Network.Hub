@@ -1,4 +1,4 @@
-<!-- Version: 1.0.0 · updated 26-08-24-21-21 -->
+<!-- Version: 1.1.0 · updated 26-08-24-22-16 -->
 # Gorilla Portable Network Hub: the developer track
 
 Companion to `WHY-THIS-EXISTS.md`, which is the layman track and is not a
@@ -313,3 +313,161 @@ have `nftables`, so the tool should add a rule; where it cannot, it must
 5. **A spinning disk sender.** Everything assumed a 520 MB/s SSD. A $50 ThinkPad
    likely has a 5400rpm drive, where the contiguous-span finding would matter
    for the file server as it did for the hasher.
+
+## 7. The screen
+
+Added 2026-08-24. `hub` with no arguments opens it; every command still works
+without it.
+
+### Why there is no TUI library
+
+The program has no dependencies at all, and the reason is the audience: a
+download is minutes of somebody's life on a single-digit-KB/s line. A mainstream
+Rust terminal stack (a backend plus a widget layer) is hundreds of KB of binary
+to draw text that ANSI has drawn since 1979. `term.rs` is about 300 lines of
+`std` and does the whole job.
+
+| | bytes | note |
+|---|---|---|
+| three separate command-line binaries | 1,262,576 | **[measured]** each carried its own runtime |
+| merged into one | 514,480 | **[measured]** 2026-08-24 |
+| with the screen | 597,648 | **[measured]** 2026-08-24 |
+| Windows, `x86_64-pc-windows-gnu` | 520,704 | **[measured]** runs under wine, `doctor` verified |
+
+The screen cost **83,168 bytes**.
+
+### Layout rules and why they are rules
+
+A terminal has a fixed row and column budget. Every border, margin and padding
+subtracts from it, and layout engines do not error when content exceeds a
+container: they **wrap**, so the failure appears as excess height in a different
+place from the cause.
+
+- **No borders, boxes or rules.** Selection is reverse video (`\x1b[7m`), which
+  costs zero columns. Grouping is blank lines, which cost one row and cannot
+  wrap.
+- **Progress bars are ASCII `#` and `-`.** Block and box-drawing characters are
+  East Asian **Ambiguous** width: one column here, **two** in a terminal
+  configured for Chinese, which silently doubles a bar's length.
+- **The frame is exactly `rows` tall.** `Frame::new(rows, cols)` is a budget
+  decided before anything is drawn; `push` past the last row is dropped rather
+  than allowed to scroll. The test asserts the last non-blank row **equals** the
+  terminal height, never "is not taller": "not taller" passes against a frame
+  that is silently too short, and too short is the state that wraps.
+- **Truncation is by display column, not by char and not by byte.** A CJK
+  ideograph is one char and two columns; a byte slice can cut a character in
+  half.
+- **Lists say what they dropped.** A list that silently stops at ten reads as
+  "ten devices" to the person looking at it.
+
+### Platform layer
+
+|  | Linux | Windows |
+|---|---|---|
+| raw mode | `stty -g` to save, `stty raw -echo`, restore by replaying the saved string | `SetConsoleMode`, clearing `ENABLE_LINE_INPUT`/`ENABLE_ECHO_INPUT`/`ENABLE_PROCESSED_INPUT` |
+| ANSI | always | `ENABLE_VIRTUAL_TERMINAL_PROCESSING`, present since Windows 10 1511 |
+| size | `ioctl(1, TIOCGWINSZ)` into a 4-`u16` struct | `GetConsoleScreenBufferInfo` |
+| randomness | `/dev/urandom` | `RtlGenRandom` (`SystemFunction036`, advapi32) |
+
+`stty` rather than `tcsetattr` because the `termios` struct layout differs per
+architecture and is silently wrong when it is wrong; `ioctl` is used for the
+size because a 4-`u16` struct has no layout to get wrong and querying every
+frame is two syscalls rather than a process spawn.
+
+`panic = "abort"` is set in the release profile, so **`Drop` does not run on a
+panic**. The terminal restore is therefore installed as a panic hook as well as
+a `Drop` impl. Leaving a teacher with a terminal that echoes nothing, needing
+`reset` typed blind, is how somebody stops using a tool for good.
+
+Blocking key reads live on their own thread and arrive as bytes on an `mpsc`
+channel, so the draw loop can `recv_timeout` and keep redrawing live numbers. A
+thread rather than `poll`/`WaitForSingleObject` because it is the same code on
+both platforms with no FFI to get wrong.
+
+If raw mode cannot be entered at all, `hub` prints the command list instead of
+drawing. `hub > out.txt` produces a usage message rather than a file of escape
+sequences.
+
+### Discovery
+
+Whoever runs the hotspot **is** the default gateway for everyone on it, so
+"where is the teacher" and "what is my gateway" have the same answer. No
+beacons, no multicast, no service discovery.
+
+1. Gateway from `/proc/net/route` (little-endian hex, `Destination == 00000000`)
+   plus the three well-known hotspot gateways: `10.42.0.1` (NetworkManager
+   shared), `192.168.137.1` (Windows Mobile Hotspot), `192.168.43.1` (Android).
+   All probed in parallel, 400 ms.
+2. If that finds nothing, sweep the local **/24** in batches of 64, connect-only,
+   then ask the ones that answer. About 1.5 s. This is the room that **does**
+   have a router, where the teacher is an ordinary device at an unguessable
+   address.
+3. Type it by hand, host and optional port.
+
+A /24 and not the real mask: this network is a /20, which is 4,094 addresses and
+about half a minute. Teacher and class share an access point and therefore a /24
+in every case this tool is for.
+
+Local addresses come from `UdpSocket::connect` plus `local_addr`. A connected
+UDP socket sends nothing; `connect` only sets the default destination and the
+kernel picks a source address by consulting the routing table. Reading it back
+is a route lookup with no packets, no privileges, and the same code on both
+platforms. `getifaddrs`/`GetAdaptersAddresses` is per-platform FFI to answer a
+question this already answers.
+
+### The network is put back
+
+Creating a hotspot **replaces the teacher's own wifi**. The previous connection
+name is recorded before `nmcli device wifi hotspot` runs, and restored three
+ways:
+
+1. `Drop`/explicit stop, for a clean exit.
+2. A panic hook, since `panic = "abort"` skips `Drop`.
+3. **A `systemd-run --user --on-active=180` transient timer**, re-armed every 60
+   seconds while the lesson runs. systemd owns it, this process does not, so the
+   wifi returns even on `SIGKILL`, a closed terminal, or battery management
+   killing the session.
+
+Point 3 exists because this machine locked itself off its own network twice
+during development, both times because the teardown lived in a shell `trap` that
+never ran. A teacher whose laptop loses wifi after a lesson will not use the tool
+again and will have no idea what did it.
+
+WPA2 always, **never open**. An open network lets every device in radio range
+reach the serving port on the teacher's own laptop, and the teacher has no way
+to see who is on it. `--name` without `--password` is refused. The suggested
+password is 8 characters from a 31-symbol alphabet with no `0/O/1/l/I`
+(about 39 bits), drawn from the OS random source with rejection sampling, not
+`%`: 256 is not a multiple of 31, so plain modulo would make the first eight
+letters likelier.
+
+### Bugs the pty harness found that review did not
+
+A terminal UI cannot be checked by reading it. The harness (`pty.fork`,
+`TIOCSWINSZ`, keystrokes in, escape sequences interpreted into a character grid)
+found three faults in one evening:
+
+1. **`Connection: close` ignored server-side.** `serve_one` returned a literal
+   `true` for "connection may be reused" regardless of what the client asked
+   for. The client sent `Connection: close` and then read to EOF, which never
+   came, so listing timed out. Discovery uses a 400 ms timeout, so **nothing was
+   ever discovered** while a server sat there answering, and the screen said
+   "Nothing found on this network". Neither half is wrong alone. Fixed on both
+   sides: the server honours the header and the version, and the client reads
+   exactly `Content-Length` instead of to EOF.
+2. **A typed port was silently discarded.** `10.42.0.1:9000` connected to 8080
+   and reported that the file list could not be read.
+3. **`fetch_sums` allocated whatever `Content-Length` claimed.** A test server
+   that answered every path with a 400 MB file left the download at zero bytes
+   with no message. Capped at 8 MB, derived from the real shape: one ~71-byte
+   line per 2 MB piece covers a ~230 GB download.
+
+And one found by a test written to **lie** to the program: a `.parts` sidecar
+claiming pieces the file was never long enough to hold was believed, and the
+download reported success at **2,861 MB/s having fetched nothing**, differing
+from the original at byte 1,000,001. The on-disk length is now read *before*
+`set_len` grows the file, and any piece the file could not have held is
+discarded. One `stat`, needs nothing from the server, unlike the digest path
+which only runs when the peer offers fingerprints. That is the **second**
+instance of one trap in a single day; the first was verification that could not
+run because of a write-only file handle.
