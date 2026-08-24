@@ -1,4 +1,4 @@
-<!-- Version: 1.1.0 · updated 26-08-24-22-16 -->
+<!-- Version: 1.1.1 · updated 26-08-24-23-23 -->
 # Gorilla Portable Network Hub: the developer track
 
 Companion to `WHY-THIS-EXISTS.md`, which is the layman track and is not a
@@ -346,6 +346,11 @@ place from the cause.
 - **No borders, boxes or rules.** Selection is reverse video (`\x1b[7m`), which
   costs zero columns. Grouping is blank lines, which cost one row and cannot
   wrap.
+- **The highlight is as wide as its group, not as wide as the terminal.** Seen
+  on a real 190-column window on 2026-08-24, full-width reverse video is a slab
+  across the whole screen that shouts louder than the thing it points at. Group
+  width, not per-item width, so the highlighted edge stays straight as the
+  selection moves.
 - **Progress bars are ASCII `#` and `-`.** Block and box-drawing characters are
   East Asian **Ambiguous** width: one column here, **two** in a terminal
   configured for Chinese, which silently doubles a bar's length.
@@ -440,6 +445,49 @@ password is 8 characters from a 31-symbol alphabet with no `0/O/1/l/I`
 (about 39 bits), drawn from the OS random source with rejection sampling, not
 `%`: 256 is not a multiple of 31, so plain modulo would make the first eight
 letters likelier.
+
+### Who is on the network, which is not the same question as who is downloading
+
+Reported from a real hotspot on 2026-08-24: a phone joined `LOL1` and the screen
+still said "Nobody has connected yet". The live table was fed only from
+`send_file`, so a device that joined the wifi and waited was invisible. For a
+teacher those are two different questions and the first one comes first, and
+answering it wrongly sends them off checking the password when nothing is wrong.
+
+Two sources, best first:
+
+1. **The DHCP leases** NetworkManager's dnsmasq writes, at
+   `/var/lib/NetworkManager/dnsmasq-<iface>.leases`. These carry the device's
+   own name (`Xiaomi-11-Lite-5G-NE` rather than `10.42.0.90`), which is what a
+   teacher can match to a child. Readable **only as root**: that directory is
+   `drwx------`. A hotspot started through polkit by an ordinary user therefore
+   does not get names.
+2. **`/proc/net/arp`**, world readable, no privileges. No names, but it answers
+   "how many and at what addresses", with flags `0x2` filtering out incomplete
+   entries (an address we asked about and got no answer for).
+
+The MAC address is deliberately not carried out of either parser. It is a
+permanent hardware identifier for somebody else's device, it is no use to a
+teacher who has the name and the address, and anything on screen ends up in a
+screenshot.
+
+The subnet that counts as "the class" is asked for, not guessed: `nmcli -g
+IP4.ADDRESS device show <iface>`. NetworkManager's shared mode uses 10.42.0.1 in
+practice, but that is a default rather than a promise, and a machine with a
+second interface can easily hold an address that sorts first. The list is only
+gathered when **we** made the network; over a network somebody else provided,
+"who is on it" is the whole building.
+
+**Open:** names without root. dnsmasq answers PTR queries for its own leases on
+10.42.0.1:53, so a hand-rolled DNS lookup would get them, but shelling out to
+`getent` from the draw loop risks a five-second resolver timeout freezing the
+screen. Running with `sudo` gets names today.
+
+### Every nmcli call has stdin closed
+
+If a machine wants a polkit password there is nowhere to type it while a
+full-screen program is drawing, and `Command::output()` would wait forever with
+no message. `Stdio::null()` turns that into a refusal the tool can explain.
 
 ### Bugs the pty harness found that review did not
 

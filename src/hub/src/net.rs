@@ -275,6 +275,129 @@ fn list_over(sock: &mut TcpStream, ip: Ipv4Addr, port: u16) -> std::io::Result<V
     Ok(out)
 }
 
+// ---------------------------------------------------------------- who joined
+
+/// A device that has joined the network but may not have asked for anything.
+#[derive(Clone, Debug)]
+pub struct Joined {
+    pub ip: Ipv4Addr,
+    /// The name the device calls itself, when the DHCP lease recorded one.
+    pub name: Option<String>,
+}
+
+/// Everything sitting on our hotspot's subnet.
+///
+/// Reported 2026-08-24: a phone joined the network and the screen still said
+/// "Nobody has connected yet", because the only thing being counted was
+/// DOWNLOADS. For a teacher those are different questions and the first one
+/// comes first: is anybody on my network at all, before anybody has tapped a
+/// file. Answering "no" when the answer is yes sends them off checking the
+/// password when nothing is wrong.
+///
+/// Two sources, best first:
+///
+///   1. The DHCP leases NetworkManager's dnsmasq writes. These carry the
+///      device's own name, "Xiaomi-11-Lite-5G-NE" rather than 10.42.0.90,
+///      which is what a teacher can actually match to a child. Only readable
+///      when running as root: /var/lib/NetworkManager is drwx------.
+///   2. /proc/net/arp, which is world readable and needs no privileges at all.
+///      No names, but it answers "how many and at what addresses", and a
+///      hotspot started through polkit as an ordinary user has nothing else.
+#[cfg(target_os = "linux")]
+pub fn joined_devices(ours: Ipv4Addr) -> Vec<Joined> {
+    let mut out: Vec<Joined> = leases_on(ours);
+    for j in arp_on(ours) {
+        if !out.iter().any(|e| e.ip == j.ip) {
+            out.push(j);
+        }
+    }
+    out.sort_by_key(|j| j.ip.octets());
+    out
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn joined_devices(_ours: Ipv4Addr) -> Vec<Joined> {
+    Vec::new()
+}
+
+#[cfg(target_os = "linux")]
+fn same_subnet(a: Ipv4Addr, b: Ipv4Addr) -> bool {
+    let (x, y) = (a.octets(), b.octets());
+    x[0] == y[0] && x[1] == y[1] && x[2] == y[2]
+}
+
+/// dnsmasq lease line: <expiry> <mac> <ip> <hostname> <client-id>
+///
+/// The MAC is deliberately not carried out of this function. It is a permanent
+/// hardware identifier for somebody else's device, it is of no use to a teacher
+/// who has the name and the address, and anything on screen ends up in a
+/// screenshot.
+#[cfg(target_os = "linux")]
+fn leases_on(ours: Ipv4Addr) -> Vec<Joined> {
+    let mut out = Vec::new();
+    let Ok(dir) = std::fs::read_dir("/var/lib/NetworkManager") else {
+        return out; // not root, which is normal and not an error
+    };
+    for entry in dir.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with("dnsmasq-") || !name.ends_with(".leases") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(entry.path()) else { continue };
+        out.extend(parse_leases(&text, ours));
+    }
+    out
+}
+
+#[cfg(target_os = "linux")]
+fn parse_leases(text: &str, ours: Ipv4Addr) -> Vec<Joined> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        if f.len() < 4 {
+            continue;
+        }
+        let Ok(ip) = f[2].parse::<Ipv4Addr>() else { continue };
+        if ip == ours || !same_subnet(ip, ours) {
+            continue;
+        }
+        // dnsmasq writes "*" when the device offered no name.
+        let host = if f[3] == "*" { None } else { Some(f[3].to_string()) };
+        out.push(Joined { ip, name: host });
+    }
+    out
+}
+
+#[cfg(target_os = "linux")]
+fn arp_on(ours: Ipv4Addr) -> Vec<Joined> {
+    let mut out = Vec::new();
+    let Ok(text) = std::fs::read_to_string("/proc/net/arp") else { return out };
+    out.extend(parse_arp(&text, ours));
+    out
+}
+
+#[cfg(target_os = "linux")]
+fn parse_arp(text: &str, ours: Ipv4Addr) -> Vec<Joined> {
+    let mut out = Vec::new();
+    for line in text.lines().skip(1) {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        if f.len() < 4 {
+            continue;
+        }
+        // Flags 0x2 is a complete entry. An incomplete one is an address we
+        // asked about and got no answer for, which is not a device.
+        if f[2] != "0x2" {
+            continue;
+        }
+        let Ok(ip) = f[0].parse::<Ipv4Addr>() else { continue };
+        if ip == ours || !same_subnet(ip, ours) {
+            continue;
+        }
+        out.push(Joined { ip, name: None });
+    }
+    out
+}
+
 // ---------------------------------------------------------------- randomness
 
 /// Password bytes from the operating system, never from the clock.
@@ -404,6 +527,7 @@ pub struct Hotspot {
 pub fn wifi_interface() -> Option<String> {
     let out = std::process::Command::new("nmcli")
         .args(["-t", "-f", "DEVICE,TYPE", "device"])
+        .stdin(std::process::Stdio::null())
         .output()
         .ok()?;
     for line in String::from_utf8_lossy(&out.stdout).lines() {
@@ -425,6 +549,7 @@ pub fn wifi_interface() -> Option<String> {
 fn active_wifi_connection() -> Option<String> {
     let out = std::process::Command::new("nmcli")
         .args(["-t", "-f", "NAME,TYPE", "connection", "show", "--active"])
+        .stdin(std::process::Stdio::null())
         .output()
         .ok()?;
     for line in String::from_utf8_lossy(&out.stdout).lines() {
@@ -452,6 +577,10 @@ pub fn hotspot_up(ssid: &str, password: &str) -> Result<Hotspot, String> {
     let previous = active_wifi_connection();
     let out = std::process::Command::new("nmcli")
         .args(["device", "wifi", "hotspot", "ifname", &iface, "ssid", ssid, "password", password])
+        // No stdin. If this machine wants a polkit password there is nowhere to
+        // type it while a full-screen program is drawing, and a hang with no
+        // message is worse than a refusal with one.
+        .stdin(std::process::Stdio::null())
         .output()
         .map_err(|e| format!("Could not run nmcli: {e}"))?;
     if !out.status.success() {
@@ -546,6 +675,37 @@ impl Hotspot {
 
     #[cfg(not(target_os = "linux"))]
     pub fn disarm_restore(&self) {}
+
+    /// The address this machine holds ON THE HOTSPOT, asked for rather than
+    /// guessed.
+    ///
+    /// It decides which subnet counts as "the class", so getting it wrong means
+    /// either listing nobody or listing a whole office. NetworkManager's shared
+    /// mode uses 10.42.0.1 in practice, but that is a default and not a
+    /// promise, and a machine with a second interface can easily have another
+    /// address that sorts first.
+    #[cfg(target_os = "linux")]
+    pub fn address(&self) -> Option<Ipv4Addr> {
+        let out = std::process::Command::new("nmcli")
+            .args(["-g", "IP4.ADDRESS", "device", "show", &self.iface])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .ok()?;
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            let addr = line.trim().split('/').next().unwrap_or("");
+            if let Ok(ip) = addr.parse::<Ipv4Addr>() {
+                return Some(ip);
+            }
+        }
+        // Fall back to asking the kernel which source it would use to reach the
+        // usual shared-mode gateway.
+        source_address_for(Ipv4Addr::new(10, 42, 0, 1))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn address(&self) -> Option<Ipv4Addr> {
+        source_address_for(Ipv4Addr::new(192, 168, 137, 1))
+    }
 }
 
 #[cfg(test)]
@@ -573,6 +733,40 @@ mod tests {
                 "sweep did not find the listener, found {found:?}");
         assert!(!found.contains(&Ipv4Addr::new(127, 0, 0, 1)),
                 "sweep should skip the address it started from");
+    }
+
+    /// Parsed against the lines these files really contain. The lease line is
+    /// the one dnsmasq wrote when a phone joined the test hotspot on
+    /// 2026-08-24, with the hardware address replaced: it is a permanent
+    /// identifier for somebody else's device and has no business in a repo.
+    #[test]
+    fn a_phone_on_the_hotspot_is_seen_with_its_own_name() {
+        let ours: Ipv4Addr = "10.42.0.1".parse().unwrap();
+        let text = "1787613223 aa:bb:cc:dd:ee:ff 10.42.0.90 Xiaomi-11-Lite-5G-NE 01:aa:bb:cc:dd:ee:ff\n\
+                    1787613300 aa:bb:cc:dd:ee:00 10.42.0.31 * 01:aa:bb:cc:dd:ee:00\n\
+                    1787613400 aa:bb:cc:dd:ee:11 192.168.1.5 SomewhereElse 01:x\n";
+        let got = parse_leases(text, ours);
+        assert_eq!(got.len(), 2, "expected the two on our subnet, got {got:?}");
+        assert_eq!(got[0].ip, "10.42.0.90".parse::<Ipv4Addr>().unwrap());
+        assert_eq!(got[0].name.as_deref(), Some("Xiaomi-11-Lite-5G-NE"));
+        // dnsmasq writes * for a device that offered no name; that is "unknown",
+        // not a device called "*".
+        assert_eq!(got[1].name, None);
+    }
+
+    #[test]
+    fn arp_counts_only_complete_entries_on_our_subnet() {
+        let ours: Ipv4Addr = "10.42.0.1".parse().unwrap();
+        let text = "IP address       HW type     Flags       HW address            Mask     Device\n\
+                    10.42.0.90       0x1         0x2         aa:bb:cc:dd:ee:ff     *        wlan0\n\
+                    10.42.0.77       0x1         0x0         00:00:00:00:00:00     *        wlan0\n\
+                    10.42.0.1        0x1         0x2         aa:bb:cc:dd:ee:01     *        wlan0\n\
+                    192.168.1.5      0x1         0x2         aa:bb:cc:dd:ee:02     *        eth0\n";
+        let got = parse_arp(text, ours);
+        // Incomplete (0x0) is an address we asked about and got no answer for.
+        // Ourselves and another subnet are not devices on our network.
+        assert_eq!(got.len(), 1, "got {got:?}");
+        assert_eq!(got[0].ip, "10.42.0.90".parse::<Ipv4Addr>().unwrap());
     }
 
     /// Non-vacuous check on the one above: with nothing listening, the same

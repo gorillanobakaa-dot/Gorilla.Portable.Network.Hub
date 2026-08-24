@@ -99,6 +99,8 @@ struct App {
     hotspot: Option<net::Hotspot>,
     started: Option<Instant>,
     addresses: Vec<std::net::Ipv4Addr>,
+    joined: Vec<net::Joined>,
+    joined_at: Option<Instant>,
 
     // the receive form
     found: Found,
@@ -134,6 +136,8 @@ impl App {
             hotspot: None,
             started: None,
             addresses: Vec::new(),
+            joined: Vec::new(),
+            joined_at: None,
             found: Arc::new(Mutex::new(None)),
             server: None,
             server_port: PORT,
@@ -182,7 +186,10 @@ impl App {
     }
 
     fn title(&self, f: &mut Frame, s: &str) {
-        f.push(s);
+        // Indented to match the content below it. At column 0 against
+        // two-column content the heading looked like it belonged to the
+        // terminal rather than to the screen.
+        f.push(&format!("  {s}"));
         f.blank();
     }
 
@@ -195,15 +202,16 @@ impl App {
 
     fn draw_home(&self, f: &mut Frame) {
         self.title(f, "Gorilla Portable Network Hub");
-        let items = [
-            "Hand out files to the class",
-            "Get files from another computer",
-        ];
+        let items: Vec<String> = ["Hand out files to the class", "Get files from another computer"]
+            .iter()
+            .map(|it| format!("  {it}"))
+            .collect();
+        let w = term::group_width(&items);
         for (i, it) in items.iter().enumerate() {
             if i == self.row {
-                f.push_selected(&format!("  {it}"));
+                f.push_selected_within(it, w);
             } else {
-                f.push(&format!("  {it}"));
+                f.push(it);
             }
         }
         f.blank();
@@ -240,6 +248,14 @@ impl App {
         self.title(f, "Hand out files");
         let fields = self.send_fields();
         let label_width = 22;
+        // The highlight width covers the form AND the button below it, so the
+        // bar does not change size as the selection moves down onto Start.
+        let mut plain: Vec<String> = fields
+            .iter()
+            .map(|(l, v)| format!("  {l:<label_width$}{v}"))
+            .collect();
+        plain.push("  Start handing out".into());
+        let w = term::group_width(&plain);
         for (i, (label, value)) in fields.iter().enumerate() {
             let shown = if self.row == i {
                 if let Some(buf) = &self.editing {
@@ -254,7 +270,7 @@ impl App {
             };
             let line = format!("  {label:<label_width$}{shown}");
             if self.row == i && self.editing.is_none() {
-                f.push_selected(&line);
+                f.push_selected_within(&line, w);
             } else {
                 f.push(&line);
             }
@@ -262,7 +278,7 @@ impl App {
         f.blank();
         let start = "  Start handing out";
         if self.row == fields.len() {
-            f.push_selected(start);
+            f.push_selected_within(start, w);
         } else {
             f.push(start);
         }
@@ -289,6 +305,21 @@ impl App {
         if self.addresses.is_empty() {
             self.addresses = net::local_addresses();
         }
+        // Once a second, not four times: two small files, but there is no
+        // reason to read them at the frame rate.
+        let stale = self.joined_at.map(|t| t.elapsed().as_secs() >= 1).unwrap_or(true);
+        if stale {
+            // Only when WE made the network. Handing files out over a network
+            // somebody else provided, "who is on it" is the whole building, and
+            // a teacher's screen filling with three hundred strangers is worse
+            // than showing none of them.
+            self.joined = match &self.hotspot {
+                Some(h) => h.address().map(net::joined_devices).unwrap_or_default(),
+                None => Vec::new(),
+            };
+            self.joined_at = Some(Instant::now());
+        }
+
         self.title(f, "Handing out files");
         if let Some(h) = &self.hotspot {
             f.push(&format!("  Wifi network      {}", h.ssid));
@@ -298,43 +329,51 @@ impl App {
             f.push(&format!("  Address to type   http://{a}:{PORT}"));
         }
         f.blank();
+
         let live = serve::transfers();
         let sent = serve::total_sent();
-        // "0 devices getting files" next to a row saying 100% done is a screen
-        // arguing with itself. Count both states and say whichever is true.
-        let active = live.iter().filter(|t| !t.finished).count();
-        let complete = live.iter().filter(|t| t.finished).count();
-        let devices = |n: usize| if n == 1 { "device" } else { "devices" };
-        f.push(&match (active, complete) {
-            (0, 0) => format!("  Nothing sent yet."),
-            (0, c) => format!("  {c} {} finished, {} sent so far", devices(c), human(sent)),
-            (a, 0) => format!("  {a} {} getting files, {} sent so far", devices(a), human(sent)),
-            (a, c) => format!("  {a} {} getting files, {c} finished, {} sent so far",
-                              devices(a), human(sent)),
+        let getting = live.iter().filter(|t| !t.finished).count();
+        let mut rows: Vec<String> = Vec::new();
+
+        // One row per DEVICE ON THE NETWORK, whether or not it has asked for
+        // anything. A phone that joins and waits is the normal state at the
+        // start of a lesson, and it used to show as nothing at all.
+        for j in &self.joined {
+            let who = j.name.clone().unwrap_or_else(|| j.ip.to_string());
+            match live.iter().find(|t| t.peer == j.ip.to_string()) {
+                Some(t) => rows.push(transfer_row(&who, t)),
+                None => rows.push(format!("  {:<24}on the network, nothing asked for yet", term::truncate(&who, 22))),
+            }
+        }
+        // Anything downloading from an address that is not on our subnet: the
+        // case where the class is on a network somebody else provided.
+        for t in &live {
+            if !self.joined.iter().any(|j| j.ip.to_string() == t.peer) {
+                rows.push(transfer_row(&t.peer, t));
+            }
+        }
+
+        let on_net = self.joined.len().max(rows.len());
+        f.push(&match (on_net, getting) {
+            (0, 0) => "  Nothing has connected yet.".to_string(),
+            (n, 0) => format!("  {n} on the network, none getting files yet, {} sent", human(sent)),
+            (n, g) => format!("  {n} on the network, {g} getting files, {} sent", human(sent)),
         });
         f.blank();
-        if live.is_empty() {
-            f.push_dim("  Nobody has connected yet.");
+
+        if rows.is_empty() {
             f.push_dim("  On their computer: open the same tool and choose");
             f.push_dim("  \"Get files from another computer\".");
+            f.push_dim("  On a phone: open a browser at the address above.");
         }
-        // The list is capped by what is left on screen, and what was dropped is
-        // said out loud. A list that silently stops at ten reads as "ten
-        // devices" to the person looking at it.
+        // Capped by what is left on screen, and what was dropped is said out
+        // loud. A list that silently stops at ten reads as "ten devices".
         let room = f.rows.saturating_sub(f.used() + 3);
-        for t in live.iter().take(room) {
-            let pct = if t.total > 0 { t.done as f64 / t.total as f64 } else { 0.0 };
-            f.push(&format!(
-                "  {:<16}{} {:>3}%  {:>12}  {}",
-                t.peer,
-                bar(pct, 16),
-                (pct * 100.0) as u64,
-                if t.finished { "done".to_string() } else { format!("{:.1} MB/s", t.rate / 1e6) },
-                t.file
-            ));
+        for r in rows.iter().take(room) {
+            f.push(r);
         }
-        if live.len() > room {
-            f.push_dim(&format!("  and {} more not shown, the window is too short", live.len() - room));
+        if rows.len() > room {
+            f.push_dim(&format!("  and {} more not shown, the window is too short", rows.len() - room));
         }
         self.hints(f, "  q or esc to stop handing out");
     }
@@ -359,7 +398,7 @@ impl App {
                 for (ip, count) in list {
                     let line = format!("  {ip}    {count} file{}", if *count == 1 { "" } else { "s" });
                     if self.row == n {
-                        f.push_selected(&line);
+                        f.push_selected_within(&line, 40);
                     } else {
                         f.push(&line);
                     }
@@ -374,7 +413,7 @@ impl App {
             format!("  Type the address    {}", if self.typed_address.is_empty() { "(press enter)".into() } else { self.typed_address.clone() })
         };
         if self.row == n && self.editing.is_none() {
-            f.push_selected(&manual);
+            f.push_selected_within(&manual, 40);
         } else {
             f.push(&manual);
         }
@@ -404,7 +443,7 @@ impl App {
             };
             let line = format!("  {label:<16}{shown}");
             if self.row == i && self.editing.is_none() {
-                f.push_selected(&line);
+                f.push_selected_within(&line, self.files_width());
             } else {
                 f.push(&line);
             }
@@ -417,7 +456,7 @@ impl App {
         for (i, e) in self.files.iter().enumerate().take(room) {
             let line = format!("  {:<34}{:>10}", e.name, human(e.size));
             if self.row == i + settings.len() {
-                f.push_selected(&line);
+                f.push_selected_within(&line, self.files_width());
             } else {
                 f.push(&line);
             }
@@ -430,6 +469,17 @@ impl App {
         } else {
             self.hints(f, "  up and down to move    enter to get the file    esc to go back");
         }
+    }
+
+    /// One width for the settings and the file list on that screen, so the
+    /// highlight does not jump in size between them.
+    fn files_width(&self) -> usize {
+        let mut lines: Vec<String> = vec![
+            format!("  {:<16}{}", "Save into", self.save_into),
+            format!("  {:<16}{}", "Pieces at once", self.at_once),
+        ];
+        lines.extend(self.files.iter().map(|e| format!("  {:<34}{:>10}", e.name, human(e.size))));
+        term::group_width(&lines)
     }
 
     fn draw_receiving(&self, f: &mut Frame) {
@@ -858,6 +908,18 @@ impl App {
 }
 
 // ---------------------------------------------------------------- formatting
+
+fn transfer_row(who: &str, t: &serve::Transfer) -> String {
+    let pct = if t.total > 0 { t.done as f64 / t.total as f64 } else { 0.0 };
+    format!(
+        "  {:<24}{} {:>3}%  {:>12}  {}",
+        term::truncate(who, 22),
+        bar(pct, 16),
+        (pct * 100.0) as u64,
+        if t.finished { "done".to_string() } else { format!("{:.1} MB/s", t.rate / 1e6) },
+        t.file
+    )
+}
 
 fn bar(fraction: f64, width: usize) -> String {
     // ASCII, not block characters. A full block and a light shade are East

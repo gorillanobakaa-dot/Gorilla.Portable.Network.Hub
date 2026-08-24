@@ -392,6 +392,12 @@ fn char_width(c: char) -> usize {
     }
 }
 
+/// The width of the widest line in a group, so a selection highlight is a
+/// straight-edged column rather than a ragged one.
+pub fn group_width(lines: &[String]) -> usize {
+    lines.iter().map(|l| width(l)).max().unwrap_or(0) + 2
+}
+
 /// Cut to at most `cols` display columns, never mid-character.
 pub fn truncate(s: &str, cols: usize) -> String {
     if width(s) <= cols {
@@ -441,12 +447,19 @@ impl Frame {
     }
 
     /// Highlighted line: reverse video costs zero columns, unlike a box.
-    pub fn push_selected(&mut self, s: &str) {
+    ///
+    /// Padded to the width of the WIDEST item in its group, not to the width of
+    /// the terminal. Seen on a real 190-column window on 2026-08-24, full-width
+    /// reverse video is a slab across the whole screen that shouts louder than
+    /// anything it is meant to point at. Group width keeps the highlighted edge
+    /// straight as the selection moves, which ragged per-item widths would not.
+    pub fn push_selected_within(&mut self, s: &str, group_width: usize) {
         if self.lines.len() >= self.rows {
             return;
         }
-        let t = truncate(s, self.cols);
-        let pad = self.cols.saturating_sub(width(&t));
+        let w = group_width.min(self.cols);
+        let t = truncate(s, w);
+        let pad = w.saturating_sub(width(&t));
         self.lines.push(format!("\x1b[7m{t}{}\x1b[0m", " ".repeat(pad)));
     }
 

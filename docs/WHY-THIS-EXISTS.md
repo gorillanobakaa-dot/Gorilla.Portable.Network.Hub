@@ -1,4 +1,4 @@
-<!-- Version: 1.1.0 · updated 26-08-24-22-16 -->
+<!-- Version: 1.1.1 · updated 26-08-24-23-23 -->
 # Why this exists
 
 Draft of the layman track, written 2026-08-24, destined for the repository
@@ -189,6 +189,22 @@ the teacher's own laptop, and the teacher has no way of seeing who is on it. The
 program offers a password of eight letters and numbers with nothing in it that
 can be misread: no capital O next to a zero, no lowercase L next to a one. Write
 it on the board.
+
+## Two things a real room found that a test could not
+
+The first hotspot made on real hardware worked, and then a phone joined it and
+the screen said nobody had connected. It was only counting devices that were
+**downloading**. Joining the wifi and waiting is what every device does first,
+and the tool was blind to all of it. It now lists them, by name where the
+computer knows the name and by address otherwise.
+
+The second was simply how it looked. On a wide window the highlighted line
+stretched right across the screen as a solid bar, which shouts far louder than
+the thing it is meant to point at. It is now only as wide as the menu it belongs
+to.
+
+Neither could have been found by reading the code or by the automatic tests.
+Both took somebody using it for two minutes.
 
 ## How we know the screen works
 
