@@ -1,0 +1,100 @@
+.TH HUB 1 "August 2026" "0.1.0" "Gorilla Portable Network Hub"
+.SH NAME
+hub \- turn a laptop into the network and hand a folder to every device in the room
+.SH SYNOPSIS
+.B hub
+.br
+.B hub serve
+.I folder
+.RI [ options ]
+.br
+.B hub get
+.I url
+.RI [ options ]
+.br
+.B hub sums
+.I file
+.br
+.B hub doctor
+.SH DESCRIPTION
+.B hub
+creates a wifi network where none exists and hands a folder of files to every
+device in range. It is built for rooms with no internet and no router.
+.PP
+With no arguments it opens a screen, which is the way in for most people. Every
+command below also works on its own.
+.PP
+Files are served in pieces that can be asked for individually, so a device that
+loses the signal carries on from where it stopped rather than starting the whole
+file again.
+.SH COMMANDS
+.TP
+.B serve \fIfolder\fR
+Hand out the files in a folder.
+.RS
+.TP
+.B \-\-name \fInetwork\fR
+Create a wifi network with this name and serve over it. Needs administrator
+rights. Without it, the files go out over whatever network already exists.
+.TP
+.B \-\-password \fIword\fR
+Password for that network, at least 8 characters. Required with \fB\-\-name\fR:
+an open network lets anyone in range reach this computer, so one is never made.
+.TP
+.B \-\-helpers \fInumber\fR
+How many devices to serve at once. Defaults to eight per processor.
+.TP
+.B \-\-port \fInumber\fR
+Which port to listen on. Default 8080.
+.RE
+.TP
+.B get \fIurl\fR
+Download a file, resuming if it was interrupted. Run the same command again
+after an interruption and it continues from where it stopped.
+.RS
+.TP
+.B \-n \fInumber\fR
+Parallel connections. Default 4, which was measured as the best on wifi; more
+is slower and noisier, because the ceiling is airtime rather than threads.
+.TP
+.B \-o \fIfile\fR
+Where to save it.
+.TP
+.B \-\-verify on
+Check every piece against the server's fingerprint list.
+.RE
+.TP
+.B sums \fIfile\fR
+Fingerprint each piece of a file, using every processor. Put the result beside
+the file as \fIfile\fR.sums and anyone downloading it can check what they get.
+.TP
+.B doctor
+Say what this computer can and cannot do: processors, window size, wifi adapter,
+addresses. Read this out when something will not work and there is nobody nearby
+to ask.
+.SH THE NETWORK IS PUT BACK
+Creating a network replaces this computer's own wifi for as long as it runs. The
+previous connection is restored on exit, and also by a systemd timer that is
+pushed back every minute while the program is alive. If the program is killed
+outright the wifi still comes back, within three minutes.
+.SH EXAMPLES
+.PP
+Hand out a folder over a new network:
+.PP
+.RS
+hub serve ~/lessons \-\-name Classroom \-\-password chalkdust
+.RE
+.PP
+Fetch a file from the teacher's machine:
+.PP
+.RS
+hub get http://10.42.0.1:8080/lessons.zip
+.RE
+.SH FILES
+.TP
+.I file.parts
+Records which pieces have arrived, so an interrupted download can continue.
+Removed when the file is complete.
+.SH SEE ALSO
+Full documentation, in plain language and in detail, is in
+.IR /usr/share/doc/gorilla-portable-network-hub/ .

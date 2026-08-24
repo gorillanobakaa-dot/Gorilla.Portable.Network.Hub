@@ -1,0 +1,15 @@
+#!/bin/sh
+set -e
+if [ "$1" = configure ]; then
+    # The desktop only notices a new icon once the cache is rebuilt, and only
+    # notices a new menu entry once the desktop database is. Both are silent
+    # when skipped, which is why a correctly installed package can look like
+    # it did nothing at all.
+    if which gtk-update-icon-cache >/dev/null 2>&1; then
+        gtk-update-icon-cache -q -f /usr/share/icons/hicolor 2>/dev/null || true
+    fi
+    if which update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database -q /usr/share/applications 2>/dev/null || true
+    fi
+fi
+exit 0

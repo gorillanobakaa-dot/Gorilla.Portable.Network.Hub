@@ -1,0 +1,25 @@
+Package: gorilla-portable-network-hub
+Version: @VERSION@
+Section: net
+Priority: optional
+Architecture: amd64
+Installed-Size: @SIZE@
+Depends: libc6 (>= 2.34)
+Recommends: network-manager
+Maintainer: gorillanobakaa <gorillanobakaa@gmail.com>
+Homepage: https://github.com/gorillanobakaa-dot/Gorilla.Portable.Network.Hub
+Description: Turn a laptop into the network and hand a folder to the room
+ Creates a wifi network where none exists and hands a folder of files to
+ every device in range. Built for classrooms with no internet, no router
+ and often no mains power: the teacher's laptop becomes the access point
+ and the children's machines need no account, no privileges and no setup.
+ .
+ Files are served in pieces that can be asked for individually, so a device
+ that loses the signal carries on from where it stopped instead of starting
+ the whole file again. Every piece can be checked against a fingerprint.
+ .
+ Run "hub" with no arguments for a screen; every command also works on its
+ own. No dependencies at all beyond the C library, screen included.
+ .
+ Dual-track documentation, plain-language and developer, is installed under
+ /usr/share/doc/gorilla-portable-network-hub.

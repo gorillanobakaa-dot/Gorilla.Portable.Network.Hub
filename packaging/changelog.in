@@ -1,0 +1,15 @@
+gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
+
+  * First package. One binary with a screen and four commands: serve, get,
+    sums and doctor.
+  * Running "hub" with no arguments opens the screen rather than printing
+    usage, which is what a double-click passes.
+  * Creates a WPA2 wifi network through NetworkManager, never an open one,
+    and restores the previous connection through a systemd timer that
+    survives the program being killed.
+  * Finds the machine handing out files by asking the gateway first, then
+    sweeping the local /24.
+  * Byte ranges and keep-alive on both sides, so an interrupted transfer
+    carries on instead of starting again.
+
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@

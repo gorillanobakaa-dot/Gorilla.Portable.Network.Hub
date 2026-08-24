@@ -1,4 +1,4 @@
-<!-- Version: 1.1.0 · updated 26-08-24-22-12 -->
+<!-- Version: 1.2.0 · updated 26-08-24-23-05 -->
 # Gorilla Portable Network Hub
 
 <!-- WHO-THIS-IS-FOR: managed block, do not edit by hand -->
@@ -73,6 +73,30 @@ seconds.
 The access point rig used to take the measurements lives separately in
 `Scripts.For.Work/wifi-ap-lab/`, because those are bench instruments rather
 than part of the product.
+
+## Installing
+
+A Debian package is built from the repository, icons and man page included:
+
+```
+cd src/hub && cargo build --release && cd ../..
+./packaging/build-deb.sh
+sudo dpkg -i packaging/build/gorilla-portable-network-hub_0.1.0_amd64.deb
+```
+
+It installs `hub`, a menu entry called **Portable Network Hub**, a man page, and
+both documentation tracks under `/usr/share/doc`. Nothing is required at run
+time beyond the C library; NetworkManager is only needed to CREATE a wifi
+network, not to hand files out over one that already exists.
+
+The icon is rendered at every size from one master rather than one file copied
+into nine slots, which is what makes it sharp in a menu instead of grainy. The
+build refuses to finish if any two sizes turn out to be the same file.
+
+**One name clash to know about:** Debian already ships a package called `hub`
+(GitHub's command-line wrapper), which also owns `/usr/bin/hub`. They cannot be
+installed at the same time. dpkg will say so rather than overwrite anything, and
+the binary name here is not settled yet.
 
 ## How it is used
 

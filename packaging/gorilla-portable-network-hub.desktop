@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Portable Network Hub
+GenericName=Offline file sharing
+Comment=Hand a folder to every device in the room, with no internet
+Exec=hub
+Icon=hub
+Terminal=true
+Categories=Network;FileTransfer;
+Keywords=share;files;offline;classroom;wifi;hotspot;transfer;school;
+StartupNotify=false

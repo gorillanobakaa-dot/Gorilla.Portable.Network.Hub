@@ -19,3 +19,6 @@ data-rate-*/
 *.pem
 *.key
 .env
+
+# Built packages: these belong on a release page, not in the history.
+packaging/build/
