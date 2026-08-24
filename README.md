@@ -1,6 +1,17 @@
 <!-- Version: 1.0.0 · updated 26-08-24-21-21 -->
 # Gorilla Portable Network Hub
 
+<!-- WHO-THIS-IS-FOR: managed block, do not edit by hand -->
+
+**Turn a laptop into the network: hand a folder to every device in the room, with no internet and no router.**
+
+Built for the people every other tool prices out: kids with no credit
+card, 15-year-old laptops, data sold by the megabyte. Free forever, by
+design, not as a trial.
+Why, with the numbers: [PHILOSOPHY.md](https://github.com/gorillanobakaa-dot/Gorilla.Opencode/blob/main/PHILOSOPHY.md)
+
+<!-- /WHO-THIS-IS-FOR -->
+
 A laptop that **creates a network where none exists**, and hands a folder to
 every device in the room.
 
