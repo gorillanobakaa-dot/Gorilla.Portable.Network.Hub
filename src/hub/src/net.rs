@@ -398,6 +398,67 @@ fn parse_arp(text: &str, ours: Ipv4Addr) -> Vec<Joined> {
     out
 }
 
+/// Names looked up in the background, never in the draw loop.
+///
+/// A lookup is a network round trip. Doing one while drawing means the screen
+/// stops until it answers, which is exactly the freeze this whole design keeps
+/// avoiding. So the draw loop only ever READS this map, and a short-lived
+/// thread fills it in.
+#[derive(Clone, Default)]
+pub struct NameCache {
+    map: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<Ipv4Addr, Lookup>>>,
+}
+
+#[derive(Clone)]
+struct Lookup {
+    name: Option<String>,
+    tries: u8,
+    last: std::time::Instant,
+}
+
+impl NameCache {
+    pub fn get(&self, ip: Ipv4Addr) -> Option<String> {
+        let m = self.map.lock().unwrap_or_else(|e| e.into_inner());
+        m.get(&ip).and_then(|e| e.name.clone())
+    }
+
+    /// Start a lookup for `ip` if one is worth starting.
+    ///
+    /// Retried a few times because a device shows up in the ARP table the
+    /// moment it talks to us, which can be BEFORE dnsmasq has written its
+    /// lease. One attempt would leave that device as a number for the rest of
+    /// the lesson.
+    pub fn ensure(&self, ip: Ipv4Addr, server: Ipv4Addr) {
+        const MAX_TRIES: u8 = 4;
+        const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
+        {
+            let mut m = self.map.lock().unwrap_or_else(|e| e.into_inner());
+            match m.get(&ip) {
+                Some(e) if e.name.is_some() => return,
+                Some(e) if e.tries >= MAX_TRIES || e.last.elapsed() < RETRY_AFTER => return,
+                _ => {}
+            }
+            let tries = m.get(&ip).map(|e| e.tries).unwrap_or(0) + 1;
+            m.insert(ip, Lookup { name: None, tries, last: std::time::Instant::now() });
+        }
+        let map = std::sync::Arc::clone(&self.map);
+        std::thread::spawn(move || {
+            // Short. dnsmasq is one hop away on a network we are the centre of;
+            // if it has not answered in half a second it is not going to.
+            let found = crate::dns::reverse_lookup(ip, server, std::time::Duration::from_millis(500));
+            if let Some(fqdn) = found {
+                let short = crate::dns::short_name(&fqdn);
+                if !short.is_empty() {
+                    let mut m = map.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some(e) = m.get_mut(&ip) {
+                        e.name = Some(short);
+                    }
+                }
+            }
+        });
+    }
+}
+
 // ---------------------------------------------------------------- randomness
 
 /// Password bytes from the operating system, never from the clock.

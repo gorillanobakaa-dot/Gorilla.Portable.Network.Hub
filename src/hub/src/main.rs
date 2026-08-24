@@ -12,6 +12,7 @@
 // bytes are minutes of somebody's life.
 mod sha256;
 mod term;
+mod dns;
 mod net;
 mod tui;
 mod fetch;
@@ -101,6 +102,31 @@ fn doctor() {
     }
     for a in addrs {
         println!("  address        {a}");
+    }
+    // Only when this machine looks like it IS the hotspot. Listing "everyone on
+    // the network" from inside an office would print the whole building.
+    let hotspot_here = net::local_addresses().into_iter().find(|a| {
+        let o = a.octets();
+        (o[0] == 10 && o[1] == 42) || (o[0] == 192 && o[1] == 168 && (o[2] == 137 || o[2] == 43))
+    });
+    if let Some(ours) = hotspot_here {
+        let joined = net::joined_devices(ours);
+        println!("  on your network {} device(s)", joined.len());
+        for j in &joined {
+            // Lease name if this is running as root, otherwise ask the network,
+            // which is what the screen does and what needs no privileges.
+            let named = j.name.clone().or_else(|| {
+                dns::reverse_lookup(j.ip, ours, std::time::Duration::from_millis(500))
+                    .map(|f| dns::short_name(&f))
+            });
+            match named {
+                Some(n) => println!("    {:<16} {n}", j.ip.to_string()),
+                None => println!("    {:<16} (no name; it did not give one)", j.ip.to_string()),
+            }
+        }
+        if joined.is_empty() {
+            println!("    nothing has joined yet");
+        }
     }
     println!("  password made  {}", if net::suggest_password().is_empty() {
         "no, this computer has no random source"

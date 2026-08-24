@@ -1,4 +1,4 @@
-<!-- Version: 1.1.1 · updated 26-08-24-23-23 -->
+<!-- Version: 1.2.0 · updated 26-08-24-23-32 -->
 # Why this exists
 
 Draft of the layman track, written 2026-08-24, destined for the repository
@@ -205,6 +205,20 @@ to.
 
 Neither could have been found by reading the code or by the automatic tests.
 Both took somebody using it for two minutes.
+
+## The names were never missing
+
+Every device says what it is called when it joins a network and asks for an
+address. The computer writes that down. The catch was that it writes it into a
+file only an administrator can read, so a teacher who started the network the
+ordinary way saw a list of numbers.
+
+But the same computer is also answering the question "what is this address
+called?" for everything on that network, because handing out addresses and
+answering names are the same small program doing both jobs. So the tool asks
+over the network instead of reading the file. No password, no terminal, no
+administrator. The names were always there, being given out to anyone who asked;
+we were reading the wrong one of the two places they live.
 
 ## How we know the screen works
 

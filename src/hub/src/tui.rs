@@ -101,6 +101,7 @@ struct App {
     addresses: Vec<std::net::Ipv4Addr>,
     joined: Vec<net::Joined>,
     joined_at: Option<Instant>,
+    names: net::NameCache,
 
     // the receive form
     found: Found,
@@ -138,6 +139,7 @@ impl App {
             addresses: Vec::new(),
             joined: Vec::new(),
             joined_at: None,
+            names: net::NameCache::default(),
             found: Arc::new(Mutex::new(None)),
             server: None,
             server_port: PORT,
@@ -314,7 +316,24 @@ impl App {
             // a teacher's screen filling with three hundred strangers is worse
             // than showing none of them.
             self.joined = match &self.hotspot {
-                Some(h) => h.address().map(net::joined_devices).unwrap_or_default(),
+                Some(h) => match h.address() {
+                    Some(ours) => {
+                        let list = net::joined_devices(ours);
+                        // The names are already known: every device said what
+                        // it was called when it asked for an address, and the
+                        // same dnsmasq that wrote them down is the DNS server
+                        // for this network. Asking it needs no privileges, so
+                        // a teacher sees "Amina-Laptop" rather than a number
+                        // without touching a terminal or a password prompt.
+                        for j in &list {
+                            if j.name.is_none() {
+                                self.names.ensure(j.ip, ours);
+                            }
+                        }
+                        list
+                    }
+                    None => Vec::new(),
+                },
                 None => Vec::new(),
             };
             self.joined_at = Some(Instant::now());
@@ -339,7 +358,13 @@ impl App {
         // anything. A phone that joins and waits is the normal state at the
         // start of a lesson, and it used to show as nothing at all.
         for j in &self.joined {
-            let who = j.name.clone().unwrap_or_else(|| j.ip.to_string());
+            // Lease name if we could read it (root), then the name the network
+            // answered with, then the bare address.
+            let who = j
+                .name
+                .clone()
+                .or_else(|| self.names.get(j.ip))
+                .unwrap_or_else(|| j.ip.to_string());
             match live.iter().find(|t| t.peer == j.ip.to_string()) {
                 Some(t) => rows.push(transfer_row(&who, t)),
                 None => rows.push(format!("  {:<24}on the network, nothing asked for yet", term::truncate(&who, 22))),

@@ -1,4 +1,4 @@
-<!-- Version: 1.1.1 · updated 26-08-24-23-23 -->
+<!-- Version: 1.2.0 · updated 26-08-24-23-32 -->
 # Gorilla Portable Network Hub: the developer track
 
 Companion to `WHY-THIS-EXISTS.md`, which is the layman track and is not a
@@ -478,10 +478,34 @@ second interface can easily hold an address that sorts first. The list is only
 gathered when **we** made the network; over a network somebody else provided,
 "who is on it" is the whole building.
 
-**Open:** names without root. dnsmasq answers PTR queries for its own leases on
-10.42.0.1:53, so a hand-rolled DNS lookup would get them, but shelling out to
-`getent` from the draw loop risks a five-second resolver timeout freezing the
-screen. Running with `sudo` gets names today.
+3. **Ask the network.** dnsmasq is not only the DHCP server for that network,
+   it is the DNS server for it, and it answers reverse lookups for its own
+   leases. The same names are therefore available over the network, to anybody,
+   with no privileges at all. Confirmed from the NetworkManager binary: it
+   builds a `--listen-address=` for the shared interface and a
+   `--dhcp-leasefile=%s/dnsmasq-%s.leases` matching the file above.
+
+`src/dns.rs` is about 200 lines of `std`: build a PTR question for
+`d.c.b.a.in-addr.arpa`, send it, match the transaction id, walk the answers.
+
+**Not `getent` or `getaddrinfo`.** Either would be three lines and either can
+block for five seconds on a resolver that is not answering, with no way to
+shorten it. This program draws four times a second; a five-second freeze in
+front of a class is not worth three lines. Here the timeout is 500 ms and it is
+ours. There is a test that asserts a silent server returns in under two seconds.
+
+Lookups run on short-lived threads and the draw loop only ever READS the cache,
+so a slow answer cannot stop the screen. Retried up to four times, five seconds
+apart, because a device appears in the ARP table the moment it talks to us,
+which can be **before** dnsmasq has written its lease; one attempt would leave
+it as a number for the rest of the lesson.
+
+Two things the parser refuses, both of which are how DNS parsers hang: a
+compression pointer that points forward or at itself, and a chain deeper than
+eight. Both have tests.
+
+Run `hub doctor` with the hotspot up and it prints the devices and their names,
+which is the one-command way to check this on a machine that is not this one.
 
 ### Every nmcli call has stdin closed
 
