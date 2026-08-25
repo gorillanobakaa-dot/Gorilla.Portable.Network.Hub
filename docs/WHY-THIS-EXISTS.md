@@ -628,3 +628,106 @@ at decided whether a device got its name into the permanent record.
 That is now done on a tick, whatever is on screen. The general lesson is worth
 more than the fix: work that everything depends on must not be a side effect of
 drawing one screen.
+
+# The evening a browser took the whole folder, 25 August 2026
+
+The morning gave this tool identity and control. The evening gave it the two
+things a real room asks of it next: hand over a whole folder, not a file at a
+time, and stay fast while doing it. Both were tested the hardest honest way we
+know: one plain Windows laptop running nothing but its browser, against the
+2012 laptop being the entire network. Nothing was installed on the receiving
+machine at any point. That is the rule of every test this project runs,
+because it is the situation of every room this project is for.
+
+## A folder has folders in it
+
+Pointing the tool at a real folder of 68,153 files exposed a failure that had
+been invisible for its whole life: only the files sitting loose at the top
+were offered. Everything inside a subfolder, which is to say almost
+everything, was silently left off every list. Worse, those hidden files could
+still be fetched by anybody who guessed their names, so the tool's two mouths
+disagreed: the page said one thing, the wire said another.
+
+Both are fixed, and the fix was measured: the tool now walks all 68,153 files
+in a third of a second, offers all of them, and a child's phone is shown the
+first 300 with an honest count of the rest, because a page of 68,000 rows
+would defeat the phone it was sent to. A folder that contains itself through a
+shortcut no longer traps the walk, and the folders that belong to the tool,
+where children's handed-in work lives, are never offered back to the class at
+any depth.
+
+## One button for the whole folder
+
+A browser can only download one thing per click. No browser made can be told
+"take these 68,000 files", and no child should click 68,000 times. So the page
+grew one purple button: GET EVERYTHING. It hands the entire folder over as a
+single download that Windows has known how to open since before these children
+were born.
+
+The button respects an old ruling of this project: squeezing files is hard
+work for a weak laptop and stays a last resort. This is boxing, not
+squeezing. The files are laid end to end with a table of contents, and the
+only arithmetic is a checksum. The proof is in the measurement: while
+handing 7.5 GB of archive to a real laptop, the serving machine sat at 4%
+of its processor, cool, fans nearly idle.
+
+Because nothing is squeezed, the exact size of the download is known before
+the first byte moves, so the child sees a real progress bar with a real end,
+not a spinner. And the archive is built as it streams: the teacher's disk
+never holds a copy. The one honest cost: a failed download starts over,
+because a thing built fresh per request has no middle to resume from.
+
+We do not trust our own archive-writing by taste. Every build is opened by an
+independent reader that shares none of our code, and on the very first run
+that reader refused the archive outright: one byte of one signature was
+wrong, an archive that would have opened nowhere. That is why the
+independent reader is the test.
+
+## The evening's mystery: two megabytes a second, missing
+
+Then the field test found something the morning had not: the same download
+that ran at 7 the day before ran at 4.7. Every gauge said everything was
+fine. So every suspect was accused one at a time, and each had to be cleared
+by a number it could not fake:
+
+- The wifi retried under 2% of its frames. Innocent.
+- The deeper network layer resent 0.31% of its packets. Innocent.
+- The receiving laptop never once said "stop, I'm full". Innocent.
+- The antivirus was switched off mid-download. Nothing changed. Innocent.
+- The old laptop was at 4% of its processor, cool, never throttled. Innocent.
+- Our own new archive code was raced against the plain old file path.
+  Same speed. Innocent.
+- Even the measuring tools were accused: the packet recorder was stopped
+  mid-run. Nothing changed. Innocent.
+
+What remained was invisible on every screen: the radio was working almost
+flat out, holding 87% of all airtime, and delivering little for it. Working
+hard and achieving little is what a bad wifi channel looks like, and nothing,
+anywhere, ever says so in words.
+
+## Moving lanes under a moving car
+
+The proof had to be surgical, and it was, by accident of nobody stopping the
+download: the network was moved from channel 1, which the system had picked
+automatically, to channel 13, underneath the live transfer. The download rode
+through the ten-second gap as if nothing had happened, and the same
+connection immediately ran a third faster. Same laptops, same file, same
+evening. One number changed.
+
+Channels are lanes on the same road. The system had parked the whole class in
+the most crowded lane in the building, and a crowded lane looks completely
+fine from the front of the room. It is just slow.
+
+So the teacher now has the dial. The screen lists which lanes this laptop, in
+this country, is allowed to use, reading the answer from the radio itself
+rather than assuming any nation's rulebook, and explains it in exactly those
+words: if the room is slow, try another lane.
+
+## Two wrong explanations, kept on the record
+
+Twice during the hunt, a confident explanation was published and then killed
+by the next measurement: first that a single browser connection simply cannot
+go faster, then that browsers pay a fixed 30% tax. Both are still in the
+records, marked withdrawn, next to what replaced them. This project keeps its
+wrong turns because the next person to hunt a slow network will take the same
+turns, and the marked map is the valuable part.

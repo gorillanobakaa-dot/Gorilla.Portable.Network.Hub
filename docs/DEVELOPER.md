@@ -1183,3 +1183,150 @@ hardware address to derive one from.
 Three tests added (52 total): the ordering traps against nine real User-Agent
 shapes plus two that must return `None`; the reported line reproduced before and
 after; and the header read off a real socket through to the store.
+
+## 12. 0.8.0: folders, the streamed archive, and the channel
+
+Version 0.8.0, built and field-tested 2026-08-25 afternoon and evening. Field
+doctrine, owner's standing rule: every test is browser-only against an
+unmodified client machine. Nothing below assumes software on the far side.
+
+### 12.1 The recursive walk, and where its limits live
+
+`visible_files` was top-level-only, so a 68,153-file folder offered six files
+and 0.02 GB of 6.3. The matching hole was worse: the permission check read
+`is_allowed(first_segment)` instead of `is_allowed(rel)`, so nested files were
+unlisted but fetchable by guessed path. Listing and serving disagreed, which
+`plain_listing`'s own comment forbids.
+
+The walk (`serve.rs`): depth capped at 8, `symlink_metadata` never `metadata`
+(a self-containing symlink must terminate the walk, not merely bound it),
+`NEVER_SERVE = [handed-in, waiting, refused]` at every depth, results cached
+3 s because the walk runs per request. **[measured]** cold walk of 68,153
+files 308 ms, cached 48 ms.
+
+The 2,000-file ceiling moved off the walk (now 100,000, a runaway backstop)
+onto the page (300 rows plus an honest remainder line), because the constraint
+belongs to the phone that must render it, not to the enumeration.
+
+`all_files` vs `visible_files` exists because of a regression caught before it
+shipped: the tick screen first obtained its unfiltered list by calling
+`set_allowed(None)`, which would have published the entire folder for as long
+as the teacher had the review screen open. The test is named
+`seeing_the_whole_list_is_not_the_same_as_publishing_it`.
+
+### 12.2 Batch fetch: lanes over one queue
+
+The receive screen's `a` fetches every listed file. N lanes (default 4, field
+"Files at the same time") pull from ONE shared queue, never a slice per lane:
+files range from 5 KB to 5.4 GB, and a fixed share strands three idle lanes
+while one carries the database. Per-file resume is preserved because each file
+is still an independent `download`.
+
+Two round trips per file were eliminated for the batch path (`download_known`):
+the listing already carries the size, so `probe_total` is redundant, and a
+file under one 2 MB chunk has exactly one piece, so `.sums` cannot say
+anything a failed fetch would not. **[measured]** with tshark on identical
+conditions, 20 small files, verify on: 0.7.1 issued 40 requests (30 GET +
+10 .sums), 0.8.0 issued 30.
+
+Progress honesty: `fetch`'s byte counters are process-global, so with several
+files in flight they describe whichever wrote last. The batch screen counts
+only bytes of FINISHED files and says how many lanes are running.
+
+### 12.3 zip.rs: the streamed archive
+
+Store-mode Zip64, always Zip64, one code path: classic zip dies at 4 GB and
+65,535 entries and the motivating folder exceeds both. Flag bit 3 data
+descriptors with 8-byte sizes; per-entry Zip64 extras; EOCD64 + locator +
+saturated classic EOCD. `exact_size()` is pure arithmetic over the framing
+constants, which is what lets the response carry a true `Content-Length` and
+the browser show a bounded progress bar for a file that does not exist yet.
+
+The stream enforces its promises: a file that grew mid-lesson is cut at the
+promised length (offsets behind it must not shift), one that shrank aborts the
+stream (padding would corrupt the CRC and hand a child damaged homework that
+LOOKS intact; a visibly failed download is the honest outcome).
+
+Verification is by an independent reader, python's `zipfile`, never by this
+module agreeing with itself. First run: the reader rejected the archive.
+Cause: the Zip64 locator signature written `0x07074B50` where the format says
+`0x07064B50`. One byte, an archive that opens nowhere, invisible to any
+self-test. The reader is kept in the test suite for exactly this class.
+
+No ranges on `/everything.zip`, structurally: the archive is generated per
+request, so "the byte at offset N" is defined only within one running stream.
+
+**[measured]** in the field: 7.56 GB streamed to Edge at 4% mean CPU on the
+i7-3632QM, CRC and framing included. Boxing, not squeezing, as ruled
+2026-08-22; the ruling held under load.
+
+### 12.4 The evening forensics: method, verdict, instruments
+
+Baseline: previous day, browser, single 8 GB static file, ~7 MB/s. Evening:
+4.65 (zip) and 4.73 (static), so the regression was path-independent.
+Eliminations, each with its instrument:
+
+| suspect | instrument | verdict |
+|---|---|---|
+| zip streamer | A/B static vs zip path | 4.73 vs 4.65, cleared |
+| MAC layer | `iw station dump` deltas | retries 1.87%, failed 91, cleared |
+| TCP | tshark `tcp.analysis.retransmission` | 0.31%, cleared |
+| receiver window | `zero_window` + `window_full` counts | both zero, cleared |
+| Defender | on/off mid-run | no step change, cleared |
+| observer effect | dumpcap killed mid-run | 4.85 to 4.82, cleared |
+| thermals/power | coretemp, RAPL, throttle counters, mains | idle, cleared |
+
+The convicting instrument was `iw survey dump` deltas during live transfer:
+channel busy 92%, our tx 87%, others 5%, idle 7%, at 4.82 MB/s. Full effort,
+clean counters, low yield. No unprivileged counter names a bad channel; this
+signature is how one looks.
+
+Proof by live hop: `nmcli connection modify <hotspot> band bg channel 13; up`
+under the running download. TCP survived the ~10 s outage. Same connection:
+**[measured]** 4.82 MB/s at 87% airtime on channel 1, 6.07 at 89% on channel
+13. Goodput per airtime-second 5.5 to 6.8, +23%, consistent with ERP/legacy
+protection overhead on the dirty channel (CTS-to-self spends OUR tx time
+carrying no data, so it inflates tx% invisibly). This kernel ships without
+MAC80211_DEBUGFS, so driver-level protection counters were unavailable; the
+survey-delta method plus the hop carried the conviction alone.
+
+Withdrawn on the record, in `bench/RESULTS.md`: the single-stream-equilibrium
+explanation and the 30% browser tax. Residual: 6.07 vs the previous day's ~7
+is unattributed pending a morning-air retest.
+
+### 12.5 The channel feature
+
+`hotspot_up` takes `Option<u16>`; band derived from the number (14 and below
+bg, above a). Validation is against `allowed_channels()`: `iw phy` parsed,
+entries flagged `disabled` or `no IR` dropped (an AP only speaks), OnceLock
+cached, and the refusal message NAMES the permitted list via
+`channel_ranges()`. Nothing national is hardcoded; on this world-domain
+unleashed kernel the list reads 1-14, on a stock machine it reads that
+country's truth. Parser unit-tested against canned iw output covering
+disabled, no-IR and radar entries.
+
+The dormant-field lesson: with no SSID typed, the channel row first read "not
+ours to choose on somebody else's network", which the owner read as the tool
+refusing channel control outright. A dormant field must name the action that
+wakes it ("name a network above first"), not deliver a verdict.
+
+### 12.6 Honest names for concurrency
+
+"Devices at once" counted worker threads, and one device holds several: a
+browser about six, this tool's downloads four, so thirty phones is nearer 180
+connections than 30. Renamed "Connections to serve at once", with that
+arithmetic shown while the row is selected; the receive side's "Pieces at
+once" became "Connections per file" so the pair reads as a pair; "Files at the
+same time" joined them for the batch. A reassuring number that measures the
+wrong thing is worse than a scary one that measures the right thing.
+
+### 12.7 Test inventory at 0.8.0
+
+62 tests, up from 53: four walk tests (recursion to depth four, never-serve at
+depth, symlink-loop termination under a deadline, list-vs-publish isolation),
+four zip tests (independent-reader round trip with `exact_size` pinned,
+shrink aborts, growth cut, monotonic progress), the `iw phy` parser, and the
+packaging-version drift guard extended to the new files. The walk tests
+serialise on a shared mutex because ALLOWED is process-wide state and cargo
+runs tests in parallel threads: the third instance of that trap in one day,
+each time the test wrong and the code right.
