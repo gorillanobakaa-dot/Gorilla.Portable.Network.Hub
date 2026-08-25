@@ -179,8 +179,8 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, 
          textarea{height:4em}\
          form{margin:18px 0;border-top:1px solid #ddd;padding-top:12px}\
          .escape{background:#fff3cd;border:2px solid #d9a441;padding:10px;margin:8px 0}\
-         .addr{font-size:1.6em;font-weight:bold;font-family:monospace;\
-         text-align:center;padding:10px;margin:8px 0;background:#fff;border:2px dashed #666}\
+         .escapebtn{background:#b34700;font-size:1.15em;display:block;text-align:center;margin:10px 0}\
+         .escapealt{background:#555;display:block;text-align:center;margin:6px 0}\
          iframe{width:100%;border:0;min-height:340px}\
          </style></head><body>\n<h1>Class files</h1>\n",
     );
@@ -236,30 +236,44 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, 
              <input type=\"file\" name=\"work\"><br>\
              <button type=\"submit\">SEND IT TO YOUR TEACHER</button></form>\n"
         ));
-        // The escape hatch, stated loudly rather than as small print.
+        // The escape hatch: a BUTTON, not an address to type.
+        //
+        // Printing "go to 10.42.0.1" was useless in the field. Mobile
+        // browsers autocomplete from history and silently rewrite what was
+        // typed: the owner typed exactly those nine characters and Edge sent
+        // him to a cached 10.42.0.1:8080 instead. A href is never autofilled,
+        // never autocompleted, and never guessed at, because nobody types it.
         //
         // The wifi sign-in window is not a browser: on Android it is a
-        // stripped WebView that in most builds has no file-chooser wired up,
+        // stripped WebView that in most builds has no file chooser wired up,
         // so "Choose file" does nothing at all and the page looks broken.
-        // Downloads, notes and reading all work in there; handing in does not.
-        // Found on a real phone 2026-08-25, and the giveaway was that the SAME
-        // phone and the SAME Edge had handed in fine an hour earlier, when it
-        // had reached the page by typing the address instead of through the
-        // sign-in pop.
+        // Downloads, reading and notes all work in there; handing in does not.
+        //
+        // Three layers, because no single one works on every phone:
+        //   1. intent:// which is Android's documented way for a page to hand
+        //      a URL to the real browser. Breaks out of the sheet when the
+        //      WebView honours it.
+        //   2. A plain http link, which every device understands. On a laptop
+        //      or an iPhone this is simply the right answer; inside the sheet
+        //      it at least navigates without anyone typing.
+        //   3. The menu instruction, which always exists even when both
+        //      links are swallowed.
+        let bare = here.split(':').next().unwrap_or(here);
         s.push_str(&format!(
-            "<div class=escape><b>Tapping \"Choose file\" does nothing?</b><br>\
-             You are in the wifi sign-in window, which cannot send files.<br>\
-             Open your normal browser and go to:\
-             <div class=addr>{}</div>\
-             Everything works there, and you stay on the class wifi.</div>\n",
-            html_escape(here)
+            "<div class=escape><b>Can't pick a file?</b><br>\
+             You are in the wifi sign-in window. It can show and download \
+             files, but it cannot send them.<br>\
+             <a class=\"btn escapebtn\" \
+             href=\"intent://{bare}/#Intent;scheme=http;action=android.intent.action.VIEW;end\">\
+             OPEN THIS IN MY BROWSER</a>\
+             <a class=\"btn escapealt\" href=\"http://{}/\">or tap here</a>\
+             <br><small>If neither opens your browser: tap the three dots at \
+             the top of this window and choose \"Open in browser\" or \"Use \
+             this network as is\". You stay on the class wifi either way.</small>\
+             </div>\n",
+            html_escape(here),
+            bare = html_escape(bare)
         ));
-    } else {
-        // Teachers serve from USB drives kept as their failsafe copy. When
-        // that drive cannot take writes the form would be a lie, and a page
-        // that quietly eats homework is the worst thing this could ship.
-        s.push_str("<form><b>Hand in your work</b><br>\
-                    Handing in is switched off: the teacher's folder cannot receive files right now.</form>\n");
     }
     let token2 = fresh_token();
     s.push_str(&format!(
@@ -283,7 +297,7 @@ pub fn files_frame(root: &Path) -> String {
     s.push_str(
         "<!doctype html><html><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
-         <meta http-equiv=\"refresh\" content=\"6\">\
+         <meta http-equiv=\"refresh\" content=\"10\">\
          <style>body{font-family:sans-serif;margin:0;color:#111}\
          .file{margin:0 0 16px 0}.name{font-size:1.1em;word-break:break-all}\
          .size{color:#666;font-size:.9em;margin-left:6px}\
@@ -1048,8 +1062,12 @@ mod tests {
         assert!(crate::serve::probe_handin(&dir), "temp dir should be writable");
         claim_name("10.42.0.210", "who=Amina");
         let page = class_page(&dir, None, "10.42.0.210", false, "10.42.0.1");
-        assert!(page.contains("cannot send files"), "the escape hatch must be on the page");
-        assert!(page.contains("10.42.0.1"), "and it must print the real address");
+        assert!(page.contains("it cannot send them"), "the escape hatch must be on the page");
+        // A tappable link, never an address to type: mobile browsers rewrite
+        // typed addresses from their own history.
+        assert!(page.contains("href=\"http://10.42.0.1/\""), "needs a real link: {page}");
+        assert!(page.contains("intent://10.42.0.1/"), "needs the Android breakout link");
+        assert!(!page.contains("class=addr"), "the type-this-address block should be gone");
     }
 
     #[test]

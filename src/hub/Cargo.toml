@@ -1,6 +1,6 @@
 [package]
 name = "hub"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 
 # One binary, three subcommands. Measured 2026-08-24: the same code as three

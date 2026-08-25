@@ -592,6 +592,24 @@ pub fn default_helpers() -> usize {
 /// A bounded worker pool without timeouts is not a pool, it is a countdown.
 const IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// How long an IDLE kept-alive connection may hold a worker while waiting for
+/// a request that may never come.
+///
+/// This is the second instance of the countdown trap, and the arithmetic is
+/// the whole story. The class page refreshes its file list on a timer. A
+/// browser that opens a fresh connection each time, and every phone browser
+/// opens several in parallel, leaves each one parked in the keep-alive read
+/// for the full IO_TIMEOUT. At a 6 second refresh and a 30 second idle
+/// timeout that is five parked workers PER DEVICE: thirty children need 150
+/// workers and the pool has 64. The server then answers nobody, while looking
+/// perfectly healthy, and the browser reports a connection timeout.
+///
+/// Shorter than the refresh interval, so a connection is always released
+/// before the same page comes back for more. A real transfer is never
+/// affected: the timeout is raised back to IO_TIMEOUT the moment a request
+/// actually starts arriving.
+const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 fn handle(sock: TcpStream, root: &Path) -> std::io::Result<()> {
     sock.set_read_timeout(Some(IO_TIMEOUT))?;
     sock.set_write_timeout(Some(IO_TIMEOUT))?;
@@ -602,7 +620,14 @@ fn handle(sock: TcpStream, root: &Path) -> std::io::Result<()> {
     // hung up, so a client asking for keep-alive paid a full TCP handshake per
     // chunk. Measured 2026-08-24: 477 chunks meant 476 connections and dropped
     // a loopback transfer from 348 MB/s to 31.5 MB/s, a 10x cost.
+    let mut first = true;
     loop {
+        // The first request gets the full patience; every later one on the
+        // same connection is speculative and must not squat on a worker.
+        if !first {
+            sock.set_read_timeout(Some(IDLE_TIMEOUT))?;
+        }
+        first = false;
         match serve_one(&mut reader, &sock, root, &peer) {
             Ok(true) => continue,   // keep the connection
             Ok(false) => return Ok(()),
@@ -624,6 +649,12 @@ fn serve_one(
     while head.len() < 8192 {
         if reader.read(&mut byte)? == 0 {
             return Ok(false); // peer closed
+        }
+        if head.is_empty() {
+            // A request has actually started. Give it the full timeout again:
+            // the short one exists only to evict connections that are idle,
+            // never to cut short one that is being used.
+            sock.set_read_timeout(Some(IO_TIMEOUT))?;
         }
         head.push(byte[0]);
         if head.ends_with(b"\r\n\r\n") {

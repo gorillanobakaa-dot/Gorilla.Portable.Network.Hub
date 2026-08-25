@@ -1,4 +1,23 @@
-gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
+gorilla-portable-network-hub (@VERSION@) unstable; urgency=high
+
+  * Fix worker starvation that made the server stop answering while looking
+    healthy. The class page refreshed its list every 6 seconds while an idle
+    kept-alive connection held a worker for 30, so every device parked about
+    five workers permanently: thirty children would need 150 and the pool
+    has 64. Idle connections now release after 5 seconds, a real transfer
+    still gets the full 30. Measured with 16 workers and 90 idle
+    connections: before, a latecomer timed out after 8 seconds; after, it
+    was served immediately.
+  * The escape hatch is a BUTTON, not an address to type. Mobile browsers
+    autocomplete from history and rewrite what was typed, so printing
+    "go to 10.42.0.1" sent a real user to a cached 10.42.0.1:8080 that was
+    not answering. A link is never autofilled. Three layers: an Android
+    intent:// breakout, a plain link, and the menu instruction.
+  * The file list refreshes every 10 seconds instead of 6.
+
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+
+gorilla-portable-network-hub (0.4.1) unstable; urgency=medium
 
   * The roster shows the picked name AND the device: "Johnny [Xiaomi-11-
     Lite-5G-NE]". The name was typed by a kid and can be denied; the device
@@ -8,7 +27,7 @@ gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
     nothing and the page looks broken. It now says so and prints the
     address to open in a real browser, in large type.
 
- -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  Mon, 25 Aug 2026 10:05:00 +0100
 
 gorilla-portable-network-hub (0.4.0) unstable; urgency=medium
 
