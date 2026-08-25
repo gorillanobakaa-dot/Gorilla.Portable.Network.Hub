@@ -77,15 +77,50 @@ support call. It says what it found and what it did not.
 
 ---
 
-## 0.7.0
+## The session that produced 0.7.1, 25 August 2026
 
-Not yet photographed. Three screens are new in this release and none of them
-has a picture:
+A phone and a laptop on the same hotspot, twenty minutes after 0.7.0 was built.
+The names are the tester's own, and they are the reason the attribution scheme
+exists at all.
 
-- **Who is on the network** (`c` from the roster), with a device paused and the
-  row reading `PAUSED BY YOU`.
+### The roster, with the room on it
+
+[![The hub roster showing the wifi name and password, an address with no port on the end and the word classroom as an alternative, two devices both looking at the page, one piece of work waiting, a note, and a key line offering files, notice, waiting, who is on and join code](gallery/roster-two-devices-and-work-waiting.png)](gallery/roster-two-devices-and-work-waiting.png)
+
+Everything 0.7.x added is visible in one frame. The address has no port on the
+end, which means the tool holds port 80 and a joining phone gets its own sign-in
+screen. `classroom/` is offered as the thing to type instead, because a slash is
+on the first keyboard layer and a colon is three deep. Two devices are on, one
+piece of work is waiting, and the bottom line carries the two new keys.
+
+### Who is on the network
+
+[![The class screen listing two devices by the names they picked with a short tag after each, one row highlighted, above five lines explaining that a paused device still has the wifi and that a phone can come back under a different name](gallery/class-screen-two-devices-and-the-limits.png)](gallery/class-screen-two-devices-and-the-limits.png)
+
+The screen where a device gets paused, and where the tool is honest about what
+that does and does not do. Those five lines are not padding: a teacher who
+believes a pause is a lock will be corrected by a child, in front of a class,
+which is the worst possible way to find out.
+
+### The bug this session found
+
+[![The waiting work screen showing a piece of work from biggus.dickus with a tag, but the device column cut off to a bare address rather than naming the device](gallery/waiting-work-with-the-device-column-empty.png)](gallery/waiting-work-with-the-device-column-empty.png)
+
+Kept deliberately, the way the "no internet" shot is kept. This is work handed
+in by a **laptop**, and where the phone's entry would say
+`Xiaomi-11-Lite-5G-NE`, this one falls back to a bare address. Phones tell the
+network what they are called when they ask for one; laptops very often tell it
+nothing.
+
+That column is the whole point of the scheme, because it is the part a child did
+not type. 0.7.1 fixes it by asking the other party that already knows: the
+browser, which announces roughly what it is on every request. The same line now
+reads `biggus.dickus #nzrm [a Windows laptop, 10.42.0.251]`.
+
+## Still missing
+
 - **The paused page**, as it appears on the child's phone.
-- **Join by camera** (`j`), the QR code on a real terminal, ideally with a
-  phone actually scanning it.
+- **Join by camera** (`j`), the QR code on a real terminal, ideally with a phone
+  actually scanning it.
 
 They belong here as soon as somebody takes them.
