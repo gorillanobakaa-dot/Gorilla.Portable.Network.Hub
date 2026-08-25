@@ -336,7 +336,13 @@ impl App {
             (
                 "Wifi channel".into(),
                 if self.ssid.is_empty() {
-                    "not ours to choose on somebody else's network".into()
+                    // Not a verdict, an instruction. This first read "not ours
+                    // to choose on somebody else's network", which the owner
+                    // read as the tool refusing channel control outright,
+                    // while standing one row away from creating his own
+                    // network. Say the one thing to do, not the reason the
+                    // row is asleep.
+                    "name a network above first, then a lane can be chosen".into()
                 } else if self.channel.is_empty() {
                     "picked automatically".into()
                 } else {
