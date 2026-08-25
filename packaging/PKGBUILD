@@ -65,7 +65,7 @@ source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz
 # Every release: tag, push the tag, download the tarball, sha256sum it, paste it
 # here, commit to main, then download again and verify. Never carry the previous
 # release's value forward.
-sha256sums=('841d527f7f15deb4377883fe8d0936c85f09ec24387839b7e5a9aa93d5cea972')
+sha256sums=('bf575b7ded3cfa30ec7b763d42476ce3afbf51140821c783ededc123ab7fafb2')
 
 build() {
     cd "Gorilla.Portable.Network.Hub-${pkgver}/src/hub"
