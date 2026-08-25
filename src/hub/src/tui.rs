@@ -468,16 +468,16 @@ impl App {
             match live.iter().find(|t| t.peer == j.ip.to_string()) {
                 Some(t) => rows.push(transfer_row(&who, t)),
                 None if serve::has_seen_page(&j.ip.to_string()) => {
-                    rows.push(format!("  {:<24}looking at the page", term::truncate(&who, 22)));
+                    rows.push(format!("  {:<34}looking at the page", term::truncate(&who, 32)));
                 }
-                None => rows.push(format!("  {:<24}on the network, has not opened the page yet", term::truncate(&who, 22))),
+                None => rows.push(format!("  {:<34}on the network, has not opened the page yet", term::truncate(&who, 32))),
             }
         }
         // Anything downloading from an address that is not on our subnet: the
         // case where the class is on a network somebody else provided.
         for t in &live {
             if !self.joined.iter().any(|j| j.ip.to_string() == t.peer) {
-                let who = serve::device_label(&t.peer);
+                let who = serve::roster_label(&t.peer);
                 rows.push(transfer_row(&who, t));
             }
         }
@@ -1221,8 +1221,8 @@ impl App {
 fn transfer_row(who: &str, t: &serve::Transfer) -> String {
     let pct = if t.total > 0 { t.done as f64 / t.total as f64 } else { 0.0 };
     format!(
-        "  {:<24}{} {:>3}%  {:>12}  {}",
-        term::truncate(who, 22),
+        "  {:<34}{} {:>3}%  {:>12}  {}",
+        term::truncate(who, 32),
         bar(pct, 16),
         (pct * 100.0) as u64,
         if t.finished { "done".to_string() } else { format!("{:.1} MB/s", t.rate / 1e6) },

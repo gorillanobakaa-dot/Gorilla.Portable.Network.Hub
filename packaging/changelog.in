@@ -1,5 +1,17 @@
 gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
 
+  * The roster shows the picked name AND the device: "Johnny [Xiaomi-11-
+    Lite-5G-NE]". The name was typed by a kid and can be denied; the device
+    model was reported by the phone itself and cannot.
+  * A loud escape hatch under hand-in. The wifi sign-in window is a
+    stripped WebView with no file chooser wired up, so "Choose file" does
+    nothing and the page looks broken. It now says so and prints the
+    address to open in a real browser, in large type.
+
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+
+gorilla-portable-network-hub (0.4.0) unstable; urgency=medium
+
   * The roster shows the name the kid picked, not the phone model. Picking
     a name was the point; the screen forgot to listen.
   * READ opens files in a viewer with a BACK TO THE FILES bar. A bare file
@@ -14,7 +26,7 @@ gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
     prefix completes with its slash, an ambiguous one stops at the shared
     part and shows the choices. Decades of fingers know what Tab does.
 
- -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  Mon, 25 Aug 2026 09:30:00 +0100
 
 gorilla-portable-network-hub (0.3.1) unstable; urgency=medium
 

@@ -142,6 +142,27 @@ pub fn set_device_name(ip: &str, name: &str) {
     }
 }
 
+/// Name plus device, for the screen the teacher is actually looking at.
+///
+/// The owner's exact scenario: thirty identical phones, a kid claims a name,
+/// and later says "wasn't me". The claimed name alone is not enough to settle
+/// that in the room; the device model sitting next to it is the part a kid
+/// cannot talk their way out of, because it was not typed, it was reported by
+/// the device itself when it joined the network.
+pub fn roster_label(ip: &str) -> String {
+    let claimed = claimed_name(ip);
+    let device = {
+        let n = NAMES.lock().unwrap_or_else(|e| e.into_inner());
+        n.iter().find(|(i, _)| i == ip).map(|(_, name)| name.clone())
+    };
+    match (claimed, device) {
+        (Some(c), Some(d)) => format!("{c} [{d}]"),
+        (Some(c), None) => c,
+        (None, Some(d)) => d,
+        (None, None) => ip.to_string(),
+    }
+}
+
 pub fn device_label(ip: &str) -> String {
     if let Some(c) = claimed_name(ip) {
         return c;
@@ -719,7 +740,14 @@ fn serve_one(
         }
         mark_page_seen(&peer_ip);
         let done = query.strip_prefix("done=");
-        let page = crate::page::class_page(root, done, &peer_ip, query.contains("rename=1"));
+        // The address the class was told to use, taken from the socket this
+        // request actually arrived on, so the escape hatch never prints a
+        // guess.
+        let here = sock
+            .local_addr()
+            .map(|a| if a.port() == 80 { a.ip().to_string() } else { format!("{}:{}", a.ip(), a.port()) })
+            .unwrap_or_else(|_| "10.42.0.1".to_string());
+        let page = crate::page::class_page(root, done, &peer_ip, query.contains("rename=1"), &here);
         return respond_fresh(&mut out, "text/html; charset=utf-8", page.as_bytes()).map(|_| keep);
     }
     if path_only == "/files" {

@@ -158,7 +158,7 @@ fn token_already_used(peer_ip: &str, token: &str) -> bool {
 /// The whole page. `done` names a just-finished action so the reloaded page
 /// can say so (the POST answered with a redirect here; refresh never
 /// resubmits).
-pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool) -> String {
+pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, here: &str) -> String {
     let notice = notice();
     let mut s = String::with_capacity(4096);
     s.push_str(
@@ -178,6 +178,9 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool) 
          textarea,input[type=file]{width:100%;font-size:1em;margin:6px 0}\
          textarea{height:4em}\
          form{margin:18px 0;border-top:1px solid #ddd;padding-top:12px}\
+         .escape{background:#fff3cd;border:2px solid #d9a441;padding:10px;margin:8px 0}\
+         .addr{font-size:1.6em;font-weight:bold;font-family:monospace;\
+         text-align:center;padding:10px;margin:8px 0;background:#fff;border:2px dashed #666}\
          iframe{width:100%;border:0;min-height:340px}\
          </style></head><body>\n<h1>Class files</h1>\n",
     );
@@ -231,9 +234,25 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool) 
              <b>Hand in your work</b><br>\
              <input type=\"hidden\" name=\"token\" value=\"{token}\">\
              <input type=\"file\" name=\"work\"><br>\
-             <button type=\"submit\">SEND IT TO YOUR TEACHER</button>\
-             <br><small>If choosing a file does nothing here, open your normal \
-             browser, type the address from the board, and hand in from there.</small></form>\n"
+             <button type=\"submit\">SEND IT TO YOUR TEACHER</button></form>\n"
+        ));
+        // The escape hatch, stated loudly rather than as small print.
+        //
+        // The wifi sign-in window is not a browser: on Android it is a
+        // stripped WebView that in most builds has no file-chooser wired up,
+        // so "Choose file" does nothing at all and the page looks broken.
+        // Downloads, notes and reading all work in there; handing in does not.
+        // Found on a real phone 2026-08-25, and the giveaway was that the SAME
+        // phone and the SAME Edge had handed in fine an hour earlier, when it
+        // had reached the page by typing the address instead of through the
+        // sign-in pop.
+        s.push_str(&format!(
+            "<div class=escape><b>Tapping \"Choose file\" does nothing?</b><br>\
+             You are in the wifi sign-in window, which cannot send files.<br>\
+             Open your normal browser and go to:\
+             <div class=addr>{}</div>\
+             Everything works there, and you stay on the class wifi.</div>\n",
+            html_escape(here)
         ));
     } else {
         // Teachers serve from USB drives kept as their failsafe copy. When
@@ -983,11 +1002,11 @@ mod tests {
     #[test]
     fn the_page_asks_for_a_name_first_and_then_shows_files() {
         let dir = tmpdir();
-        let before = class_page(&dir, None, "10.42.0.201", false);
+        let before = class_page(&dir, None, "10.42.0.201", false, "10.42.0.1");
         assert!(before.contains("type your name"), "an unnamed device must be asked first");
         assert!(!before.contains("Hand in your work"), "no forms before a name");
         claim_name("10.42.0.201", "who=Amina+N.");
-        let after = class_page(&dir, None, "10.42.0.201", false);
+        let after = class_page(&dir, None, "10.42.0.201", false, "10.42.0.1");
         assert!(after.contains("You are <b>Amina N.</b>"), "{after}");
         assert!(after.contains("Send a note") || after.contains("Hand in"), "the page must open up after the name");
     }
@@ -1019,6 +1038,18 @@ mod tests {
         assert_eq!(out.tag, "handin");
         assert!(dir.join("handed-in").join("Amina--essay.docx").exists(),
                 "the teacher marks names, not phone models");
+    }
+
+    #[test]
+    fn the_page_tells_a_sign_in_window_where_to_go_instead() {
+        let dir = tmpdir();
+        // The server probes writability at start; without that the hand-in
+        // form is deliberately hidden and there is nothing to escape from.
+        assert!(crate::serve::probe_handin(&dir), "temp dir should be writable");
+        claim_name("10.42.0.210", "who=Amina");
+        let page = class_page(&dir, None, "10.42.0.210", false, "10.42.0.1");
+        assert!(page.contains("cannot send files"), "the escape hatch must be on the page");
+        assert!(page.contains("10.42.0.1"), "and it must print the real address");
     }
 
     #[test]
