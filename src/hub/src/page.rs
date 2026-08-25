@@ -233,7 +233,8 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, 
             "<form method=\"post\" action=\"/handin\" enctype=\"multipart/form-data\">\
              <b>Hand in your work</b><br>\
              <input type=\"hidden\" name=\"token\" value=\"{token}\">\
-             <input type=\"file\" name=\"work\"><br>\
+             <input type=\"file\" name=\"work\" multiple><br>\
+             <small>You can pick more than one.</small><br>\
              <button type=\"submit\">SEND IT TO YOUR TEACHER</button></form>\n"
         ));
         // The escape hatch: a BUTTON, not an address to type.
@@ -398,9 +399,12 @@ fn urlencode(s: &str) -> String {
 /// File types a browser can show or play by itself. Everything else only
 /// gets GET IT.
 fn openable(name: &str) -> bool {
+    // Only what a browser can genuinely display. A .docx opened in a browser
+    // is a download prompt wearing a READ button, which is worse than no
+    // button at all.
     matches!(ext(name).as_str(),
-        "pdf" | "txt" | "jpg" | "jpeg" | "png" | "gif" | "webp"
-        | "mp4" | "webm" | "mp3" | "ogg" | "m4a" | "wav" | "html" | "htm")
+        "pdf" | "txt" | "md" | "csv" | "jpg" | "jpeg" | "png" | "gif" | "webp"
+        | "svg" | "mp4" | "webm" | "mp3" | "ogg" | "m4a" | "wav" | "html" | "htm")
 }
 
 fn is_media(name: &str) -> bool {
@@ -416,6 +420,27 @@ fn ext(name: &str) -> String {
 pub fn content_type(name: &str) -> &'static str {
     match ext(name).as_str() {
         "pdf" => "application/pdf",
+        // The formats a European curriculum actually produces. Without these
+        // a browser is told "unknown binary" and the phone refuses to open
+        // what it just downloaded, which was a real complaint about photos.
+        "doc" => "application/msword",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xls" => "application/vnd.ms-excel",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "ppt" => "application/vnd.ms-powerpoint",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "odt" => "application/vnd.oasis.opendocument.text",
+        "ods" => "application/vnd.oasis.opendocument.spreadsheet",
+        "odp" => "application/vnd.oasis.opendocument.presentation",
+        "rtf" => "application/rtf",
+        "epub" => "application/epub+zip",
+        "zip" => "application/zip",
+        "7z" => "application/x-7z-compressed",
+        "csv" => "text/csv; charset=utf-8",
+        "md" => "text/markdown; charset=utf-8",
+        "xml" => "text/xml; charset=utf-8",
+        "json" => "application/json",
+        "svg" => "image/svg+xml",
         "txt" => "text/plain; charset=utf-8",
         "html" | "htm" => "text/html; charset=utf-8",
         "jpg" | "jpeg" => "image/jpeg",
@@ -564,11 +589,34 @@ pub fn sanitize_filename(name: &str) -> String {
 
 pub struct UploadOutcome {
     pub tag: &'static str,
-    /// What the roster shows, e.g. "homework.jpg" or "homework.jpg (2nd version)".
+    /// What the roster shows, e.g. "homework.jpg" or "3 files".
     pub shown: Option<String>,
 }
 
-/// Read one multipart upload off the wire and land it in handed-in/.
+/// Where work waits for the teacher to look at it.
+///
+/// Nothing a child sends lands in the teacher's folder unaccepted. A
+/// classroom is a safeguarding environment and the teacher is responsible for
+/// what is on her machine, so an upload is a REQUEST, not a delivery. Sitting
+/// inside handed-in/ means the serving side already refuses to hand it back
+/// out: whatever arrives is never downloadable by the rest of the class, not
+/// even while it waits.
+pub fn waiting_dir(root: &Path) -> PathBuf {
+    handed_in_dir(root).join("waiting")
+}
+
+/// Work that has been refused. Moved, never deleted: it may be evidence, and
+/// deciding what disappears is not this program's call.
+pub fn refused_dir(root: &Path) -> PathBuf {
+    handed_in_dir(root).join("refused")
+}
+
+/// Read one multipart upload off the wire and land every file in it in the
+/// waiting area.
+///
+/// MULTIPLE FILES, because one assignment is rarely one file: a project is a
+/// document and a spreadsheet and three photographs of the work. The parser
+/// walks every part rather than stopping at the first one with a filename.
 ///
 /// Streaming, with a rolling tail: the boundary can straddle any read, so the
 /// last boundary-length bytes are always held back from disk until the next
@@ -597,21 +645,32 @@ pub fn take_upload<R: Read>(
         return Ok(UploadOutcome { tag: "toobig", shown: None });
     }
 
-    let mut body = BodyReader { r: reader, left: content_length };
-
-    // Walk parts until the file part. Fields (the token) come first in every
-    // browser because the form puts them first.
+    let mut body = BodyReader { r: reader, left: content_length, pushback: Vec::new() };
     let full_boundary = format!("--{boundary}");
-    let mut filename = String::new();
-    let mut in_file = false;
+    let marker = format!("\r\n{full_boundary}");
+
+    let dir = waiting_dir(root);
+    if std::fs::create_dir_all(&dir).is_err() {
+        drain(&mut body)?;
+        return Ok(UploadOutcome { tag: "cantsave", shown: None });
+    }
+
+    let who = sanitize_filename(&serve::device_label(peer_ip));
+    let mut landed: Vec<String> = Vec::new();
+    let mut trouble: Option<&'static str> = None;
     let mut line = Vec::new();
-    // First line is the first boundary.
+
+    // First line is the opening boundary.
     read_line(&mut body, &mut line)?;
     loop {
         // Part headers.
         let mut disposition = String::new();
+        let mut ended = false;
         loop {
-            read_line(&mut body, &mut line)?;
+            if read_line(&mut body, &mut line)? == 0 {
+                ended = true;
+                break;
+            }
             let text = String::from_utf8_lossy(&line);
             let t = text.trim_end();
             if t.is_empty() {
@@ -621,8 +680,12 @@ pub fn take_upload<R: Read>(
                 disposition = t.to_string();
             }
         }
-        if disposition.to_ascii_lowercase().contains("filename=") {
-            filename = disposition
+        if ended {
+            break;
+        }
+
+        let filename = if disposition.to_ascii_lowercase().contains("filename=") {
+            disposition
                 .split("filename=")
                 .nth(1)
                 .unwrap_or("")
@@ -631,99 +694,151 @@ pub fn take_upload<R: Read>(
                 .split('"')
                 .next()
                 .unwrap_or("")
-                .to_string();
-            in_file = true;
-            break;
-        }
-        // A field part: consume until the next boundary line.
-        loop {
-            read_line(&mut body, &mut line)?;
-            let text = String::from_utf8_lossy(&line);
-            if text.trim_end().starts_with(&full_boundary) {
-                if text.trim_end().ends_with("--") {
-                    // Form ended with no file part.
-                    return Ok(UploadOutcome { tag: "empty", shown: None });
-                }
+                .to_string()
+        } else {
+            String::new()
+        };
+
+        if filename.is_empty() {
+            // A field, or a file input left empty by the browser, which every
+            // browser still sends as an empty part. Consume to the next
+            // boundary and carry on to the part that matters.
+            let last = skip_to_boundary(&mut body, &full_boundary)?;
+            if last {
                 break;
             }
+            continue;
+        }
+
+        let clean = sanitize_filename(&filename);
+        let tmp = dir.join(format!(".incoming-{}-{}", std::process::id(), landed.len()));
+        let mut out = match std::fs::File::create(&tmp) {
+            Ok(f) => f,
+            Err(_) => {
+                trouble = Some("cantsave");
+                break;
+            }
+        };
+        let (written, digest, last) =
+            stream_part(&mut body, &mut out, marker.as_bytes(), peer_ip, &clean, content_length)?;
+        out.flush()?;
+        // Synced before it can wear a finished name. The drive this lands on
+        // is often the teacher's failsafe USB stick and gets unplugged the
+        // moment the lesson ends.
+        let _ = out.sync_all();
+        drop(out);
+
+        if written == 0 {
+            let _ = std::fs::remove_file(&tmp);
+        } else {
+            match place(&dir, &tmp, &who, &clean, &digest) {
+                Some(final_name) => {
+                    serve::note_pending(peer_ip, &clean, &final_name, written);
+                    landed.push(clean);
+                }
+                None => {
+                    let _ = std::fs::remove_file(&tmp);
+                    trouble = Some("cantsave");
+                }
+            }
+        }
+        if last || trouble.is_some() {
+            break;
         }
     }
-    if !in_file || filename.is_empty() {
+    drain(&mut body)?;
+
+    if let Some(t) = trouble {
+        return Ok(UploadOutcome { tag: t, shown: None });
+    }
+    if landed.is_empty() {
         return Ok(UploadOutcome { tag: "empty", shown: None });
     }
-
-    let clean = sanitize_filename(&filename);
-    let who = sanitize_filename(&serve::device_label(peer_ip));
-    let dir = handed_in_dir(root);
-    // Disk trouble is an ANSWER, not a dropped connection: the drive may be
-    // read-only or full or unplugged, and the kid must be told to tell the
-    // teacher rather than shown a browser error page.
-    if std::fs::create_dir_all(&dir).is_err() {
-        drain(&mut body)?;
-        return Ok(UploadOutcome { tag: "cantsave", shown: None });
-    }
-
-    // Stream to a temporary name first. A dying upload must not leave a
-    // half-file wearing a finished name.
-    let tmp = dir.join(format!(".incoming-{}", std::process::id()));
-    let mut out = match std::fs::File::create(&tmp) {
-        Ok(f) => f,
-        Err(_) => {
-            drain(&mut body)?;
-            return Ok(UploadOutcome { tag: "cantsave", shown: None });
-        }
+    serve::note_direction(peer_ip, &landed[0], 0, content_length, serve::Direction::Done);
+    let shown = if landed.len() == 1 {
+        landed[0].clone()
+    } else {
+        format!("{} files", landed.len())
     };
+    Ok(UploadOutcome { tag: "handin", shown: Some(shown) })
+}
+
+/// Stream one part's payload to `out`, stopping at the boundary.
+/// Returns (bytes written, digest, whether that was the CLOSING boundary).
+fn stream_part<R: Read>(
+    body: &mut BodyReader<R>,
+    out: &mut std::fs::File,
+    marker: &[u8],
+    peer_ip: &str,
+    name: &str,
+    total: u64,
+) -> std::io::Result<(u64, String, bool)> {
     let mut hasher = crate::sha256::Sha256::new();
-    let marker = format!("\r\n{full_boundary}");
-    let marker_bytes = marker.as_bytes();
     let mut tail: Vec<u8> = Vec::new();
     let mut written: u64 = 0;
     let mut buf = [0u8; 64 * 1024];
-    'outer: loop {
+    loop {
         let n = body.read(&mut buf)?;
         if n == 0 {
-            break;
+            // Ran out of body without a boundary: write whatever is held back.
+            out.write_all(&tail)?;
+            hasher.update(&tail);
+            written += tail.len() as u64;
+            return Ok((written, crate::sha256::hex(&hasher.finish()), true));
         }
         tail.extend_from_slice(&buf[..n]);
-        // Everything except a marker-length tail is definitely payload.
-        if let Some(pos) = find(&tail, marker_bytes) {
+        if let Some(pos) = find(&tail, marker) {
             out.write_all(&tail[..pos])?;
             hasher.update(&tail[..pos]);
             written += pos as u64;
-            // Rest of the body (the closing boundary line) is drained below.
-            loop {
-                let n = body.read(&mut buf)?;
-                if n == 0 {
+            // Two bytes after the boundary tell us whether more parts follow:
+            // "--" closes the body, CRLF starts another part.
+            let after = pos + marker.len();
+            let mut rest = tail[after.min(tail.len())..].to_vec();
+            while rest.len() < 2 {
+                let m = body.read(&mut buf)?;
+                if m == 0 {
                     break;
                 }
+                rest.extend_from_slice(&buf[..m]);
             }
-            break 'outer;
+            let last = rest.starts_with(b"--");
+            // Hand back everything after those two bytes. It is the start of
+            // the next part and the caller is about to read its headers.
+            if rest.len() > 2 {
+                body.pushback.extend_from_slice(&rest[2..]);
+            }
+            return Ok((written, crate::sha256::hex(&hasher.finish()), last));
         }
-        if tail.len() > marker_bytes.len() {
-            let keep = tail.len() - marker_bytes.len();
+        if tail.len() > marker.len() {
+            let keep = tail.len() - marker.len();
             out.write_all(&tail[..keep])?;
             hasher.update(&tail[..keep]);
             written += keep as u64;
             tail.drain(..keep);
         }
-        serve::note_direction(peer_ip, &clean, n as u64, content_length, Direction::HandingIn);
+        serve::note_direction(peer_ip, name, n as u64, total, serve::Direction::HandingIn);
     }
-    out.flush()?;
-    // Synced before it can wear a finished name. The drive this lands on is
-    // the teacher's failsafe and gets unplugged the moment the lesson ends;
-    // an unsynced rename on a FAT stick is how homework half-exists.
-    let _ = out.sync_all();
-    drop(out);
+}
 
-    if written == 0 {
-        let _ = std::fs::remove_file(&tmp);
-        return Ok(UploadOutcome { tag: "empty", shown: None });
+/// Consume a non-file part. Returns true if that was the closing boundary.
+fn skip_to_boundary<R: Read>(body: &mut BodyReader<R>, full_boundary: &str) -> std::io::Result<bool> {
+    let mut line = Vec::new();
+    loop {
+        if read_line(body, &mut line)? == 0 {
+            return Ok(true);
+        }
+        let text = String::from_utf8_lossy(&line);
+        let t = text.trim_end();
+        if t.starts_with(full_boundary) {
+            return Ok(t.ends_with("--"));
+        }
     }
+}
 
-    let digest = crate::sha256::hex(&hasher.finish());
-    // Same device, same name, same bytes: the retry of an upload that already
-    // landed. Same answer, no second file. Different bytes with the same name:
-    // the kid genuinely resubmitted, keep both and say which is which.
+/// Give the finished file its name, keeping a genuine resubmission and
+/// dropping a retry. Returns the name it landed under.
+fn place(dir: &Path, tmp: &Path, who: &str, clean: &str, digest: &str) -> Option<String> {
     let base = format!("{who}--{clean}");
     let mut final_name = base.clone();
     let mut version = 1;
@@ -732,25 +847,20 @@ pub fn take_upload<R: Read>(
         if !candidate.exists() {
             break;
         }
-        if file_digest(&candidate).as_deref() == Some(digest.as_str()) {
-            let _ = std::fs::remove_file(&tmp);
-            serve::note_direction(peer_ip, &clean, 0, content_length, Direction::Done);
-            return Ok(UploadOutcome { tag: "handin", shown: Some(clean) });
+        // Same device, same name, same bytes: the retry of an upload that
+        // already landed. On the links this is for, a phone re-posts without
+        // the child doing anything.
+        if file_digest(&candidate).as_deref() == Some(digest) {
+            let _ = std::fs::remove_file(tmp);
+            return Some(final_name);
         }
         version += 1;
         final_name = versioned(&base, version);
     }
-    if std::fs::rename(&tmp, dir.join(&final_name)).is_err() {
-        let _ = std::fs::remove_file(&tmp);
-        return Ok(UploadOutcome { tag: "cantsave", shown: None });
+    if std::fs::rename(tmp, dir.join(&final_name)).is_err() {
+        return None;
     }
-    serve::note_direction(peer_ip, &clean, 0, content_length, Direction::Done);
-    let shown = if version > 1 {
-        format!("{clean} ({version}{} version)", ordinal(version))
-    } else {
-        clean
-    };
-    Ok(UploadOutcome { tag: "handin", shown: Some(shown) })
+    Some(final_name)
 }
 
 /// "name.ext" -> "name--v2.ext", keeping the extension where the phone's
@@ -812,10 +922,24 @@ fn drain<R: Read>(body: &mut BodyReader<R>) -> std::io::Result<()> {
 struct BodyReader<'a, R: Read> {
     r: &'a mut BufReader<R>,
     left: u64,
+    /// Bytes already pulled off the socket but not yet consumed.
+    ///
+    /// Finding a boundary always over-reads: the bytes after it, which belong
+    /// to the NEXT part, are sitting in the same buffer. Discarding them ate
+    /// the following part's headers, so a three-file upload delivered two.
+    /// They go back here instead, and `left` is not charged twice because it
+    /// was already decremented when they came off the socket.
+    pushback: Vec<u8>,
 }
 
 impl<R: Read> Read for BodyReader<'_, R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if !self.pushback.is_empty() {
+            let n = buf.len().min(self.pushback.len());
+            buf[..n].copy_from_slice(&self.pushback[..n]);
+            self.pushback.drain(..n);
+            return Ok(n);
+        }
         if self.left == 0 {
             return Ok(0);
         }
@@ -826,7 +950,7 @@ impl<R: Read> Read for BodyReader<'_, R> {
     }
 }
 
-fn read_line<R: Read>(body: &mut BodyReader<R>, line: &mut Vec<u8>) -> std::io::Result<()> {
+fn read_line<R: Read>(body: &mut BodyReader<R>, line: &mut Vec<u8>) -> std::io::Result<usize> {
     line.clear();
     let mut b = [0u8; 1];
     while line.len() < 16 * 1024 {
@@ -838,7 +962,7 @@ fn read_line<R: Read>(body: &mut BodyReader<R>, line: &mut Vec<u8>) -> std::io::
             break;
         }
     }
-    Ok(())
+    Ok(line.len())
 }
 
 /// The redirect every POST answers with, so refresh never resubmits. This is
@@ -920,7 +1044,7 @@ mod tests {
         let content = b"line one\r\n--not the boundary--\r\nline two".to_vec();
         let out = upload(&dir, "10.42.0.90", "homework.txt", &content);
         assert_eq!(out.tag, "handin");
-        let landed = dir.join("handed-in").join("10.42.0.90--homework.txt");
+        let landed = dir.join("handed-in/waiting").join("10.42.0.90--homework.txt");
         assert_eq!(std::fs::read(&landed).unwrap(), content, "bytes must survive the trickle");
     }
 
@@ -930,7 +1054,7 @@ mod tests {
         let content = b"same bytes".to_vec();
         assert_eq!(upload(&dir, "10.42.0.91", "hw.txt", &content).tag, "handin");
         assert_eq!(upload(&dir, "10.42.0.91", "hw.txt", &content).tag, "handin");
-        let entries: Vec<_> = std::fs::read_dir(dir.join("handed-in")).unwrap().flatten().collect();
+        let entries: Vec<_> = std::fs::read_dir(dir.join("handed-in/waiting")).unwrap().flatten().collect();
         assert_eq!(entries.len(), 1, "a retry must not multiply the file: {entries:?}");
     }
 
@@ -940,8 +1064,8 @@ mod tests {
         upload(&dir, "10.42.0.92", "essay.txt", b"first go");
         let out = upload(&dir, "10.42.0.92", "essay.txt", b"fixed it");
         assert_eq!(out.tag, "handin");
-        assert!(out.shown.unwrap().contains("2nd version"));
-        let h = dir.join("handed-in");
+        // A real correction is kept beside the first attempt, not on top of it.
+        let h = dir.join("handed-in/waiting");
         assert!(h.join("10.42.0.92--essay.txt").exists());
         assert!(h.join("10.42.0.92--essay--v2.txt").exists());
     }
@@ -952,7 +1076,7 @@ mod tests {
         let out = upload(&dir, "10.42.0.93", "../../../../etc/passwd", b"nope");
         assert_eq!(out.tag, "handin");
         // The file landed INSIDE handed-in under a defanged name.
-        let entries: Vec<String> = std::fs::read_dir(dir.join("handed-in"))
+        let entries: Vec<String> = std::fs::read_dir(dir.join("handed-in/waiting"))
             .unwrap()
             .flatten()
             .map(|e| e.file_name().to_string_lossy().into_owned())
@@ -1051,7 +1175,7 @@ mod tests {
         claim_name("10.42.0.204", "who=Amina");
         let out = upload(&dir, "10.42.0.204", "essay.docx", b"real work");
         assert_eq!(out.tag, "handin");
-        assert!(dir.join("handed-in").join("Amina--essay.docx").exists(),
+        assert!(dir.join("handed-in/waiting").join("Amina--essay.docx").exists(),
                 "the teacher marks names, not phone models");
     }
 
@@ -1069,6 +1193,58 @@ mod tests {
         assert!(page.contains("href=\"http://10.42.0.1/\""), "needs a real link: {page}");
         assert!(page.contains("intent://10.42.0.1/"), "needs the Android breakout link");
         assert!(!page.contains("class=addr"), "the type-this-address block should be gone");
+    }
+
+    /// One assignment is rarely one file: a project is a document, a
+    /// spreadsheet and three photographs of the work.
+    #[test]
+    fn several_files_in_one_send_all_arrive() {
+        let dir = tmpdir();
+        let b = "----WebKitFormBoundaryMulti";
+        let mut body = Vec::new();
+        body.extend_from_slice(format!("--{b}\r\nContent-Disposition: form-data; name=\"token\"\r\n\r\ntok\r\n").as_bytes());
+        for (name, content) in [("essay.docx", &b"WORD"[..]), ("data.xlsx", &b"SHEET"[..]), ("photo.jpg", &b"JPEG"[..])] {
+            body.extend_from_slice(format!(
+                "--{b}\r\nContent-Disposition: form-data; name=\"work\"; filename=\"{name}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+            ).as_bytes());
+            body.extend_from_slice(content);
+            body.extend_from_slice(b"\r\n");
+        }
+        body.extend_from_slice(format!("--{b}--\r\n").as_bytes());
+        let headers = format!(
+            "POST /handin HTTP/1.1\r\nHost: 10.42.0.1\r\nContent-Type: multipart/form-data; boundary={b}\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        // Three bytes at a time, so every boundary straddles a read edge.
+        let mut r = BufReader::new(Trickle { data: body, pos: 0 });
+        let out = take_upload(&mut r, &headers, "10.42.0.99", &dir).unwrap();
+        assert_eq!(out.tag, "handin");
+        assert_eq!(out.shown.as_deref(), Some("3 files"));
+        let w = dir.join("handed-in/waiting");
+        assert_eq!(std::fs::read(w.join("10.42.0.99--essay.docx")).unwrap(), b"WORD");
+        assert_eq!(std::fs::read(w.join("10.42.0.99--data.xlsx")).unwrap(), b"SHEET");
+        assert_eq!(std::fs::read(w.join("10.42.0.99--photo.jpg")).unwrap(), b"JPEG");
+    }
+
+    /// Nothing a child sends reaches the teacher's folder, or the rest of the
+    /// class, until she says so.
+    #[test]
+    fn work_waits_until_accepted_and_a_refusal_is_kept() {
+        let dir = tmpdir();
+        upload(&dir, "10.42.0.98", "good.txt", b"real work");
+        upload(&dir, "10.42.0.98", "bad.jpg", b"not real work");
+        assert!(dir.join("handed-in/waiting/10.42.0.98--good.txt").exists());
+        assert!(!dir.join("handed-in/10.42.0.98--good.txt").exists(),
+                "nothing lands in the teacher's folder unaccepted");
+
+        crate::serve::accept_pending(&dir, "10.42.0.98--good.txt").unwrap();
+        assert!(dir.join("handed-in/10.42.0.98--good.txt").exists(), "accepted work moves up");
+        assert!(!dir.join("handed-in/waiting/10.42.0.98--good.txt").exists());
+
+        crate::serve::refuse_pending(&dir, "10.42.0.98--bad.jpg").unwrap();
+        assert!(dir.join("handed-in/refused/10.42.0.98--bad.jpg").exists(),
+                "a refusal is MOVED, never deleted: it may be evidence");
+        assert!(!dir.join("handed-in/waiting/10.42.0.98--bad.jpg").exists());
     }
 
     #[test]

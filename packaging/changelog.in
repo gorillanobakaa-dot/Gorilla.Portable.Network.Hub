@@ -1,4 +1,22 @@
-gorilla-portable-network-hub (@VERSION@) unstable; urgency=high
+gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
+
+  * Work a child sends now WAITS for the teacher. It lands in a holding
+    area, the roster says "N pieces of work waiting for you", and she
+    accepts or refuses each one (w on the roster; a, r, o to look). Nothing
+    reaches her folder unaccepted and nothing sent to her is ever handed
+    back out to the class, not even while it waits. A refusal is moved to
+    refused/, never deleted: it may be evidence.
+  * Several files in one send. One assignment is rarely one file, and the
+    parser stopped at the first. It walks every part now.
+  * Office and school formats declared properly: doc, docx, xls, xlsx,
+    ppt, pptx, odt, ods, odp, rtf, epub, zip, 7z, csv, md, xml, json, svg.
+  * The transfer row says which way the bytes are going and how long is
+    left, so a teacher knows whether she can shut the lid. A finished row
+    no longer reads "99% done".
+
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+
+gorilla-portable-network-hub (0.5.1) unstable; urgency=high
 
   * A serve bound to one address no longer also grabs port 80. It used to
     take port 80 on whatever host was asked for, so anything bound to
@@ -10,7 +28,7 @@ gorilla-portable-network-hub (@VERSION@) unstable; urgency=high
     corrupts the attribution the name exists for. A reconnecting phone
     also keeps its name instead of being asked again.
 
- -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  Mon, 25 Aug 2026 10:45:00 +0100
 
 gorilla-portable-network-hub (0.5.0) unstable; urgency=medium
 

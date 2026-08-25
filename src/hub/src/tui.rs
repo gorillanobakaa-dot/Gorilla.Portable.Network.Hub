@@ -84,6 +84,8 @@ enum Screen {
     /// is how the teacher publishes or withdraws a file while kids watch.
     Tick { pre: bool },
     Sending,
+    /// Work children have sent, waiting for the teacher to accept or refuse.
+    Waiting,
     Receive,
     ReceiveFiles,
     Receiving,
@@ -199,6 +201,7 @@ impl App {
             Screen::Home => self.draw_home(&mut f),
             Screen::Send => self.draw_send(&mut f),
             Screen::Tick { pre } => self.draw_tick(&mut f, pre),
+            Screen::Waiting => self.draw_waiting(&mut f),
             Screen::Sending => self.draw_sending(&mut f),
             Screen::Receive => self.draw_receive(&mut f),
             Screen::ReceiveFiles => self.draw_files(&mut f),
@@ -351,6 +354,41 @@ impl App {
         self.hints(f, "  space to tick    a all    n none    enter to continue    esc to go back");
     }
 
+    fn draw_waiting(&self, f: &mut Frame) {
+        self.title(f, "Work waiting for you");
+        let items = serve::pending();
+        if items.is_empty() {
+            f.push("  Nothing is waiting.");
+            f.blank();
+            f.push_dim("  Work a child sends arrives here first. Nothing lands in");
+            f.push_dim("  your folder until you accept it, and nothing sent to you");
+            f.push_dim("  is ever handed back out to the rest of the class.");
+            self.hints(f, "  esc to go back");
+            return;
+        }
+        let lines: Vec<String> = items
+            .iter()
+            .map(|p| format!("  {:<30}{:<26}{:>9}", term::truncate(&p.from, 28), term::truncate(&p.original, 24), human(p.bytes)))
+            .collect();
+        let w = term::group_width(&lines);
+        let room = f.rows.saturating_sub(f.used() + 5);
+        for (i, line) in lines.iter().enumerate().take(room) {
+            if i == self.row {
+                f.push_selected_within(line, w);
+            } else {
+                f.push(line);
+            }
+        }
+        if lines.len() > room {
+            f.push_dim(&format!("  and {} more not shown, the window is too short", lines.len() - room));
+        }
+        f.blank();
+        if let Some(p) = items.get(self.row) {
+            f.push_dim(&format!("  sent {}", p.at));
+        }
+        self.hints(f, "  a accept    r refuse    o open and look    esc to go back");
+    }
+
     fn draw_sending(&mut self, f: &mut Frame) {
         // A hotspot does not have an address the instant nmcli returns; the
         // interface has to come up and be given one. Asking again while the
@@ -501,6 +539,15 @@ impl App {
             f.push_dim("  screen brings them here by itself. Or open a browser at the");
             f.push_dim("  address above.");
         }
+        let waiting = serve::pending_count();
+        if waiting > 0 {
+            f.push(&format!(
+                "  {waiting} PIECE{} OF WORK WAITING FOR YOU. Press w to look.",
+                if waiting == 1 { "" } else { "S" }
+            ));
+            f.push_dim("  Nothing lands in your folder until you accept it.");
+            f.blank();
+        }
         if !dupes.is_empty() {
             f.push(&format!(
                 "  MORE THAN ONE DEVICE IS CALLING ITSELF: {}",
@@ -526,7 +573,7 @@ impl App {
                 f.push_dim(&format!("  {}: {}", term::truncate(who, 18), text));
             }
         }
-        self.hints(f, "  f files    n notice    q or esc to stop handing out");
+        self.hints(f, "  f files    n notice    w waiting work    q or esc to stop");
     }
 
     fn draw_receive(&self, f: &mut Frame) {
@@ -712,6 +759,7 @@ impl App {
             Screen::Home => self.home_key(k),
             Screen::Send => self.send_key(k),
             Screen::Tick { pre } => self.tick_key(k, pre),
+            Screen::Waiting => self.waiting_key(k),
             Screen::Sending => self.sending_key(k),
             Screen::Receive => self.receive_key(k),
             Screen::ReceiveFiles => self.files_key(k),
@@ -868,6 +916,11 @@ impl App {
                 self.editing = Some(crate::page::notice());
                 return false;
             }
+            Key::Char('w') => {
+                self.screen = Screen::Waiting;
+                self.row = 0;
+                return false;
+            }
             Key::Char('q') | Key::Esc => {
                 if let Some(h) = self.hotspot.take() {
                     h.down();
@@ -935,6 +988,60 @@ impl App {
                 // q on the mid-lesson tick screen must not quietly quit the
                 // whole program while a class is connected.
                 self.apply_ticks();
+                self.screen = Screen::Sending;
+                self.row = 0;
+            }
+            Key::Quit => return true,
+            _ => {}
+        }
+        false
+    }
+
+    fn waiting_key(&mut self, k: Key) -> bool {
+        let items = serve::pending();
+        self.move_row(k, items.len().max(1));
+        let root = PathBuf::from(shellexpand(&self.folder));
+        match k {
+            Key::Char('a') => {
+                if let Some(p) = items.get(self.row) {
+                    match serve::accept_pending(&root, &p.on_disk) {
+                        Ok(()) => {}
+                        Err(e) => {
+                            self.note(&format!("Could not accept that file.\n\n{e}"));
+                            self.back = Screen::Waiting;
+                        }
+                    }
+                    self.row = self.row.min(serve::pending_count().saturating_sub(1));
+                }
+            }
+            Key::Char('r') => {
+                if let Some(p) = items.get(self.row) {
+                    // Refused work is MOVED, never deleted: it may be
+                    // evidence, and what disappears is not this program's call.
+                    match serve::refuse_pending(&root, &p.on_disk) {
+                        Ok(()) => {}
+                        Err(e) => {
+                            self.note(&format!("Could not refuse that file.\n\n{e}"));
+                            self.back = Screen::Waiting;
+                        }
+                    }
+                    self.row = self.row.min(serve::pending_count().saturating_sub(1));
+                }
+            }
+            Key::Char('o') => {
+                if let Some(p) = items.get(self.row) {
+                    // Opened only when the teacher asks. Nothing a child sends
+                    // is ever displayed unbidden on a screen a class can see.
+                    let path = crate::page::waiting_dir(&root).join(&p.on_disk);
+                    let _ = std::process::Command::new("xdg-open")
+                        .arg(path)
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .spawn();
+                }
+            }
+            Key::Esc => {
                 self.screen = Screen::Sending;
                 self.row = 0;
             }
@@ -1229,12 +1336,24 @@ impl App {
 
 fn transfer_row(who: &str, t: &serve::Transfer) -> String {
     let pct = if t.total > 0 { t.done as f64 / t.total as f64 } else { 0.0 };
+    // How long she has to wait, so she knows whether she can shut the lid.
+    // Only shown while it is moving and only when the rate is real enough to
+    // divide by; a made-up estimate is worse than none.
+    let right = if t.finished {
+        "done".to_string()
+    } else if t.rate > 1000.0 && t.total > t.done {
+        format!("{:.1} MB/s {}", t.rate / 1e6, duration((t.total - t.done) as f64 / t.rate))
+    } else {
+        format!("{:.1} MB/s", t.rate / 1e6)
+    };
+    let way = if t.handing_in { "<- sending" } else { "-> getting" };
     format!(
-        "  {:<34}{} {:>3}%  {:>12}  {}",
-        term::truncate(who, 32),
-        bar(pct, 16),
+        "  {:<30}{} {:>3}% {}  {:>18}  {}",
+        term::truncate(who, 28),
+        bar(pct, 14),
         (pct * 100.0) as u64,
-        if t.finished { "done".to_string() } else { format!("{:.1} MB/s", t.rate / 1e6) },
+        way,
+        right,
         t.file
     )
 }

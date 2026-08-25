@@ -176,6 +176,70 @@ pub fn duplicate_claims() -> Vec<String> {
     dupes
 }
 
+/// One piece of work waiting for the teacher to accept or refuse.
+#[derive(Clone)]
+pub struct Pending {
+    /// Who sent it, in full: name, device tag, model, address.
+    pub from: String,
+    /// The name the child's device gave it.
+    pub original: String,
+    /// What it is called on disk inside waiting/.
+    pub on_disk: String,
+    pub bytes: u64,
+    pub at: String,
+}
+
+static PENDING: Mutex<Vec<Pending>> = Mutex::new(Vec::new());
+
+pub fn note_pending(ip: &str, original: &str, on_disk: &str, bytes: u64) {
+    let mut p = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+    // A retry that resolved to a name already queued must not queue twice.
+    if p.iter().any(|e| e.on_disk == on_disk) {
+        return;
+    }
+    p.push(Pending {
+        from: full_label(ip),
+        original: original.to_string(),
+        on_disk: on_disk.to_string(),
+        bytes,
+        at: crate::net::timestamp(),
+    });
+}
+
+pub fn pending() -> Vec<Pending> {
+    PENDING.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+pub fn pending_count() -> usize {
+    PENDING.lock().unwrap_or_else(|e| e.into_inner()).len()
+}
+
+fn drop_pending(on_disk: &str) {
+    let mut p = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+    p.retain(|e| e.on_disk != on_disk);
+}
+
+/// Accept: the file moves out of waiting and into the teacher's folder.
+pub fn accept_pending(root: &Path, on_disk: &str) -> std::io::Result<()> {
+    let from = crate::page::waiting_dir(root).join(on_disk);
+    let to = crate::page::handed_in_dir(root).join(on_disk);
+    fs::create_dir_all(crate::page::handed_in_dir(root))?;
+    fs::rename(&from, &to)?;
+    drop_pending(on_disk);
+    Ok(())
+}
+
+/// Refuse: moved to refused/, never deleted. It may be evidence, and deciding
+/// what disappears is not this program's call.
+pub fn refuse_pending(root: &Path, on_disk: &str) -> std::io::Result<()> {
+    let from = crate::page::waiting_dir(root).join(on_disk);
+    let refused = crate::page::refused_dir(root);
+    fs::create_dir_all(&refused)?;
+    fs::rename(&from, refused.join(on_disk))?;
+    drop_pending(on_disk);
+    Ok(())
+}
+
 /// The tag alone, for the roster.
 pub fn tag_for(ip: &str) -> Option<String> {
     crate::net::device_tag(ip)
@@ -363,6 +427,12 @@ fn note_dir(peer: &str, file: &str, delta: u64, total: u64, handing_in: bool, fo
         }
         e.handing_in = handing_in;
         e.finished = force_done || e.done >= total;
+        if e.finished {
+            // A finished row read "99%  done" because the byte count is of the
+            // multipart body, whose boundary lines are never written to disk.
+            // Finished is finished.
+            e.done = e.total.max(1);
+        }
         e.updated = Instant::now();
     } else {
         t.push(Transfer {
