@@ -308,14 +308,23 @@ impl App {
                     self.password.clone()
                 },
             ),
-            ("Devices at once".into(), self.helpers.to_string()),
+            // NOT "devices at once", which is what this said until 0.8.0 and
+            // was wrong in a way that mattered. These are worker threads, and
+            // ONE device holds several at a time: a browser opens about six,
+            // and this tool's own downloads use four. Thirty phones is nearer
+            // 180 connections than 30, so a teacher reading "64 devices" and
+            // counting heads was reassured by the wrong number.
+            ("Connections to serve at once".into(), self.helpers.to_string()),
         ]
     }
 
     fn draw_send(&self, f: &mut Frame) {
         self.title(f, "Hand out files");
         let fields = self.send_fields();
-        let label_width = 22;
+        // Wide enough for the longest label. It was 22, which "Connections to
+        // serve at once" overflows, and an overflowing label pushes its value
+        // out of the column so the form stops reading as a form.
+        let label_width = fields.iter().map(|(l, _)| l.chars().count()).max().unwrap_or(22) + 2;
         // The highlight width covers the form AND the button below it, so the
         // bar does not change size as the selection moves down onto Start.
         let mut plain: Vec<String> = fields
@@ -351,6 +360,14 @@ impl App {
             f.push(start);
         }
         f.blank();
+        if self.row == fields.len() - 1 {
+            // Only while the teacher is on that row, so the screen is not
+            // carrying an explanation nobody is reading.
+            f.push_dim("  One device holds several connections at a time: a phone's browser");
+            f.push_dim("  opens about six, and this tool's own downloads use four. Thirty");
+            f.push_dim("  phones is nearer 180 connections than 30.");
+            f.blank();
+        }
         if self.ssid.is_empty() {
             f.push_dim("  Leave the network name empty if the class is already");
             f.push_dim("  on the same wifi as this computer.");
@@ -908,7 +925,7 @@ impl App {
         self.title(f, &format!("Files on {who}"));
         let settings: [(&str, String); 2] = [
             ("Save into", self.save_into.clone()),
-            ("Pieces at once", self.at_once.to_string()),
+            ("Connections per file", self.at_once.to_string()),
         ];
         for (i, (label, value)) in settings.iter().enumerate() {
             let shown = if self.row == i && self.editing.is_some() {
@@ -955,7 +972,7 @@ impl App {
     fn files_width(&self) -> usize {
         let mut lines: Vec<String> = vec![
             format!("  {:<16}{}", "Save into", self.save_into),
-            format!("  {:<16}{}", "Pieces at once", self.at_once),
+            format!("  {:<22}{}", "Connections per file", self.at_once),
         ];
         lines.extend(self.files.iter().map(|e| format!("  {:<34}{:>10}", e.name, human(e.size))));
         term::group_width(&lines)

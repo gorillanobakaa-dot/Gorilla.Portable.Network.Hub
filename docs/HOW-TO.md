@@ -117,6 +117,16 @@ This is the main job. Five steps.
      empty if the class is already on the same wifi as you.
    - **Password for it** is filled in for you. Change it if you like. It must
      be at least eight characters, which is a rule of wifi itself.
+   - **Connections to serve at once** is how many requests the laptop will
+     answer simultaneously. Leave it alone unless you are testing. One device
+     holds several connections at a time: a phone's browser opens about six,
+     and this tool's own downloads use four, so thirty phones is nearer 180
+     connections than 30.
+
+   On the receiving machine there is a matching setting, **Connections per
+   file**, which defaults to four. More is not faster: the limit is airtime,
+   and the measured peak is the same at every value from one to 32. See
+   [bench/RESULTS.md](../bench/RESULTS.md).
 
 4. Tick the files the class may see.
 
