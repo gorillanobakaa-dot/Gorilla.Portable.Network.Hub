@@ -1,4 +1,15 @@
-gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
+gorilla-portable-network-hub (@VERSION@) unstable; urgency=high
+
+  * Fix: the wifi-restore safety fuse fired INTO the running lesson every
+    three to four minutes, because a systemd timer's deadline cannot be
+    pushed back by re-arming under the same name. The fuse is now one
+    transient service holding a sleep, and the heartbeat restarts it, which
+    truly moves the deadline. Proven with a short fuse before shipping:
+    beats push it back, abandonment fires it, stopping disarms it.
+
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+
+gorilla-portable-network-hub (0.2.0) unstable; urgency=medium
 
   * The class page: a phone that joins the wifi gets its own sign-in screen
     popped by the operating system, and the sign-in screen is the lesson.
@@ -17,7 +28,7 @@ gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
     uploads are synced before they get their final name, and the roster
     says so if the folder vanishes mid-lesson.
 
- -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  Mon, 25 Aug 2026 08:20:00 +0100
 
 gorilla-portable-network-hub (0.1.0) unstable; urgency=medium
 

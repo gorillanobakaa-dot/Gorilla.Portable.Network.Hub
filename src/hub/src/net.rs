@@ -554,17 +554,42 @@ pub fn start_heartbeat() {
 #[cfg(target_os = "linux")]
 pub fn rearm_restore(seconds: u64) {
     let Some(prev) = PREVIOUS_WIFI.get() else { return };
+    // NOT a timer. A transient timer's deadline cannot be moved: re-running
+    // systemd-run with the same unit name fails silently while one is
+    // pending, so the ORIGINAL deadline stood and the "safety" restore fired
+    // INTO the running lesson, every three to four minutes. Journal-confirmed
+    // 2026-08-25, 08:12:59 to 08:28:46, four firings, each one yanking the
+    // hotspot down mid-test while the phone was connected. And stop-then-arm
+    // with one name races: a stop arriving as the timer fires killed the
+    // payload mid-flight in testing.
+    //
+    // Instead: ONE transient service holding `sleep <fuse>` and then the
+    // nmcli restore. The heartbeat is `systemctl restart`, which atomically
+    // kills the sleep and starts a fresh one: the deadline truly moves. If
+    // this process dies, the beats stop, the sleep runs out, the wifi comes
+    // back. Stopping the service kills the sleep BEFORE the nmcli, which is
+    // exactly what disarming means. All three behaviours proven with a
+    // 6-second fuse on this machine before shipping.
+    let restarted = std::process::Command::new("systemctl")
+        .args(["--user", "restart", "hub-wifi-restore.service"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if restarted {
+        return;
+    }
     let _ = std::process::Command::new("systemd-run")
         .args([
             "--user",
             "--collect",
             "--unit=hub-wifi-restore",
-            &format!("--on-active={seconds}"),
-            "nmcli",
-            "connection",
-            "up",
+            "sh",
+            "-c",
+            &format!("sleep {seconds}; exec nmcli connection up \"$0\""),
             prev,
         ])
+        .stdin(std::process::Stdio::null())
         .output();
 }
 
@@ -727,7 +752,9 @@ impl Hotspot {
     /// already put the wifi back itself.
     #[cfg(target_os = "linux")]
     pub fn disarm_restore(&self) {
-        for unit in ["hub-wifi-restore.timer", "hub-wifi-restore.service"] {
+        // Stopping the service kills its sleep before the nmcli runs, which
+        // is what disarming means. The .timer name is the previous build's.
+        for unit in ["hub-wifi-restore.service", "hub-wifi-restore.timer"] {
             let _ = std::process::Command::new("systemctl")
                 .args(["--user", "stop", unit])
                 .output();
