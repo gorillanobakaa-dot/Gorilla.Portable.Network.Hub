@@ -117,6 +117,15 @@ not type. 0.7.1 fixes it by asking the other party that already knows: the
 browser, which announces roughly what it is on every request. The same line now
 reads `biggus.dickus #nzrm [a Windows laptop, 10.42.0.251]`.
 
+## The evening of 25 August 2026: 5.7 GB through a browser
+
+[![The roster at rest after the evening's transfer: one device on the network, none moving files, 5.7 GB sent, the client still listed by name as looking at the page](gallery/roster-after-5.7gb-none-moving.png)](gallery/roster-after-5.7gb-none-moving.png)
+
+The receipt for the largest single thing this tool has moved over real air: a
+5.7 GB database delivered to a laptop running nothing but a browser, across a
+transfer that survived its own network being moved to another wifi channel
+mid-flight. The screen at the end of it, looking bored, is the point.
+
 ## Still missing
 
 - **The paused page**, as it appears on the child's phone.

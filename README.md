@@ -114,13 +114,13 @@ Built packages for all three are on the
 **Debian, Ubuntu, Mint:**
 
 ```
-sudo dpkg -i gorilla-portable-network-hub_0.7.1_amd64.deb
+sudo dpkg -i gorilla-portable-network-hub_0.8.0_amd64.deb
 ```
 
 **Arch, CachyOS, Manjaro:**
 
 ```
-sudo pacman -U gorilla-portable-network-hub-0.7.1-1-x86_64.pkg.tar.zst
+sudo pacman -U gorilla-portable-network-hub-0.8.0-1-x86_64.pkg.tar.zst
 ```
 
 Or from source with `makepkg -si` in `packaging/`. The Arch package is
@@ -128,7 +128,7 @@ assembled to spec and structurally verified on a Debian machine; it has not yet
 been installed on an Arch one, and that is exactly the kind of thing worth
 telling us about.
 
-**Windows:** unzip `hub-0.7.1-windows-x86_64.zip` and read
+**Windows:** unzip `hub-0.8.0-windows-x86_64.zip` and read
 `READ-THIS-FIRST.txt`. Windows will not let a normal program create a wifi
 network, so you switch the hotspot on in Settings first. Everything else works
 the same.
@@ -138,7 +138,7 @@ the same.
 ```
 cd src/hub && cargo build --release && cd ../..
 ./packaging/build-deb.sh          # or ./packaging/build-arch.sh
-sudo dpkg -i packaging/build/gorilla-portable-network-hub_0.7.1_amd64.deb
+sudo dpkg -i packaging/build/gorilla-portable-network-hub_0.8.0_amd64.deb
 ```
 
 It installs `hub`, a menu entry called **Portable Network Hub**, a man page, and
