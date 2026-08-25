@@ -12,6 +12,29 @@ Why, with the numbers: [PHILOSOPHY.md](https://github.com/gorillanobakaa-dot/Gor
 
 <!-- /WHO-THIS-IS-FOR -->
 
+## It runs at 73% of what the radio can physically do
+
+This laptop's wifi is a 1x1 Atheros AR9485 from 2012. Its hardware ceiling,
+read from the driver, is **72.2 Mbit/s**. Nothing can go faster than that on
+this machine.
+
+| | measured | of the 72.2 Mbit/s ceiling |
+|---|---|---|
+| **this tool, four connections** | **6.57 MB/s** (52.56 Mbit/s) | **72.8%** |
+| this tool, best second | 7.04 MB/s (56.32 Mbit/s) | 78.0% |
+| speedtest.net over the ISP | 5.36 MB/s (42.86 Mbit/s) | 59.4% |
+
+Textbook TCP efficiency over 802.11n is around 60%, which is what the
+internet path gives. Over its own hotspot this tool holds **73%**, sustained,
+with a standard deviation of 0.45 MB/s across a full sweep.
+
+The ceiling is airtime, not software: **the peak is 7.0 MB/s in every row** of
+the connection sweep, from one connection to 32. Threading does not create more
+air. Four connections is the default because it has the best mean and the lowest
+variance, not because it is fastest.
+
+Full sweep, method and the caveats: [bench/RESULTS.md](bench/RESULTS.md).
+
 A laptop that **creates a network where none exists**, and hands a folder to
 every device in the room.
 
@@ -37,6 +60,7 @@ anybody who is not the person who wrote it.
 
 | | |
 |---|---|
+| [bench/RESULTS.md](bench/RESULTS.md) | **the numbers, on one page.** What it achieves, against what the hardware can physically do, and what is NOT proven |
 | [docs/HOW-TO.md](docs/HOW-TO.md) | **start here if you want to use it.** Step by step with pictures, written for somebody who has never opened a terminal |
 | [docs/WHY-THIS-EXISTS.md](docs/WHY-THIS-EXISTS.md) | the layman track. What the problem is and what was proved, in plain language |
 | [docs/DEVELOPER.md](docs/DEVELOPER.md) | the developer track. Architecture, wire format, every measurement with its method |
