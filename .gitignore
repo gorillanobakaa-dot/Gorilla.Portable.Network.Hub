@@ -22,3 +22,12 @@ data-rate-*/
 
 # Built packages: these belong on a release page, not in the history.
 packaging/build/
+
+# ...but the transfer measurements ARE kept. bench/transfer-watch.py records
+# aggregate counters only: bytes, packets, retries, signal averaged across
+# clients, temperature, watts. No MAC address, no hostname, no address, no
+# payload. That is the whole point of it, and the data is worthless for
+# improving anything if it lives only on one laptop.
+!bench/results/*.csv
+# The packet captures stay out. Those really do carry MACs and addresses.
+bench/results/capture-*/
