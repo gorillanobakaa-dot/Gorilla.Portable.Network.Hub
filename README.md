@@ -59,10 +59,12 @@ rooms are the phones nobody else wanted.
 [![The teacher's roster showing a live transfer at full speed, and beneath it the first note a real phone sent: Yo teacher. Leave the kids alone](docs/screenshots/gallery/roster-live-progress-and-first-note.png)](docs/screenshots/gallery/roster-live-progress-and-first-note.png)
 
 The first message a real human sent across this thing was *"Yo teacher. Leave
-the kids alone."* It arrived attributed: name, device, and a short tag derived
-from the hardware that no child can type their way out of. Thirty identical
-phones and a class-clown name policy are assumed from the start, because the
-tester assumed them first.
+the kids alone."* One word shy of the anthem, which of course leaves *them*
+kids alone. It arrived attributed: name, device, and a short tag derived from
+the hardware that no child can type their way out of. Thirty identical phones
+and a class-clown name policy are assumed from the start, because the tester
+assumed them first, forty-six years after somebody first put that sentiment to
+a bass line.
 
 ### The failure we kept
 
