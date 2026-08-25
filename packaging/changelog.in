@@ -15,6 +15,13 @@ gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
     downloaded.
   * The class page shows the first 300 files and says how many more there
     are, rather than sending a phone a page it cannot lay out.
+  * The wifi channel can be chosen when making the network, on the screen
+    and as --channel. The list of channels offered is read from the radio
+    and the country, not hardcoded: a laptop in another regulatory domain
+    offers its own lanes, including 5 GHz on hardware that has it. Found
+    the hard way: the automatic choice picked channel 1 and a download
+    that ran at 7 MB/s the day before ran at 4.7, with the radio holding
+    87% of the airtime to do it.
   * GET EVERYTHING: one purple button on the page hands the whole folder
     over as a single uncompressed zip, streamed as it is built, with an
     exact size so the browser shows a progress bar with an end. Windows

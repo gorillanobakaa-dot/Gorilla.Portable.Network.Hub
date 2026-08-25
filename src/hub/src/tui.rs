@@ -132,6 +132,10 @@ struct App {
     folder: String,
     ssid: String,
     password: String,
+    /// Which of the thirteen 2.4 GHz lanes to broadcast on. Empty means the
+    /// system chooses, which is usually fine and occasionally costs the whole
+    /// room 30%: see hotspot_up for the measured case.
+    channel: String,
     helpers: usize,
     hotspot: Option<net::Hotspot>,
     started: Option<Instant>,
@@ -192,6 +196,7 @@ impl App {
             editing: None,
             folder: here.to_string_lossy().into_owned(),
             ssid: String::new(),
+            channel: String::new(),
             // Offered, not imposed. A suggested password is the difference
             // between a teacher setting one and a teacher leaving the network
             // open because inventing a password is one more thing to do.
@@ -328,6 +333,16 @@ impl App {
             // and this tool's own downloads use four. Thirty phones is nearer
             // 180 connections than 30, so a teacher reading "64 devices" and
             // counting heads was reassured by the wrong number.
+            (
+                "Wifi channel".into(),
+                if self.ssid.is_empty() {
+                    "not ours to choose on somebody else's network".into()
+                } else if self.channel.is_empty() {
+                    "picked automatically".into()
+                } else {
+                    self.channel.clone()
+                },
+            ),
             ("Connections to serve at once".into(), self.helpers.to_string()),
         ]
     }
@@ -380,6 +395,21 @@ impl App {
             f.push_dim("  One device holds several connections at a time: a phone's browser");
             f.push_dim("  opens about six, and this tool's own downloads use four. Thirty");
             f.push_dim("  phones is nearer 180 connections than 30.");
+            f.blank();
+        }
+        if self.row == 3 && !self.ssid.is_empty() {
+            let allowed = net::allowed_channels();
+            f.push_dim("  Channels are lanes on the same road. If the room is slow, another");
+            if allowed.is_empty() {
+                f.push_dim("  lane often fixes it: try 11 or 13.");
+            } else {
+                f.push_dim(&format!(
+                    "  lane often fixes it. This radio, here, may use: {}.",
+                    net::channel_ranges(allowed)
+                ));
+            }
+            f.push_dim("  Some phones with American radios cannot see 12 or 13 at all; if a");
+            f.push_dim("  device cannot find the network, use 11 or lower.");
             f.blank();
         }
         if self.ssid.is_empty() {
@@ -1180,10 +1210,13 @@ impl App {
                 0 => self.folder = buf,
                 1 => self.ssid = buf.trim().to_string(),
                 2 => self.password = buf.trim().to_string(),
+                // Kept as text, validated at start: an empty field means "the
+                // system chooses" and has to stay expressible.
+                3 => self.channel = buf.trim().to_string(),
                 // Clamped, not rejected. Typing a letter into a number field
                 // should not throw the value away, and 100,000 helpers is a
                 // typo rather than a wish.
-                3 => self.helpers = buf.trim().parse().unwrap_or(self.helpers).clamp(1, 512),
+                4 => self.helpers = buf.trim().parse().unwrap_or(self.helpers).clamp(1, 512),
                 _ => {}
             },
             Screen::Receive => {
@@ -1689,7 +1722,25 @@ impl App {
         // The network before the port. Binding a port on a network the class
         // cannot reach looks like success and is not.
         if !self.ssid.is_empty() {
-            match net::hotspot_up(&self.ssid, &self.password) {
+            // Only "not a number" is refused here. Whether the number is a
+            // channel this radio may broadcast on is hotspot_up's judgement,
+            // made against the kernel's own list, and its refusal names the
+            // channels that ARE allowed.
+            let channel = match self.channel.trim() {
+                "" => None,
+                t => match t.parse::<u16>() {
+                    Ok(ch) => Some(ch),
+                    Err(_) => {
+                        self.note(
+                            "The wifi channel has to be a number, \
+                             or empty to let the computer choose.",
+                        );
+                        self.back = Screen::Send;
+                        return;
+                    }
+                },
+            };
+            match net::hotspot_up(&self.ssid, &self.password, channel) {
                 Ok(h) => {
                     // Armed BEFORE anything else can go wrong. systemd owns
                     // the timer, so the wifi comes back even if this program is

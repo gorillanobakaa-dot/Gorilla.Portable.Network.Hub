@@ -840,15 +840,124 @@ fn active_profile_on(iface: &str) -> Option<String> {
 /// can reach the serving port on the teacher's own laptop, and the teacher has
 /// no way to see who is on it. The password is written on the board; that is
 /// the whole ceremony.
+/// Which wifi channels THIS radio, in THIS country, may broadcast on.
+///
+/// Asked, never assumed. The first version of channel support hardcoded 1 to
+/// 13, which is Britain talking: the legal list differs by country, and the
+/// usable list differs by adapter. A 5 GHz-capable laptop can serve on
+/// channel 36 where this 2012 card cannot, and a machine in another
+/// regulatory domain has a different 2.4 GHz list too. The kernel already
+/// merges "what the hardware can do" with "what is legal here"; this reads
+/// that verdict.
+///
+/// An empty answer means the question could not be asked (no `iw`), and the
+/// caller falls back to accepting 1 to 13, the range that is legal in most of
+/// the world, letting the system refuse what it must.
+pub fn allowed_channels() -> &'static [u16] {
+    static CACHE: std::sync::OnceLock<Vec<u16>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| {
+        for iw in ["iw", "/usr/sbin/iw", "/sbin/iw"] {
+            if let Ok(out) = std::process::Command::new(iw)
+                .arg("phy")
+                .stdin(std::process::Stdio::null())
+                .output()
+            {
+                if out.status.success() {
+                    return parse_phy_channels(&String::from_utf8_lossy(&out.stdout));
+                }
+            }
+        }
+        Vec::new()
+    })
+}
+
+/// Pull the channel numbers out of `iw phy` output, skipping what is
+/// disabled and what is receive-only ("no IR": the law lets the radio listen
+/// there but not speak, and an access point is nothing but speaking).
+fn parse_phy_channels(text: &str) -> Vec<u16> {
+    let mut out: Vec<u16> = Vec::new();
+    for line in text.lines() {
+        let t = line.trim();
+        if !t.starts_with('*') || !t.contains(" MHz [") {
+            continue;
+        }
+        if t.contains("disabled") || t.contains("no IR") {
+            continue;
+        }
+        if let Some(open) = t.find('[') {
+            if let Some(close) = t[open..].find(']') {
+                if let Ok(ch) = t[open + 1..open + close].parse::<u16>() {
+                    if !out.contains(&ch) {
+                        out.push(ch);
+                    }
+                }
+            }
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
+/// "1-11, 36, 40-48": the allowed list, written the way a person reads it.
+pub fn channel_ranges(chs: &[u16]) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < chs.len() {
+        let start = chs[i];
+        let mut end = start;
+        while i + 1 < chs.len() && chs[i + 1] == end + 1 {
+            i += 1;
+            end = chs[i];
+        }
+        parts.push(if start == end {
+            start.to_string()
+        } else {
+            format!("{start}-{end}")
+        });
+        i += 1;
+    }
+    parts.join(", ")
+}
+
 #[cfg(target_os = "linux")]
-pub fn hotspot_up(ssid: &str, password: &str) -> Result<Hotspot, String> {
+pub fn hotspot_up(ssid: &str, password: &str, channel: Option<u16>) -> Result<Hotspot, String> {
     if password.chars().count() < 8 {
         return Err("A wifi password has to be at least 8 characters. That is a rule of WPA2, not ours.".into());
     }
+    // The channel choice matters more than it looks: on 2026-08-25 the system
+    // picked channel 1 and the same download that had run at 7 MB/s the day
+    // before ran at 4.7, with the radio holding 87% of the airtime to do it.
+    // Full airtime, clean retries, low yield is what a bad channel looks like;
+    // nothing in the room ever says "the channel is the problem".
+    //
+    // Validated against what THIS radio in THIS country may broadcast, read
+    // from the kernel, not against a hardcoded British 1-to-13.
+    if let Some(ch) = channel {
+        let allowed = allowed_channels();
+        let legal = if allowed.is_empty() { (1..=13).contains(&ch) } else { allowed.contains(&ch) };
+        if !legal {
+            return Err(if allowed.is_empty() {
+                "Wifi channels go from 1 to 13 here. Leave it empty to let the computer choose.".to_string()
+            } else {
+                format!(
+                    "This radio, in this country, may broadcast on channels {}.                      Leave the field empty to let the computer choose.",
+                    channel_ranges(allowed)
+                )
+            });
+        }
+    }
     let iface = wifi_interface().ok_or("No wifi adapter found. Is wifi switched on?")?;
     let previous = active_wifi_connection();
+    let mut args: Vec<String> = ["device", "wifi", "hotspot", "ifname", &iface, "ssid", ssid, "password", password]
+        .iter().map(|a| a.to_string()).collect();
+    if let Some(ch) = channel {
+        // band must accompany channel or nmcli refuses the pair. 14 and below
+        // is the 2.4 GHz band; everything above lives at 5 GHz.
+        let band = if ch <= 14 { "bg" } else { "a" };
+        args.extend(["band".into(), band.into(), "channel".into(), ch.to_string()]);
+    }
     let out = std::process::Command::new("nmcli")
-        .args(["device", "wifi", "hotspot", "ifname", &iface, "ssid", ssid, "password", password])
+        .args(&args)
         // No stdin. If this machine wants a polkit password there is nowhere to
         // type it while a full-screen program is drawing, and a hang with no
         // message is worse than a refusal with one.
@@ -875,7 +984,7 @@ pub fn hotspot_up(ssid: &str, password: &str) -> Result<Hotspot, String> {
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn hotspot_up(_ssid: &str, _password: &str) -> Result<Hotspot, String> {
+pub fn hotspot_up(_ssid: &str, _password: &str, _channel: Option<u16>) -> Result<Hotspot, String> {
     Err("On this system, switch the hotspot on yourself first: \
          Settings, Network and internet, Mobile hotspot. \
          Then come back here and the files will be handed out over it.".into())
@@ -1206,6 +1315,29 @@ mod tests {
         // An escape with nothing after it is not something nmcli emits, but
         // swallowing the character silently would be the worse answer.
         assert_eq!(unescape_terse(r"trailing\"), r"trailing\");
+    }
+
+    /// The channel list comes from the kernel's verdict, and the parser must
+    /// honour the two refusals: "disabled" (illegal here) and "no IR" (may
+    /// listen, may not speak; an AP only speaks).
+    #[test]
+    fn the_channel_parser_keeps_what_may_speak_and_drops_the_rest() {
+        let canned = "
+        Frequencies:
+            * 2412.0 MHz [1] (17.0 dBm)
+            * 2417.0 MHz [2] (17.0 dBm)
+            * 2467.0 MHz [12] (17.0 dBm) (no IR)
+            * 2472.0 MHz [13] (17.0 dBm) (no IR)
+            * 2484.0 MHz [14] (disabled)
+            * 5180.0 MHz [36] (20.0 dBm)
+            * 5200.0 MHz [40] (20.0 dBm)
+            * 5260.0 MHz [52] (20.0 dBm) (radar detection)
+        ";
+        let chs = parse_phy_channels(canned);
+        assert_eq!(chs, vec![1, 2, 36, 40, 52], "{chs:?}");
+        assert_eq!(channel_ranges(&chs), "1-2, 36, 40, 52");
+        assert_eq!(channel_ranges(&[1,2,3,4,5,6,7,8,9,10,11,12,13]), "1-13");
+        assert_eq!(channel_ranges(&[]), "");
     }
 
     #[test]

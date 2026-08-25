@@ -842,6 +842,7 @@ hub serve  -  hand out the files in a folder to every device in the room
   --name <network>      create a wifi network with this name and serve over it
   --notice <text>       a message shown at the top of every kid's page
   --password <word>     password for that network (at least 8 characters)
+  --channel <1-13>      which wifi channel to broadcast on (default: automatic)
   --helpers <number>    how many devices to serve at once (default: 8 per core)
   --port <number>       which port to listen on (default 8080)
   --address <ip:port>   listen on one address only
@@ -871,6 +872,7 @@ hub serve  -  hand out the files in a folder to every device in the room
     let mut addr: Option<String> = None;
     let mut port: u16 = 8080;
     let mut helpers = default_helpers();
+    let mut channel: Option<u16> = None;
     let mut ssid: Option<String> = None;
     let mut password: Option<String> = None;
 
@@ -888,6 +890,11 @@ hub serve  -  hand out the files in a folder to every device in the room
                 i += 2;
             }
             "--password" => { password = value(); i += 2; }
+            "--channel" => {
+                // Whether the number is a channel this radio may use is
+                // hotspot_up's judgement, against the kernel's list.
+                channel = value().and_then(|v| v.parse::<u16>().ok());
+            }
             "--helpers" | "--workers" => {
                 helpers = value().and_then(|v| v.parse().ok()).unwrap_or(helpers).clamp(1, 512);
                 i += 2;
@@ -918,7 +925,7 @@ hub serve  -  hand out the files in a folder to every device in the room
     // The network first, because there is no point binding a port if the
     // network the class is supposed to reach it on never comes up.
     let hotspot = match (&ssid, &password) {
-        (Some(name), Some(pass)) => match crate::net::hotspot_up(name, pass) {
+        (Some(name), Some(pass)) => match crate::net::hotspot_up(name, pass, channel) {
             Ok(h) => Some(h),
             Err(e) => { eprintln!("{e}"); std::process::exit(1); }
         },

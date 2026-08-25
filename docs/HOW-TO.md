@@ -117,6 +117,15 @@ This is the main job. Five steps.
      empty if the class is already on the same wifi as you.
    - **Password for it** is filled in for you. Change it if you like. It must
      be at least eight characters, which is a rule of wifi itself.
+   - **Wifi channel** is which of the wifi lanes the network broadcasts on.
+     Leave it on automatic unless the room is slow. Channels are lanes on the
+     same road: a crowded lane looks fine from the front of the room, it is
+     just slow. If a lesson that used to be quick has gone sluggish, try
+     another lane; the screen lists which ones your laptop, in your country,
+     is allowed to use. One radio can only use one lane at a time, so there is
+     no setting that uses them all. If a device cannot find the network at
+     all, use 11 or lower: some phones with American radios cannot see lanes
+     12 and 13.
    - **Connections to serve at once** is how many requests the laptop will
      answer simultaneously. Leave it alone unless you are testing. One device
      holds several connections at a time: a phone's browser opens about six,
