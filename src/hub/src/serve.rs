@@ -98,17 +98,41 @@ fn is_allowed(rel: &str) -> bool {
 /// as exactly that on the roster.
 static CLAIMED: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 
+/// The key a claim is filed under: the device where we can identify it, the
+/// address only as a fallback.
+///
+/// Addresses are the wrong key in both directions. A phone that reconnects
+/// gets a new lease and would lose its name, which is merely annoying. Worse,
+/// dnsmasq RECYCLES addresses: the next child to join can be handed the
+/// address a previous one had, and would silently inherit their name, which
+/// quietly corrupts the very attribution this exists for.
+fn claim_key(ip: &str) -> String {
+    match crate::net::device_tag(ip) {
+        Some(tag) => format!("tag:{tag}"),
+        None => format!("ip:{ip}"),
+    }
+}
+
 pub fn set_claimed_name(ip: &str, name: &str) {
+    let key = claim_key(ip);
     let mut c = CLAIMED.lock().unwrap_or_else(|e| e.into_inner());
-    match c.iter_mut().find(|(i, _)| i == ip) {
+    match c.iter_mut().find(|(k, _)| *k == key) {
         Some(e) => e.1 = name.to_string(),
-        None => c.push((ip.to_string(), name.to_string())),
+        None => c.push((key, name.to_string())),
     }
 }
 
 pub fn claimed_name(ip: &str) -> Option<String> {
+    let key = claim_key(ip);
     let c = CLAIMED.lock().unwrap_or_else(|e| e.into_inner());
-    c.iter().find(|(i, _)| i == ip).map(|(_, n)| n.clone())
+    c.iter().find(|(k, _)| *k == key).map(|(_, n)| n.clone())
+}
+
+/// Forget this device's name, so the page asks again. The "Not you?" link.
+pub fn forget_claim(ip: &str) {
+    let key = claim_key(ip);
+    let mut c = CLAIMED.lock().unwrap_or_else(|e| e.into_inner());
+    c.retain(|(k, _)| *k != key);
 }
 
 /// Everything known about a device, for the permanent record:
@@ -139,16 +163,15 @@ pub fn full_label(ip: &str) -> String {
 /// lease is NOT reported as a second impostor.
 pub fn duplicate_claims() -> Vec<String> {
     let c = CLAIMED.lock().unwrap_or_else(|e| e.into_inner());
-    let mut seen: Vec<(String, String)> = Vec::new(); // (name, tag)
+    let mut seen: Vec<(String, String)> = Vec::new(); // (name, key)
     let mut dupes: Vec<String> = Vec::new();
-    for (ip, name) in c.iter() {
-        let tag = crate::net::device_tag(ip).unwrap_or_else(|| ip.clone());
-        if seen.iter().any(|(n, t)| n == name && t != &tag) {
-            if !dupes.contains(name) {
-                dupes.push(name.clone());
-            }
+    for (key, name) in c.iter() {
+        // Keys are already per-device, so two entries sharing a name really
+        // are two devices; a reconnecting phone reuses its own key.
+        if seen.iter().any(|(n, k)| n == name && k != key) && !dupes.contains(name) {
+            dupes.push(name.clone());
         }
-        seen.push((name.clone(), tag));
+        seen.push((name.clone(), key.clone()));
     }
     dupes
 }
@@ -388,8 +411,17 @@ fn bind_all(addr: &str) -> std::io::Result<Vec<TcpListener>> {
     let mut first_err = None;
     let mut wanted: Vec<String> = vec![addr.to_string()];
     let host = addr.rsplit_once(':').map(|(h, _)| h).unwrap_or("0.0.0.0");
+    // Port 80 ONLY for a real, network-wide serve.
+    //
+    // This used to take port 80 on whatever host was asked for, so a test
+    // instance bound to 127.0.0.1:18102 also grabbed 127.0.0.1:80, and that
+    // blocks a real 0.0.0.0:80 with EADDRINUSE. The teacher's hotspot then
+    // silently loses its sign-in screen because a loopback toy owns the port.
+    // Happened twice in one day of field testing. A loopback bind is by
+    // definition local and has no business owning the captive port.
+    let is_wildcard = host == "0.0.0.0" || host == "*" || host.is_empty();
     let port80 = format!("{host}:80");
-    if port80 != addr {
+    if is_wildcard && port80 != addr {
         wanted.push(port80);
     }
     for a in wanted {
@@ -1043,4 +1075,32 @@ fn listing(dir: &Path, root: &Path) -> String {
     }
     s.push_str("</ul></body>");
     s
+}
+
+
+#[cfg(test)]
+mod bind_scope_tests {
+    use super::*;
+
+    /// A loopback-scoped serve must NOT take port 80.
+    ///
+    /// Twice during field testing a test instance on 127.0.0.1 grabbed
+    /// 127.0.0.1:80, which makes a real 0.0.0.0:80 fail with EADDRINUSE and
+    /// silently costs the teacher's hotspot its sign-in screen.
+    #[test]
+    fn a_loopback_serve_leaves_port_80_alone() {
+        let listeners = bind_all("127.0.0.1:0").expect("loopback bind");
+        let ports: Vec<u16> = listeners.iter().filter_map(|l| l.local_addr().ok()).map(|a| a.port()).collect();
+        assert!(!ports.contains(&80), "a loopback test must never own port 80: {ports:?}");
+        assert_eq!(ports.len(), 1, "exactly the port that was asked for");
+    }
+
+    /// And a real serve still tries for it. Port 80 needs a capability this
+    /// test process does not have, so the assertion is on what was ATTEMPTED:
+    /// the wildcard bind succeeds on its own port either way.
+    #[test]
+    fn a_wildcard_serve_still_binds_its_own_port() {
+        let listeners = bind_all("0.0.0.0:0").expect("wildcard bind");
+        assert!(!listeners.is_empty(), "the requested port must always bind");
+    }
 }

@@ -1,4 +1,18 @@
-gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
+gorilla-portable-network-hub (@VERSION@) unstable; urgency=high
+
+  * A serve bound to one address no longer also grabs port 80. It used to
+    take port 80 on whatever host was asked for, so anything bound to
+    127.0.0.1 blocked a real 0.0.0.0:80 with EADDRINUSE and silently cost
+    the hotspot its sign-in screen. Only a wildcard serve claims it now.
+  * A device's chosen name is filed under the device, not its address.
+    Addresses are recycled: the next child to join could be handed the
+    address a previous one had and silently inherit their name, which
+    corrupts the attribution the name exists for. A reconnecting phone
+    also keeps its name instead of being asked again.
+
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+
+gorilla-portable-network-hub (0.5.0) unstable; urgency=medium
 
   * Notes now carry a timestamp and a stable device tag:
     "26-08-25 10:35  Amina #wa3x [Xiaomi-11-Lite-5G-NE, 10.42.0.90]: ...".
@@ -11,7 +25,7 @@ gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
     shows the tag beside those entries only. The teacher is told, rather
     than left to work it out.
 
- -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  Mon, 25 Aug 2026 10:38:00 +0100
 
 gorilla-portable-network-hub (0.4.2) unstable; urgency=high
 
