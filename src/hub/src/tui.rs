@@ -413,6 +413,18 @@ impl App {
             // the first.
             f.push_dim("  or type           classroom/   (the slash matters)");
         }
+        if self.hotspot.is_some() && !port80 {
+            // The sign-in pop points at port 80. If something else owns it,
+            // every joining phone gets THAT program's page and this lesson is
+            // invisible, which is exactly what happened on 2026-08-25: a
+            // leftover test copy served its junk to a real phone while the
+            // real lesson sat unreachable on 8080. Silent was the failure;
+            // loud is the fix.
+            f.blank();
+            f.push("  ANOTHER PROGRAM owns the sign-in page on this computer.");
+            f.push("  Phones that join will see that program, not this lesson.");
+            f.push(&format!("  Close it, or tell the class to type the address WITH :{}", port()));
+        }
         // Two loud states a USB drive causes. The folder is often a flash
         // drive kept as the teacher's failsafe, and it gets unplugged, filled
         // and write-locked as a matter of course.

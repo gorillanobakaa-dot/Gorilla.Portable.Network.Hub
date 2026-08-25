@@ -514,7 +514,15 @@ hub serve  -  hand out the files in a folder to every device in the room
         println!("network \"{}\" is up on {}", h.ssid, h.iface);
     }
     for ip in crate::net::local_addresses() {
-        println!("  tell the class to open   http://{ip}:{port}");
+        if on_port_80() {
+            println!("  tell the class to open   http://{ip}");
+        } else {
+            println!("  tell the class to open   http://{ip}:{port}");
+        }
+    }
+    if !on_port_80() {
+        println!("note: port 80 belongs to something else, so joining phones");
+        println!("      will NOT be brought here by the sign-in screen.");
     }
     println!("serving {} with {helpers} helpers ({} threads detected)",
              root.display(), std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0));
