@@ -108,10 +108,14 @@ enum Screen {
 struct Batch {
     done: usize,
     total: usize,
-    current: String,
+    /// What is being fetched right now. More than one, when several files are
+    /// in the air at the same time.
+    in_flight: Vec<String>,
     bytes: u64,
     failed: Vec<String>,
     finished: bool,
+    /// How many files at a time this run is using, for the screen to state.
+    lanes: usize,
 }
 
 /// What a probe thread has found so far. `None` means still looking, which is
@@ -162,6 +166,15 @@ struct App {
     files: Vec<net::Entry>,
     save_into: String,
     at_once: usize,
+    /// How many FILES are fetched at the same time.
+    ///
+    /// Separate from at_once, which is connections WITHIN one file, because
+    /// the two solve different problems. Connections within a file share out
+    /// airtime on a big file. Files in parallel hide round-trip latency, which
+    /// is what actually dominates when the average file is five kilobytes:
+    /// while one file's request is in flight the radio would otherwise sit
+    /// idle, and 68,130 files at 4 ms each is minutes of nothing happening.
+    files_at_once: usize,
     downloading: Option<String>,
     /// Progress across a whole folder, when the teacher asked for everything.
     batch: Arc<Mutex<Option<Batch>>>,
@@ -201,6 +214,7 @@ impl App {
             files: Vec::new(),
             save_into: here.to_string_lossy().into_owned(),
             at_once: 4,
+            files_at_once: 4,
             downloading: None,
             batch: Arc::new(Mutex::new(None)),
             result: Arc::new(Mutex::new(None)),
@@ -923,9 +937,10 @@ impl App {
             _ => String::new(),
         };
         self.title(f, &format!("Files on {who}"));
-        let settings: [(&str, String); 2] = [
+        let settings: [(&str, String); 3] = [
             ("Save into", self.save_into.clone()),
             ("Connections per file", self.at_once.to_string()),
+            ("Files at the same time", self.files_at_once.to_string()),
         ];
         for (i, (label, value)) in settings.iter().enumerate() {
             let shown = if self.row == i && self.editing.is_some() {
@@ -973,6 +988,7 @@ impl App {
         let mut lines: Vec<String> = vec![
             format!("  {:<16}{}", "Save into", self.save_into),
             format!("  {:<22}{}", "Connections per file", self.at_once),
+            format!("  {:<22}{}", "Files at the same time", self.files_at_once),
         ];
         lines.extend(self.files.iter().map(|e| format!("  {:<34}{:>10}", e.name, human(e.size))));
         term::group_width(&lines)
@@ -988,15 +1004,21 @@ impl App {
             f.push(&format!("  file {} of {}", b.done.min(b.total), b.total));
             f.push(&format!("  {} {:>3}%", bar(pct, 34), (pct * 100.0) as u64));
             f.blank();
-            f.push(&format!("  {}", term::truncate(&b.current, f.cols.saturating_sub(4))));
+            for name in b.in_flight.iter().take(6) {
+                f.push(&format!("  {}", term::truncate(name, f.cols.saturating_sub(4))));
+            }
             let secs = self.since.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0).max(0.001);
-            let (done_now, total_now) = crate::fetch::progress();
-            let moved = b.bytes + done_now;
+            // Only bytes from FINISHED files. fetch's progress counters are
+            // global to the process, so with several files in the air at once
+            // they describe whichever one wrote to them last, which is not a
+            // number worth showing anybody. Undercounting by whatever is
+            // currently in flight is the honest error to make.
+            let moved = b.bytes;
             f.push(&format!("  {} of this folder, {:.1} MB/s overall",
                             human(moved), moved as f64 / secs / 1e6));
-            if total_now > 0 {
-                f.push_dim(&format!("  this file: {} of {}", human(done_now), human(total_now)));
-            }
+            f.push_dim(&format!("  {} file{} at a time, {} connection{} inside each",
+                                b.lanes, if b.lanes == 1 { "" } else { "s" },
+                                self.at_once, if self.at_once == 1 { "" } else { "s" }));
             f.blank();
             if !b.failed.is_empty() {
                 f.push(&format!("  {} file{} did not arrive:", b.failed.len(),
@@ -1171,6 +1193,7 @@ impl App {
             Screen::ReceiveFiles => match self.row {
                 0 => self.save_into = buf,
                 1 => self.at_once = buf.trim().parse().unwrap_or(self.at_once).clamp(1, 32),
+                2 => self.files_at_once = buf.trim().parse().unwrap_or(self.files_at_once).clamp(1, 16),
                 _ => {}
             },
             _ => {}
@@ -1544,15 +1567,16 @@ impl App {
     }
 
     fn files_key(&mut self, k: Key) -> bool {
-        self.move_row(k, self.files.len() + 2);
+        self.move_row(k, self.files.len() + 3);
         match k {
             Key::Enter => {
-                if self.row < 2 {
+                if self.row < 3 {
                     self.editing = Some(match self.row {
                         0 => self.save_into.clone(),
-                        _ => self.at_once.to_string(),
+                        1 => self.at_once.to_string(),
+                        _ => self.files_at_once.to_string(),
                     });
-                } else if let Some(e) = self.files.get(self.row - 2).cloned() {
+                } else if let Some(e) = self.files.get(self.row - 3).cloned() {
                     self.begin_download(&e);
                 }
             }
@@ -1787,6 +1811,7 @@ impl App {
             return;
         }
         let count = files.len();
+        let lanes = self.files_at_once.max(1).min(count);
         let root = PathBuf::from(shellexpand(&self.save_into));
         let port = self.server_port;
         let at_once = self.at_once;
@@ -1795,54 +1820,77 @@ impl App {
         *result.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *batch.lock().unwrap_or_else(|e| e.into_inner()) = Some(Batch {
             done: 0,
-            total: files.len(),
-            current: files[0].name.clone(),
+            total: count,
+            in_flight: Vec::new(),
             bytes: 0,
             failed: Vec::new(),
             finished: false,
+            lanes,
         });
         crate::fetch::set_quiet(true);
-        std::thread::spawn(move || {
-            let mut bytes = 0u64;
-            let mut failed: Vec<String> = Vec::new();
-            for (i, e) in files.iter().enumerate() {
+
+        // A queue the lanes share, rather than a slice each. Files vary from
+        // five kilobytes to five gigabytes, so handing each lane a fixed share
+        // would leave one lane carrying the database while the rest finished
+        // and sat idle.
+        let queue = Arc::new(Mutex::new(files));
+        let mut handles = Vec::new();
+        for _ in 0..lanes {
+            let queue = Arc::clone(&queue);
+            let batch = Arc::clone(&batch);
+            let root = root.clone();
+            handles.push(std::thread::spawn(move || loop {
+                let next = {
+                    let mut q = queue.lock().unwrap_or_else(|e| e.into_inner());
+                    if q.is_empty() { None } else { Some(q.remove(0)) }
+                };
+                let Some(e) = next else { return };
                 {
                     let mut b = batch.lock().unwrap_or_else(|x| x.into_inner());
-                    if let Some(st) = b.as_mut() {
-                        st.done = i;
-                        st.current = e.name.clone();
-                        st.bytes = bytes;
-                        st.failed = failed.clone();
-                    } else {
-                        return; // the teacher pressed escape
+                    match b.as_mut() {
+                        Some(st) => st.in_flight.push(e.name.clone()),
+                        None => return, // the teacher pressed escape
                     }
                 }
                 let dest = root.join(&e.name);
-                // The folders on the far side have to exist before the file
-                // lands in them. A nested name is the normal case now.
+                let mut failure = None;
                 if let Some(parent) = dest.parent() {
                     if let Err(err) = std::fs::create_dir_all(parent) {
-                        failed.push(format!("{}: {err}", e.name));
-                        continue;
+                        failure = Some(format!("{}: {err}", e.name));
                     }
                 }
-                let url = format!("http://{ip}:{port}/{}", crate::fetch::url_path(&e.name));
-                // The size came with the listing. Asking the server for it
-                // again is a round trip per file, and there are tens of
-                // thousands of files.
-                match crate::fetch::download_known(&url, &dest.to_string_lossy(), at_once, true, e.size) {
-                    Ok(_) => bytes += e.size,
-                    Err(err) => failed.push(format!("{}: {err}", e.name)),
+                if failure.is_none() {
+                    let url = format!("http://{ip}:{port}/{}", crate::fetch::url_path(&e.name));
+                    if let Err(err) = crate::fetch::download_known(
+                        &url, &dest.to_string_lossy(), at_once, true, e.size)
+                    {
+                        failure = Some(format!("{}: {err}", e.name));
+                    }
                 }
+                let mut b = batch.lock().unwrap_or_else(|x| x.into_inner());
+                let Some(st) = b.as_mut() else { return };
+                st.in_flight.retain(|n| n != &e.name);
+                st.done += 1;
+                match failure {
+                    Some(f) => st.failed.push(f),
+                    None => st.bytes += e.size,
+                }
+            }));
+        }
+        // One thread waits for the lanes, so the screen learns it has finished
+        // without polling every handle from the draw loop.
+        let batch_done = Arc::clone(&batch);
+        std::thread::spawn(move || {
+            for h in handles {
+                let _ = h.join();
             }
-            let mut b = batch.lock().unwrap_or_else(|x| x.into_inner());
+            let mut b = batch_done.lock().unwrap_or_else(|x| x.into_inner());
             if let Some(st) = b.as_mut() {
-                st.done = st.total;
-                st.bytes = bytes;
-                st.failed = failed;
                 st.finished = true;
+                st.in_flight.clear();
             }
         });
+
         self.downloading = Some(format!("{count} files"));
         self.since = Some(Instant::now());
         self.screen = Screen::Receiving;

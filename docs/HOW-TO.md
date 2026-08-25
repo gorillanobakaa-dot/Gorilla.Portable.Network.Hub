@@ -210,11 +210,17 @@ On the receiving machine, choose *Get files from another computer*, then:
 - **Fail:** files that did not arrive are listed by name at the bottom. Run it
   again and it picks up only those.
 
-Each file downloads with four connections, and files are fetched one after
-another rather than all at once. That is deliberate: the limit is airtime, not
-threads, so fetching six at once would not be faster. It would only leave six
-files half-finished when the signal drops instead of five finished and one to
-resume.
+Two settings control how it fetches, and they solve different problems.
+
+- **Connections per file** (default four) splits one big file into pieces
+  fetched side by side. This is what keeps a large file moving.
+- **Files at the same time** (default four) keeps several files in the air at
+  once. This is what matters when the folder is thousands of small files: each
+  file costs a request-and-wait, and while one file's request is in the air the
+  radio would otherwise sit idle.
+
+The defaults are sensible for a mixed folder. Turning either up does not make
+the radio faster; the ceiling is airtime, and it is the same at every setting.
 
 ## Collect work from the class
 
