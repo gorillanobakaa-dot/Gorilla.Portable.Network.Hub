@@ -1,4 +1,4 @@
-<!-- Version: 1.3.0 · updated 26-08-25-08-14 -->
+<!-- Version: 1.4.0 · updated 26-08-25-12-01 -->
 # Gorilla Portable Network Hub
 
 <!-- WHO-THIS-IS-FOR: managed block, do not edit by hand -->
@@ -18,6 +18,11 @@ every device in the room.
 Built for classrooms with no internet, no router, and often no mains power. The
 teacher's own laptop becomes the access point; the children's machines need no
 privileges, no account, no setup and no internet, ever.
+
+**Field tested 25 August 2026** against a real phone on a real hotspot: nine
+releases in one morning, every one of them from somebody tapping a button and
+saying it did nothing. The whole record, including what broke, is in the two
+documents below.
 
 **Status: not finished.** What works and is measured: the laptop becomes a
 properly configured access point, files move across it with resume and
@@ -110,15 +115,27 @@ wifi is told by its own operating system that something is waiting: the same
 "Sign in to this network" screen every hotel wifi uses, and the sign-in screen
 IS the class page. Big buttons: READ or PLAY opens a file right there (video
 streams instead of filling an 8 GB phone), GET IT keeps a copy in Downloads.
-The page also has *Hand in your work* (homework goes back to the teacher, with
-retries landing exactly once and a changed resubmission kept as a second
-version) and *Send a note to your teacher*. No addresses typed, no apps, no
-JavaScript needed, works in browsers back to 2009.
+The page also has *Hand in your work*, which takes **several files at once**
+and understands the formats a real curriculum produces (Word, Excel,
+PowerPoint, OpenDocument, PDF, Markdown, CSV, zip), and *Send a note to your
+teacher*. No addresses typed, no apps, no JavaScript needed, works in browsers
+back to 2009.
+
+**Every device says who it is.** Each one is asked its name once, and every
+note and every piece of work is filed with that name, the device, and a short
+tag derived from the hardware that a child cannot type their way out of. When
+two devices claim one name the teacher is told, rather than left to work it
+out.
+
+**Nothing lands on the teacher's computer unasked.** Work arrives in a holding
+area and waits. She sees who sent it, what it is and how big, and accepts or
+refuses without opening anything. A refusal is kept, never deleted. Nothing
+sent in is ever handed back out to the class, not even while it waits.
 
 **The teacher stays in charge.** A notice at the top of every kid's page (the
 blackboard, duplicated), a tick list that publishes or withdraws a file live
 during the lesson, and a roster naming every device: who is getting, who is
-handing in, who has not opened the page yet.
+handing in, how long is left, and who has not opened the page yet.
 
 **Going and getting, tool to tool.** Open `hub`, choose *Get files from another
 computer*. It looks for the teacher by itself and downloads with resume and

@@ -1,4 +1,4 @@
-<!-- Version: 1.3.0 · updated 26-08-25-08-14 -->
+<!-- Version: 1.4.0 · updated 26-08-25-12-01 -->
 # Gorilla Portable Network Hub: the developer track
 
 Companion to `WHY-THIS-EXISTS.md`, which is the layman track and is not a
@@ -631,3 +631,216 @@ second copy on a machine where a real one is already serving, and the first
 version of the live test silently probed the WRONG server (the owner's live
 instance) and drew conclusions from it. Prove which process answered before
 believing any localhost test.
+
+## 9. Identity, approval and the field-test findings
+
+Everything in this section was built on 25 August 2026 against a real phone
+(Xiaomi 11 Lite 5G NE, MIUI, Microsoft Edge) on a real NetworkManager hotspot.
+Nine releases, 0.2.1 to 0.6.0. Every item is a thing a person hit, not a thing a
+review found.
+
+### 9.1 Identity: three columns, only one of which is trustworthy
+
+A note or a piece of work is recorded as:
+
+```
+26-08-25 10:35  Amina #wa3x [Xiaomi-11-Lite-5G-NE, 10.42.0.90]: text
+```
+
+| part | source | trust |
+|---|---|---|
+| `Amina` | typed by the child on the class page | none, it is a claim |
+| `#wa3x` | `sha256(MAC)[0..4]` mapped to an unambiguous alphabet | high, nobody chose it |
+| `Xiaomi-...` | DHCP hostname the device reported | medium, not unique in a room |
+| `10.42.0.90` | current lease | **none, see below** |
+
+**The address is not an identity, in both directions.** [measured 2026-08-25] Two
+notes arrived as `Cuntius.Maximus [Xiaomi-11-Lite-5G-NE, 10.42.0.200]` and
+`... 10.42.0.170]`. Same device, reconnected, new lease. Worse in the other
+direction: dnsmasq recycles addresses, so a later child can be handed an earlier
+child's address. Claims were originally filed under the address, which meant the
+later child would silently **inherit the earlier child's name**, inverting the
+feature. Claims are now filed under `claim_key(ip)`, which is the device tag
+where one exists and the address only as a fallback.
+
+**Why the MAC is hashed rather than shown.** It is a permanent hardware
+identifier for somebody else's device; it belongs in neither a screenshot nor a
+git repo. Four characters derived from it are meaningless outside the room and
+sufficient to say "two different phones". Alphabet is the same no-`0O1lI` set
+the passwords use, so it can be read off a screen across a classroom. Source is
+`/proc/net/arp`, world-readable, no privileges (unlike the DHCP leases, which
+need root).
+
+**Duplicate detection** compares claims keyed by tag, not address, so a
+reconnecting phone is never reported as an impostor. The roster names any
+contested name and shows tags only beside those entries.
+
+**The timestamp** needed a calendar: `std` has no timezone database and
+`SystemTime` is UTC. The offset is read once at startup from the system's own
+`date +%z` and cached; date arithmetic is Hinnant's `civil_from_days`. The first
+version of its test asserted values worked out by hand and they were wrong while
+the code was right; values now come from an independent calendar and include
+2100, which is **not** a leap year and is where hand-rolled date code breaks.
+
+### 9.2 Approval: work is a request, not a delivery
+
+```
+upload  ->  handed-in/waiting/<Name>--<file>     never served, awaiting decision
+accept  ->  handed-in/<Name>--<file>             the teacher's folder
+refuse  ->  handed-in/refused/<Name>--<file>     kept, never deleted
+```
+
+Roster carries a **persistent** banner (`N PIECES OF WORK WAITING`) and `w`
+opens the queue; `a` accepts, `r` refuses, `o` opens with `xdg-open`. Design
+constraints, all deliberate:
+
+- **Never displayed unbidden.** `o` is the only path to content, and it is a
+  keypress the teacher makes. A classroom screen is a public screen.
+- **Refusable on metadata alone**: sender, tag, filename, size, time. A `.jpg`
+  when the assignment was `.docx` needs no inspection.
+- **A refusal is moved, never deleted.** It may be evidence, and what disappears
+  is not this program's decision (estate rule: quarantine, never delete).
+- **Nothing sent in is ever served out.** `waiting/` sits inside `handed-in/`,
+  which `serve_one` already refuses by first path segment, so one child's work
+  is not downloadable by another even while pending. Tested by fetching it: 404.
+
+The previous behaviour wrote straight into the teacher's folder and showed a
+transfer row that `transfers()` retired after 20 seconds. A teacher looking at
+her class never saw it. [reported 2026-08-25 with two screenshots two minutes
+apart showing exactly that]
+
+### 9.3 The multipart parser, and the bug that ate a third of an upload
+
+One assignment is several files, so `take_upload` walks every part rather than
+stopping at the first with a `filename=`. Writing that surfaced a genuine defect:
+
+**Finding a boundary always over-reads.** The bytes after the boundary in the
+same buffer belong to the *next* part. The first multi-file version discarded
+them, which ate the following part's headers, so **a three-file upload delivered
+two**. `BodyReader` now carries a `pushback: Vec<u8>`; `left` is not charged
+twice because those bytes were already counted when they came off the socket.
+
+Streaming discipline is unchanged and load-bearing: a rolling tail of
+`marker.len()` bytes is always held back so a boundary straddling a read edge is
+the normal case. The test feeds the entire body **three bytes at a time** to
+guarantee that.
+
+Landing rules per file: same device + same name + same SHA-256 = a retry,
+dropped silently (phones re-POST on flaky links without the child doing
+anything); different bytes = `--v2`, kept beside the first.
+
+### 9.4 Worker starvation: the second countdown
+
+[measured 2026-08-25] The class page carried `<meta http-equiv=refresh
+content=6>`; `serve_one` looped back into a keep-alive read with a 30 s
+`IO_TIMEOUT`. Every connection a browser did not reuse parked a worker for 30 s,
+so each device held ≈ 30/6 = **5 workers**. Pool is `8 × threads` (64 here);
+thirty devices need ~150. The server then answers nobody while looking healthy,
+and the only symptom is `ERR_CONNECTION_TIMED_OUT` on a phone.
+
+Fix: split the timeouts. `IDLE_TIMEOUT` (5 s, deliberately shorter than the
+refresh) applies to a kept-alive connection waiting for a request that may never
+come; the moment the first header byte arrives, `set_read_timeout` goes back to
+`IO_TIMEOUT` so no real transfer is cut short. Refresh relaxed to 10 s.
+
+**A/B, 16 workers, 90 parked idle connections:**
+
+| | latecomer |
+|---|---|
+| before | `TimeoutError` after **8.01 s** |
+| after | served in **0.00 s** |
+
+In both runs only 16 of 90 parking attempts succeeded, which is itself the
+exhaustion signature.
+
+This is the **second** instance of the class in this codebase. The first was a
+bounded pool with no timeouts at all (a sleeping Windows client held a worker
+forever). Adding the timeout fixed that and created this one. The generalisation
+now on file: **when a server sets its own clients' refresh rate, the idle
+timeout must be shorter than that interval, or the server denies service to
+itself.**
+
+### 9.5 The captive sign-in window is not a browser
+
+Android's captive `WebView` has no file chooser wired up in most builds.
+Downloads, rendering and form POSTs work; `<input type=file>` does nothing at
+all, so the page looks broken. Confirmed by the giveaway that the same phone in
+the same Edge had handed in successfully an hour earlier, having reached the
+page by typing the address instead of through the sign-in pop.
+
+The escape hatch is **three layered links, never an address to type**:
+
+1. `intent://HOST/#Intent;scheme=http;action=android.intent.action.VIEW;end`,
+   Android's documented hand-off to the real browser.
+2. `<a href="http://HOST/">`, understood everywhere; on a laptop or iPhone it is
+   simply correct.
+3. Prose pointing at the sheet's own three-dots menu, which always exists.
+
+**Why not print the address.** [measured 2026-08-25] The user typed `10.42.0.1`
+exactly; Edge autocompleted from history to `10.42.0.1:8080` and returned
+`ERR_CONNECTION_TIMED_OUT`. Text a person types into a phone is a suggestion the
+browser may overrule; an `href` cannot be, because nobody types it. Host comes
+from the socket the request arrived on, never a constant.
+
+### 9.6 Other findings from the same session
+
+**The restore fuse fired into the live lesson.** A transient systemd *timer*'s
+deadline cannot be moved: re-running `systemd-run` with the same unit name fails
+silently while one is pending, so the heartbeat extended nothing and the 180 s
+fuse fired repeatedly mid-lesson (journal: 08:12:59, 08:16:59, 08:21:21,
+08:28:46). Stop-then-arm races, measured: a stop arriving as the timer fires
+kills the payload mid-flight. Correct primitive is one transient **service**
+holding `sh -c 'sleep N; exec <restore>'`, heartbeat = `systemctl restart`, which
+atomically kills the sleep and starts a fresh one. Verify any deadman with a
+short fuse and three assertions: beats postpone, abandonment fires, stop never
+fires.
+
+**Back-swipe killed every button.** Forms carry one-time tokens for idempotency;
+a cached page carries a spent one, so submissions were silently treated as
+retries. `/` and `/files` are now served `Cache-Control: no-store,
+must-revalidate` + `Pragma: no-cache`.
+
+**A bare file in the sheet was a room with no door.** READ now routes through
+`/view/<name>`: a wrapper page whose first element is a sticky BACK bar, with
+the file below as `img`/`video`/`audio`/`iframe` by type. Refuses `handed-in/`
+and unticked files.
+
+**A local serve stole port 80.** `bind_all` added `:80` on whatever host it was
+given, so a test bound to `127.0.0.1:18102` also took `127.0.0.1:80`, which
+makes a real `0.0.0.0:80` fail `EADDRINUSE` and silently costs the hotspot its
+sign-in screen. Happened twice in one day. Only a wildcard bind claims port 80
+now, and the roster says out loud when something else owns it.
+
+**Tab completion** in the two folder fields, directories only: unique prefix
+completes with its slash, ambiguous stops at the shared part and lists
+candidates dimly beneath the field.
+
+**MIME.** `content_type` covers doc/docx/xls/xlsx/ppt/pptx/odt/ods/odp/rtf/epub/
+zip/7z/csv/md/xml/json/svg. GET IT previously sent `application/octet-stream` to
+force the save and Android believed it, so a finished download said "We can't
+open this file". The type is now truthful and `Content-Disposition: attachment`
+does the forcing. `openable()` offers READ only for what a browser can genuinely
+display: a `.docx` behind a READ button is a download prompt in disguise.
+
+### 9.7 Test inventory
+
+36 tests. The ones worth knowing about:
+
+- multipart fed **3 bytes at a time**, single file and three files
+- upload retry lands once; changed resubmission becomes `--v2`
+- hostile filename (`../../../../etc/passwd`) defanged and contained
+- `waiting/` not servable; accept moves up; refuse moves to `refused/`
+- read-only folder answers `cantsave` rather than dropping the socket
+- captive `Host` detection, both directions, including a port not making us foreign
+- device tag stable across leases, 4 chars, leaks nothing of the MAC
+- `civil_from_days` on 2000-02-29 and 2100-02-28
+- loopback bind returns exactly one port, never 80
+- DNS PTR: real round trip on an ephemeral port, NXDOMAIN, self-referential
+  pointer, and a silent server returning inside the timeout
+- subnet sweep finds a listener that is not us, and finds nothing when nothing
+  listens
+
+Plus two harnesses in the scratchpad, both of which found bugs review did not:
+`drive.py` (pty + escape-sequence interpreter, asserts the frame is exactly the
+terminal height) and `exhaust.py` (parks N idle connections, then times a
+latecomer).

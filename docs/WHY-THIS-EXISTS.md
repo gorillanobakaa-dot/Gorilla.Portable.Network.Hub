@@ -1,4 +1,4 @@
-<!-- Version: 1.3.0 · updated 26-08-25-08-14 -->
+<!-- Version: 1.4.0 · updated 26-08-25-12-00 -->
 # Why this exists
 
 Draft of the layman track, written 2026-08-24, destined for the repository
@@ -271,3 +271,175 @@ page (the teacher walks to that desk; the kid never self-diagnoses), the last
 few notes. Two warnings exist because real classrooms caused them: the folder
 vanishing (a USB drive pulled mid-lesson) and a drive that refuses writes, which
 switches hand-in off loudly instead of quietly eating homework.
+
+# The field test, 25 August 2026
+
+Everything above this line was built and tested by the person who wrote it. What
+follows was built and then handed to a real phone, in a real room, by somebody
+using it rather than inspecting it. Nine versions shipped in one morning. Every
+one of them came from a person tapping a button and telling us it did nothing.
+
+This section is the honest record of that, including the parts where the tool
+was wrong and the parts where the person testing it was told something wrong.
+
+## Who said that, and how do you prove it
+
+A classroom is not a trusting environment. The question a teacher actually has
+is not "did a message arrive" but "who sent it, and can they wriggle out of it".
+
+The first version knew only the model of the phone. That is useless twice over:
+thirty identical school laptops all report the same thing, and a child can point
+at any of them. So each device is asked, once, what it is called. The name is
+typed by a child and is therefore worth exactly what a typed name is worth.
+
+Which is why nothing rests on it alone. Every note and every piece of work is
+recorded with three things beside each other:
+
+```
+26-08-25 10:35  Amina #wa3x [Xiaomi-11-Lite-5G-NE, 10.42.0.90]: I don't get Q3
+```
+
+The name was typed. The phone model was reported by the phone. **The `#wa3x` is
+the part nobody chose**: it is derived from the device's own hardware, it stays
+the same all lesson, and it is different on every device in the room. A child
+who types somebody else's name still carries their own tag.
+
+We found out the hard way why the address is not enough. During testing two
+notes arrived under the same name and the same phone model but different
+addresses, and it looked like two children. It was one phone that had briefly
+reconnected and been given a new address. An address is a seat number, not a
+person: it changes when you sit down again, and the next child to arrive may be
+given the seat you just left. That last part was the dangerous one, and it is
+why a name is now filed against the device rather than the address. Otherwise
+one child could silently inherit another's name, and the whole point of asking
+would be quietly inverted.
+
+And when two devices do claim one name, the teacher is told rather than left to
+work it out:
+
+```
+MORE THAN ONE DEVICE IS CALLING ITSELF: Cuntius.Maximus
+The #tag after each name tells those devices apart.
+```
+
+The tag only appears when it is needed. A normal lesson never sees it.
+
+## Nothing arrives on the teacher's computer unasked
+
+Children will send things nobody asked for. That is not cynicism, it is the
+reason school networks have rules at all. So work sent to the teacher is
+treated as a **request, not a delivery**.
+
+It lands in a holding area. The teacher's screen says so, and keeps saying so
+until she deals with it:
+
+```
+1 PIECE OF WORK WAITING FOR YOU. Press w to look.
+```
+
+She sees who sent it, what it is called, how big it is and when it arrived. She
+can refuse it on that alone, without opening it: a photograph arriving when the
+assignment was a written document has already answered the question. If she
+does want to look, she asks, and it opens then and not before. Nothing a child
+sends is ever put on a screen the class can see.
+
+Two more decisions worth stating plainly:
+
+**A refusal is kept, not destroyed.** It is moved to a separate folder. If a
+child sends something that becomes a serious matter, deleting the evidence is
+the last thing anyone should do, and it is certainly not a decision this program
+should make on a teacher's behalf.
+
+**Nothing sent to the teacher is ever handed back out.** Not after she accepts
+it, and not while it sits waiting. One child's work is never downloadable by
+another, which is checked by a test that tries.
+
+Before this, the file went straight into her folder and a progress bar appeared
+for twenty seconds and then vanished. A teacher looking at her class, which is
+where a teacher is looking, would never have known it happened.
+
+## An assignment is more than one file
+
+The first version let a child send one file. That suits a school where the
+homework is a photograph of a worksheet. It does not suit a curriculum, where a
+project is a document and a spreadsheet and three pictures of the thing you
+built.
+
+Children can now pick several at once, and the formats a European school
+actually uses are all understood properly: Word, Excel, PowerPoint, the
+OpenDocument equivalents, PDF, plain text, Markdown, spreadsheatable CSV, and
+zip archives for whatever is left.
+
+That mattered for a reason that was not obvious. A file is handed to a phone
+with a label saying what kind of thing it is. The first version labelled
+everything "unknown", to force the phone to save rather than open it, and the
+phone believed the label: tapping the finished download said "We can't open this
+file". The label is now the truth, and the saving is arranged a different way.
+
+## The morning's failures, and what each one taught
+
+Six things broke in front of a real user. None of them were found by reading the
+code, and each one is now something the tool refuses to do again.
+
+**The wifi kept dying mid-lesson.** The safety net that restores the teacher's
+own wifi if the tool ever stops was firing while the tool was still running,
+every three or four minutes, dropping the phone off the network each time. The
+countdown was supposed to be pushed back every minute, and the pushing back
+silently did nothing, because that kind of countdown cannot be wound back, only
+replaced, and replacing fails while the old one is still ticking. Every previous
+test had been shorter than the countdown, which is exactly why it had always
+looked fine.
+
+**The buttons stopped working after going back.** Every form carries a one-time
+ticket so that a message sent twice by a bad connection only counts once.
+Swiping back restored a saved copy of the page, whose ticket had already been
+spent, so the button did nothing and looked broken. Pages are now marked as
+never-to-be-saved.
+
+**A file opened in the sign-in window was a room with no door.** The wifi
+sign-in window has no back button. Opening a file in it left the user stuck
+looking at that file forever. Files now open inside a page whose first element
+is a way back.
+
+**Handing in did nothing in the sign-in window.** That window is not really a
+browser; it cannot open a file picker at all. Downloads, reading and notes work
+in there, uploads never will. The page now says so and offers a button out to a
+real browser. Which leads directly to the next one.
+
+**"Type this address" was useless advice.** The user typed the nine characters
+exactly as printed. Their phone's browser completed it from its own history into
+an old address that was not answering, and showed a connection error. Text a
+person types into a phone is a suggestion the browser may overrule. **A button
+cannot be overruled, because nobody types it.** All instructions of that shape
+are now links.
+
+**And the server strangled itself.** The class page reloads its file list on a
+timer. Each reload left a connection open, and the server held each open
+connection far longer than the gap between reloads, so every phone quietly
+accumulated a handful of the server's limited helpers and never gave them back.
+A room of thirty would have needed more than twice the helpers that exist. The
+server then answers nobody while every check says it is healthy, and the only
+symptom is a connection timeout on somebody's phone, which looks like a network
+fault and is not. Measured before and after, under identical load: the old
+version left a latecomer waiting until it gave up; the new one answered
+immediately.
+
+## The two failures that were ours, not the tool's
+
+Twice, testing was derailed by leftover test copies of the program still running
+on the developer machine. One of them had taken the port the sign-in screen
+needs, so a real phone joining a real lesson was shown a folder of test rubbish
+instead, and the real lesson sat unreachable. The second time, a leftover copy
+was holding the same port and the sign-in screen simply never appeared.
+
+Both are recorded because the lesson is not "be tidier". It is that a test
+instance should be incapable of doing that. A copy bound to the local machine no
+longer takes the shared port at all, and the teacher's screen now says out loud
+when something else owns it:
+
+```
+ANOTHER PROGRAM owns the sign-in page on this computer.
+Phones that join will see that program, not this lesson.
+```
+
+Silence was the failure. Saying so is the fix.
