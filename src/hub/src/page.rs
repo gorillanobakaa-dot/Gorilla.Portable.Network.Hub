@@ -314,7 +314,14 @@ pub fn files_frame(root: &Path) -> String {
     if files.is_empty() && root.exists() {
         s.push_str("<p>Nothing is being handed out right now. This page checks by itself, just wait.</p>\n");
     }
-    for (name, size) in files {
+    // A phone has to render this, and a child has to scroll it with a thumb.
+    // A resource pack of 68,000 files would be a page of many megabytes that no
+    // browser on a 2015 Android will finish laying out. What is left off is
+    // said out loud: a list that stops silently reads as the whole list.
+    const ON_PAGE: usize = 300;
+    let total = files.len();
+    let shown = total.min(ON_PAGE);
+    for (name, size) in files.into_iter().take(ON_PAGE) {
         let esc = html_escape(&name);
         let url = urlencode(&name);
         s.push_str(&format!("<div class=file><span class=name>{esc}</span><span class=size>{}</span><br>", human(size)));
@@ -323,6 +330,14 @@ pub fn files_frame(root: &Path) -> String {
             s.push_str(&format!("<a class=\"btn read\" href=\"/view/{url}\">{verb}</a>"));
         }
         s.push_str(&format!("<a class=btn href=\"/{url}?dl=1\">GET IT</a></div>\n"));
+    }
+    if total > shown {
+        s.push_str(&format!(
+            "<p><b>{} more files are being handed out than fit on this page.</b><br>\
+             Ask your teacher for the one you need by name, or use the address \
+             on their screen from a computer.</p>\n",
+            total - shown
+        ));
     }
     s.push_str("</body></html>\n");
     s
@@ -420,6 +435,11 @@ fn urlencode(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
         match b {
+            // '/' is left alone: these are relative PATHS now, not bare
+            // names, and %2F is normalised inconsistently between browsers
+            // and proxies. Every other byte is still escaped, so a filename
+            // with a space, a hash or an ampersand cannot break the link.
+            b'/' => out.push('/'),
             b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
             _ => out.push_str(&format!("%{b:02X}")),
         }

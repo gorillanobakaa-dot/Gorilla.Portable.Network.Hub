@@ -484,6 +484,24 @@ fn log(msg: &str) {
     }
 }
 
+/// Percent-encode a relative path for a URL, leaving the separators alone.
+///
+/// File names in a real folder contain spaces, hashes and ampersands, any of
+/// which ends a URL early or starts a query string. The slashes must survive
+/// as slashes: they are the folder structure, and %2F is normalised
+/// inconsistently between browsers, proxies and servers.
+pub fn url_path(rel: &str) -> String {
+    let mut out = String::with_capacity(rel.len());
+    for b in rel.bytes() {
+        match b {
+            b'/' => out.push('/'),
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 pub fn run(args: Vec<String>) {
     
     // NEVER panic on something a person typed.

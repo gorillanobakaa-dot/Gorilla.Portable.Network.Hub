@@ -46,12 +46,12 @@ back to about 2009. That is the whole requirement on their side.
 
 ### On Debian, Ubuntu or Mint
 
-1. Download `gorilla-portable-network-hub_0.7.1_amd64.deb` from the releases
+1. Download `gorilla-portable-network-hub_0.8.0_amd64.deb` from the releases
    page.
 2. Open a terminal in the folder you downloaded it to, and type:
 
 ```bash
-sudo dpkg -i gorilla-portable-network-hub_0.7.1_amd64.deb
+sudo dpkg -i gorilla-portable-network-hub_0.8.0_amd64.deb
 ```
 
 - **Pass:** the last line says `Setting up gorilla-portable-network-hub`.
@@ -64,14 +64,14 @@ sudo dpkg -i gorilla-portable-network-hub_0.7.1_amd64.deb
 hub --version
 ```
 
-- **Pass:** it prints `hub 0.7.1`.
+- **Pass:** it prints `hub 0.8.0`.
 
 ### On Arch, CachyOS or Manjaro
 
 Download the `.pkg.tar.zst` from the releases page and install it:
 
 ```bash
-sudo pacman -U gorilla-portable-network-hub-0.7.1-1-x86_64.pkg.tar.zst
+sudo pacman -U gorilla-portable-network-hub-0.8.0-1-x86_64.pkg.tar.zst
 ```
 
 Or build it yourself, which needs the `rust` package:
@@ -82,11 +82,11 @@ cd Gorilla.Portable.Network.Hub/packaging
 makepkg -si
 ```
 
-- **Pass:** `hub --version` prints `hub 0.7.1`.
+- **Pass:** `hub --version` prints `hub 0.8.0`.
 
 ### On Windows
 
-1. Download `hub-0.7.1-windows-x86_64.zip` and unzip it anywhere.
+1. Download `hub-0.8.0-windows-x86_64.zip` and unzip it anywhere.
 2. Switch the hotspot on yourself: **Settings**, then **Network and internet**,
    then **Mobile hotspot**. Write down the network name and password Windows
    shows you.
@@ -126,6 +126,14 @@ This is the main job. Five steps.
    unticked file cannot be reached even by a child who guesses its name.
 
    Press `space` to tick one, `a` for all, `n` for none, then `Enter`.
+
+   **Folders inside your folder are included.** If your folder has subjects in
+   it, or weeks, or a resource pack exactly as you downloaded it, all of it is
+   handed out and the list shows the path of each file. You do not have to
+   flatten anything first.
+
+   The class page shows the first 300 files and says how many more there are.
+   Another computer running this tool sees all of them.
 
 5. Read the network name and password out to the class, or write them on the
    board.
@@ -179,6 +187,24 @@ Then they get **READ** to look at a file without downloading it, and **GET IT**
 to keep a copy.
 
 ---
+
+## Get a whole folder onto another computer
+
+On the receiving machine, choose *Get files from another computer*, then:
+
+- `Enter` gets the one file you have highlighted.
+- **`a` gets every file on the list**, folders and all, rebuilding the folder
+  structure as it goes.
+
+- **Pass:** the screen says *Getting a folder* and counts `file 12 of 340`.
+- **Fail:** files that did not arrive are listed by name at the bottom. Run it
+  again and it picks up only those.
+
+Each file downloads with four connections, and files are fetched one after
+another rather than all at once. That is deliberate: the limit is airtime, not
+threads, so fetching six at once would not be faster. It would only leave six
+files half-finished when the signal drops instead of five finished and one to
+resume.
 
 ## Collect work from the class
 
@@ -300,7 +326,7 @@ within three minutes: the operating system holds that promise, not the program.
 | The address on screen ends in `:8080` | Another program on your laptop holds the page phones look for | Close that program, or tell the class to type the address including `:8080` |
 | `This computer will not let a normal account create a network` | Making a wifi network needs administrator rights | Close it and start again with `sudo hub` |
 | `This wifi adapter cannot create a network, only join one` | Some adapters are built that way. Nothing is broken | Use a phone hotspot instead, and leave the network name empty |
-| A name shows as a number like `10.42.0.251` | That device told the network nothing about itself. Laptops often do not | Fixed in 0.7.1, which reads it from the browser instead. Check `hub --version` |
+| A name shows as a number like `10.42.0.251` | That device told the network nothing about itself. Laptops often do not | Fixed in 0.8.0, which reads it from the browser instead. Check `hub --version` |
 | Hand-in is off | The folder cannot be written to | Check the USB drive is plugged in, has room, and is not write-protected |
 | The window is too small | The screen needs room to draw | Make the terminal window bigger, or press `Esc` and use the printed password |
 

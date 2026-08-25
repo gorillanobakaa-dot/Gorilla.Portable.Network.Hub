@@ -98,6 +98,22 @@ enum Screen {
     Note(String),
 }
 
+/// Getting a whole folder rather than one file.
+///
+/// A folder is what a person actually points at. Before this existed the
+/// receive screen could fetch exactly one selected file, so a resource pack of
+/// two hundred files meant two hundred selections, and a folder of 68,130 was
+/// simply not gettable at all.
+#[derive(Clone)]
+struct Batch {
+    done: usize,
+    total: usize,
+    current: String,
+    bytes: u64,
+    failed: Vec<String>,
+    finished: bool,
+}
+
 /// What a probe thread has found so far. `None` means still looking, which is
 /// a different thing from "found nothing" and has to look different on screen.
 type Found = Arc<Mutex<Option<Vec<(std::net::Ipv4Addr, usize)>>>>;
@@ -147,6 +163,8 @@ struct App {
     save_into: String,
     at_once: usize,
     downloading: Option<String>,
+    /// Progress across a whole folder, when the teacher asked for everything.
+    batch: Arc<Mutex<Option<Batch>>>,
     result: Arc<Mutex<Option<Result<f64, String>>>>,
     since: Option<Instant>,
 }
@@ -184,6 +202,7 @@ impl App {
             save_into: here.to_string_lossy().into_owned(),
             at_once: 4,
             downloading: None,
+            batch: Arc::new(Mutex::new(None)),
             result: Arc::new(Mutex::new(None)),
             since: None,
         }
@@ -719,6 +738,10 @@ impl App {
         } else if !serve::handin_available() {
             f.push_dim("  Hand-in is off: that folder cannot receive files (read-only?).");
         }
+        if serve::files_truncated() {
+            f.push("  THAT FOLDER HAS MORE FILES THAN THIS CAN HAND OUT.");
+            f.push("  Some of them are not being offered. Point it at a smaller folder.");
+        }
         let notice = crate::page::notice();
         if !notice.is_empty() {
             f.push(&format!("  Notice            {}", notice));
@@ -923,7 +946,7 @@ impl App {
         if self.editing.is_some() {
             self.hints(f, "  type to change    tab completes a path    enter to keep it    esc to leave it");
         } else {
-            self.hints(f, "  up and down to move    enter to get the file    esc to go back");
+            self.hints(f, "  enter to get one file    a to get ALL of them    esc to go back");
         }
     }
 
@@ -939,7 +962,43 @@ impl App {
     }
 
     fn draw_receiving(&self, f: &mut Frame) {
-        self.title(f, "Getting a file");
+        let batch = self.batch.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        self.title(f, if batch.is_some() { "Getting a folder" } else { "Getting a file" });
+        if let Some(b) = &batch {
+            // Two numbers, because they answer different questions: how far
+            // through the folder, and how far through the file on screen now.
+            let pct = if b.total > 0 { b.done as f64 / b.total as f64 } else { 0.0 };
+            f.push(&format!("  file {} of {}", b.done.min(b.total), b.total));
+            f.push(&format!("  {} {:>3}%", bar(pct, 34), (pct * 100.0) as u64));
+            f.blank();
+            f.push(&format!("  {}", term::truncate(&b.current, f.cols.saturating_sub(4))));
+            let secs = self.since.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0).max(0.001);
+            let (done_now, total_now) = crate::fetch::progress();
+            let moved = b.bytes + done_now;
+            f.push(&format!("  {} of this folder, {:.1} MB/s overall",
+                            human(moved), moved as f64 / secs / 1e6));
+            if total_now > 0 {
+                f.push_dim(&format!("  this file: {} of {}", human(done_now), human(total_now)));
+            }
+            f.blank();
+            if !b.failed.is_empty() {
+                f.push(&format!("  {} file{} did not arrive:", b.failed.len(),
+                                if b.failed.len() == 1 { "" } else { "s" }));
+                for line in b.failed.iter().rev().take(3) {
+                    f.push_dim(&format!("  {}", term::truncate(line, f.cols.saturating_sub(4))));
+                }
+                f.blank();
+            }
+            if b.finished {
+                f.push(if b.failed.is_empty() {
+                    "  Everything arrived. Press esc."
+                } else {
+                    "  Finished, with the failures listed above. Press esc."
+                });
+            }
+            self.hints(f, "  q or esc to stop    it will carry on from here next time");
+            return;
+        }
         let name = self.downloading.clone().unwrap_or_default();
         let (done, total) = crate::fetch::progress();
         let pct = if total > 0 { done as f64 / total as f64 } else { 0.0 };
@@ -1480,6 +1539,9 @@ impl App {
                     self.begin_download(&e);
                 }
             }
+            Key::Char('a') => {
+                self.begin_download_all();
+            }
             Key::Esc => {
                 self.screen = Screen::Receive;
                 self.row = 0;
@@ -1546,25 +1608,21 @@ impl App {
             return;
         }
         let mut fresh: Vec<(String, u64, bool)> = Vec::new();
-        if let Ok(rd) = std::fs::read_dir(&folder) {
-            let mut items: Vec<_> = rd.flatten().collect();
-            items.sort_by_key(|e| e.file_name());
-            for e in items {
-                let Ok(md) = e.metadata() else { continue };
-                if !md.is_file() {
-                    continue;
-                }
-                let name = e.file_name().to_string_lossy().into_owned();
-                if name.starts_with('.') {
-                    continue;
-                }
-                let ticked = if pre {
-                    true // the review starts from "everything", the teacher unticks
-                } else {
-                    self.tick.iter().find(|(n, _, _)| *n == name).map(|(_, _, t)| *t).unwrap_or(false)
-                };
-                fresh.push((name, md.len(), ticked));
-            }
+        // The same walk the network uses, so the tick list and the class page
+        // can never disagree about what exists. Reading the folder separately
+        // here is what let the two drift: this screen listed the top level
+        // while the server also served everything nested under it.
+        //
+        // all_files, NOT visible_files: this screen has to show what is there,
+        // including what is currently unticked, and it must not change what the
+        // class can reach just by being opened.
+        for (rel, size) in serve::all_files(&folder) {
+            let ticked = if pre {
+                true // the review starts from "everything", the teacher unticks
+            } else {
+                self.tick.iter().find(|(n, _, _)| *n == rel).map(|(_, _, t)| *t).unwrap_or(false)
+            };
+            fresh.push((rel, size, ticked));
         }
         self.tick = fresh;
         self.screen = Screen::Tick { pre };
@@ -1697,6 +1755,80 @@ impl App {
         }
     }
 
+    /// Get every file on the list, folders and all.
+    ///
+    /// Sequential, with the usual four connections INSIDE each file. That is
+    /// deliberate: the connection sweep measured the ceiling as airtime, not
+    /// threads, and the peak was 7.0 MB/s at every worker count from 1 to 32.
+    /// Fetching six files at once would not create more air; it would only make
+    /// six files half-finished when the signal drops instead of five finished
+    /// and one to resume.
+    fn begin_download_all(&mut self) {
+        let Some(ip) = self.server else { return };
+        let files = self.files.clone();
+        if files.is_empty() {
+            return;
+        }
+        let count = files.len();
+        let root = PathBuf::from(shellexpand(&self.save_into));
+        let port = self.server_port;
+        let at_once = self.at_once;
+        let batch = Arc::clone(&self.batch);
+        let result = Arc::clone(&self.result);
+        *result.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *batch.lock().unwrap_or_else(|e| e.into_inner()) = Some(Batch {
+            done: 0,
+            total: files.len(),
+            current: files[0].name.clone(),
+            bytes: 0,
+            failed: Vec::new(),
+            finished: false,
+        });
+        crate::fetch::set_quiet(true);
+        std::thread::spawn(move || {
+            let mut bytes = 0u64;
+            let mut failed: Vec<String> = Vec::new();
+            for (i, e) in files.iter().enumerate() {
+                {
+                    let mut b = batch.lock().unwrap_or_else(|x| x.into_inner());
+                    if let Some(st) = b.as_mut() {
+                        st.done = i;
+                        st.current = e.name.clone();
+                        st.bytes = bytes;
+                        st.failed = failed.clone();
+                    } else {
+                        return; // the teacher pressed escape
+                    }
+                }
+                let dest = root.join(&e.name);
+                // The folders on the far side have to exist before the file
+                // lands in them. A nested name is the normal case now.
+                if let Some(parent) = dest.parent() {
+                    if let Err(err) = std::fs::create_dir_all(parent) {
+                        failed.push(format!("{}: {err}", e.name));
+                        continue;
+                    }
+                }
+                let url = format!("http://{ip}:{port}/{}", crate::fetch::url_path(&e.name));
+                match crate::fetch::download(&url, &dest.to_string_lossy(), at_once, true) {
+                    Ok(_) => bytes += e.size,
+                    Err(err) => failed.push(format!("{}: {err}", e.name)),
+                }
+            }
+            let mut b = batch.lock().unwrap_or_else(|x| x.into_inner());
+            if let Some(st) = b.as_mut() {
+                st.done = st.total;
+                st.bytes = bytes;
+                st.failed = failed;
+                st.finished = true;
+            }
+        });
+        self.downloading = Some(format!("{count} files"));
+        self.since = Some(Instant::now());
+        self.screen = Screen::Receiving;
+        self.row = 0;
+    }
+
     fn begin_download(&mut self, entry: &net::Entry) {
         let Some(ip) = self.server else { return };
         let url = format!("http://{ip}:{}/{}", self.server_port, entry.name);
@@ -1705,6 +1837,7 @@ impl App {
         let at_once = self.at_once;
         let result = Arc::clone(&self.result);
         *result.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *self.batch.lock().unwrap_or_else(|e| e.into_inner()) = None;
         crate::fetch::set_quiet(true);
         std::thread::spawn(move || {
             // Verification on, always. It costs nothing when the other side

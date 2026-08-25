@@ -25,7 +25,7 @@ pkgname=gorilla-portable-network-hub
 # it, so following the project's own instructions built something from the
 # previous month. `cargo test` now fails if the two disagree, which is the only
 # reason this line can be trusted.
-pkgver=0.7.1
+pkgver=0.8.0
 pkgrel=1
 pkgdesc="Turn a laptop into the network and hand a folder to the room"
 arch=('x86_64')

@@ -22,7 +22,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::{env, thread};
 
 const BUF: usize = 256 * 1024;
@@ -529,24 +529,113 @@ pub fn pages_seen_count() -> usize {
 
 /// The files the network can see right now: ticked, top-level, with handed-in
 /// work excluded by construction because it is not a file in the folder.
+/// How deep the walk goes, and how many files it will list.
+///
+/// A teacher's folder is tens of files. These exist for the folder that is not:
+/// a whole home directory picked by accident, a mounted drive, or a symlink
+/// loop. Both limits are reported out loud when they bite, because a list that
+/// silently stops at 2,000 reads as "there are 2,000 files".
+const MAX_DEPTH: usize = 8;
+/// A backstop against a runaway tree, NOT a display limit.
+///
+/// It was 2,000, and on a real 68,153-file folder that listed the first 2,000
+/// alphabetically and stopped: 0.02 GB of 6.3 GB offered, and the 5.4 GB file
+/// never reached because its name begins with `s`. The limit that matters is
+/// how many rows a child's phone can render, and that belongs to the page.
+/// The walk's job is to find what is there.
+const MAX_FILES: usize = 100_000;
+
+/// Folders that are ours, not the teacher's, and are never handed back out.
+const NEVER_SERVE: [&str; 3] = ["handed-in", "waiting", "refused"];
+
+static FILE_CACHE: Mutex<Option<(PathBuf, Instant, Vec<(String, u64)>, bool)>> = Mutex::new(None);
+
+/// Every file under the served folder, as paths relative to it.
+///
+/// RECURSIVE since 0.8.0, and the previous behaviour was a real failure rather
+/// than a limitation. A teacher points this at a folder, and a folder has
+/// folders in it: coursework by subject, photos by week, a resource pack as it
+/// was downloaded. Listing only the top level meant the class was handed a
+/// fraction of what the teacher had chosen, with nothing on screen saying so.
+/// Found 2026-08-25 by pointing it at a real 6.3 GB folder: six small files
+/// were offered and 68,130 were not.
+///
+/// Cached for a moment because this runs on EVERY request, including the file
+/// list every device refreshes every ten seconds. Walking a large tree thirty
+/// times a second would make the tool its own bottleneck.
 pub fn visible_files(root: &Path) -> Vec<(String, u64)> {
-    let mut out = Vec::new();
-    if let Ok(rd) = fs::read_dir(root) {
-        let mut items: Vec<_> = rd.flatten().collect();
-        items.sort_by_key(|e| e.file_name());
-        for e in items {
-            let Ok(md) = e.metadata() else { continue };
-            if !md.is_file() {
-                continue;
+    all_files(root).into_iter().filter(|(rel, _)| is_allowed(rel)).collect()
+}
+
+/// Everything in the folder, whether or not it is ticked.
+///
+/// This is what the tick screen needs, and it must be a SEPARATE function from
+/// the one the network uses. The first version of this had the tick screen call
+/// set_allowed(None) to see the full list, which published every file in the
+/// folder for as long as that screen was open. Pressing `f` mid-lesson to check
+/// what was being handed out would have handed out everything.
+pub fn all_files(root: &Path) -> Vec<(String, u64)> {
+    {
+        let c = FILE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((cached_root, at, files, _)) = &*c {
+            if cached_root == root && at.elapsed() < Duration::from_secs(3) {
+                return files.clone();
             }
-            let name = e.file_name().to_string_lossy().into_owned();
-            if name.starts_with('.') || !is_allowed(&name) {
-                continue;
-            }
-            out.push((name, md.len()));
         }
     }
+    let mut out = Vec::new();
+    let mut truncated = false;
+    walk(root, "", 0, &mut out, &mut truncated);
+    // Sorted by path, so a folder's files stay together and the order does not
+    // change between requests. An unstable list makes a page jump under a
+    // thumb that is reaching for a button.
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    {
+        let mut c = FILE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        *c = Some((root.to_path_buf(), Instant::now(), out.clone(), truncated));
+    }
     out
+}
+
+/// True when the last walk hit the ceiling, so a screen can say what was left
+/// out instead of quietly showing a shorter list.
+pub fn files_truncated() -> bool {
+    let c = FILE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    c.as_ref().map(|(_, _, _, t)| *t).unwrap_or(false)
+}
+
+fn walk(dir: &Path, prefix: &str, depth: usize, out: &mut Vec<(String, u64)>, truncated: &mut bool) {
+    if depth > MAX_DEPTH {
+        *truncated = true;
+        return;
+    }
+    let Ok(rd) = fs::read_dir(dir) else { return };
+    let mut items: Vec<_> = rd.flatten().collect();
+    items.sort_by_key(|e| e.file_name());
+    for e in items {
+        if out.len() >= MAX_FILES {
+            *truncated = true;
+            return;
+        }
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') || NEVER_SERVE.contains(&name.as_str()) {
+            continue;
+        }
+        // symlink_metadata, NOT metadata. metadata() follows the link, so a
+        // symlink pointing at its own parent is an infinite walk. The depth cap
+        // would eventually stop it, having already produced thousands of
+        // nonsense paths on the way.
+        let Ok(md) = e.path().symlink_metadata() else { continue };
+        let rel = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
+        if md.is_dir() {
+            walk(&e.path(), &rel, depth + 1, out, truncated);
+        } else if md.is_file() {
+            out.push((rel, md.len()));
+        }
+        // Symlinks to files are skipped too: the target may sit outside the
+        // folder the teacher chose, and handing out something from elsewhere on
+        // their disk is exactly what nobody asked for.
+    }
 }
 
 /// What is happening right now, for the screen to draw.
@@ -1159,7 +1248,8 @@ fn serve_one(
     // button, so a bare file was a room with no door.
     if let Some(rest) = path_only.strip_prefix("/view/") {
         let name = percent_decode(rest);
-        if !name.contains('/') && is_allowed(&name) && root.join(&name).is_file() {
+        let inside = safe_join(root, &name).map(|p| p.is_file()).unwrap_or(false);
+        if inside && is_allowed(&name) {
             return respond_fresh(&mut out, "text/html; charset=utf-8",
                 crate::page::view_page(&name).as_bytes()).map(|_| keep);
         }
@@ -1178,7 +1268,11 @@ fn serve_one(
     // else; an unticked file does not exist as far as the network can tell.
     let rel = decoded.trim_start_matches('/');
     let first = rel.split('/').next().unwrap_or("");
-    if first == "handed-in" || first.starts_with('.') || !is_allowed(first) {
+    // The first segment governs what is OURS and never served; the full
+    // relative path governs what the teacher ticked. Checking only the first
+    // segment against the ticked set let an unticked nested file through:
+    // invisible on every list, and served to anybody who guessed the path.
+    if NEVER_SERVE.contains(&first) || first.starts_with('.') || !is_allowed(rel) {
         return respond(&mut out, 404, "text/plain", b"not found").map(|_| keep);
     }
     if !target.exists() {
@@ -1669,5 +1763,122 @@ mod block_tests {
         unblock_key(&key);
         let (_, label) = kept.expect("a paused device must stay on the list");
         assert!(label.contains(ip), "the label has to name it somehow: {label}");
+    }
+}
+
+#[cfg(test)]
+mod walk_tests {
+    use super::*;
+
+    /// ALLOWED is process-wide and cargo runs tests in parallel threads of one
+    /// process, so any test that sets it must hold this first. This is the
+    /// THIRD time this trap has bitten in a single day of work on this file:
+    /// once on a note's text, once on a global counter, and now on the ticked
+    /// set. Each time the test was wrong and the code was right.
+    static TICKS: Mutex<()> = Mutex::new(());
+
+    fn tree(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("hub-walk-{}-{tag}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(d.join("subject/week1/deep/deeper")).unwrap();
+        fs::create_dir_all(d.join("handed-in")).unwrap();
+        fs::create_dir_all(d.join(".hidden")).unwrap();
+        fs::write(d.join("notes.txt"), b"top").unwrap();
+        fs::write(d.join("subject/handout.txt"), b"one down").unwrap();
+        fs::write(d.join("subject/week1/worksheet.txt"), b"nested").unwrap();
+        fs::write(d.join("subject/week1/deep/deeper/buried.txt"), b"deep").unwrap();
+        fs::write(d.join("handed-in/a-childs-work.txt"), b"private").unwrap();
+        fs::write(d.join(".hidden/secret.txt"), b"no").unwrap();
+        fs::write(d.join(".dotfile"), b"no").unwrap();
+        d
+    }
+
+    /// A teacher points this at a folder, and folders have folders in them.
+    ///
+    /// Before 0.8.0 only the top level was listed while everything nested was
+    /// still SERVED to anybody who guessed the path. Found on 2026-08-25 by
+    /// pointing it at a real 6.3 GB folder: six files offered, 68,130 not.
+    #[test]
+    fn the_walk_reaches_files_the_teacher_actually_put_in_folders() {
+        let _guard = TICKS.lock().unwrap_or_else(|e| e.into_inner());
+        let root = tree("deep");
+        set_allowed(None);
+        let found: Vec<String> = all_files(&root).into_iter().map(|(r, _)| r).collect();
+        assert!(found.contains(&"notes.txt".to_string()), "{found:?}");
+        assert!(found.contains(&"subject/handout.txt".to_string()), "{found:?}");
+        assert!(found.contains(&"subject/week1/worksheet.txt".to_string()), "{found:?}");
+        assert!(
+            found.contains(&"subject/week1/deep/deeper/buried.txt".to_string()),
+            "four levels down is still the teacher's file: {found:?}"
+        );
+        // Sorted, so a page does not reorder itself under a thumb reaching for
+        // a button.
+        let mut sorted = found.clone();
+        sorted.sort();
+        assert_eq!(found, sorted);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// What is ours is never handed back out, at any depth.
+    #[test]
+    fn work_children_sent_in_is_never_served_back_to_the_class() {
+        let _guard = TICKS.lock().unwrap_or_else(|e| e.into_inner());
+        let root = tree("private");
+        set_allowed(None);
+        let found: Vec<String> = all_files(&root).into_iter().map(|(r, _)| r).collect();
+        for forbidden in ["handed-in/a-childs-work.txt", ".hidden/secret.txt", ".dotfile"] {
+            assert!(
+                !found.iter().any(|f| f == forbidden),
+                "{forbidden} must never be listed: {found:?}"
+            );
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A symlink pointing at its own parent is an endless walk.
+    ///
+    /// symlink_metadata rather than metadata is what stops it. With metadata,
+    /// the depth cap would eventually halt it having already produced thousands
+    /// of nonsense paths, and every one of them would be offered to the class.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_that_contains_itself_does_not_spin_forever() {
+        let _guard = TICKS.lock().unwrap_or_else(|e| e.into_inner());
+        let root = tree("loop");
+        std::os::unix::fs::symlink(&root, root.join("subject/loop")).unwrap();
+        set_allowed(None);
+        let started = Instant::now();
+        let found: Vec<String> = all_files(&root).into_iter().map(|(r, _)| r).collect();
+        assert!(started.elapsed() < Duration::from_secs(5), "the walk did not terminate promptly");
+        assert!(
+            !found.iter().any(|f| f.contains("loop/")),
+            "nothing behind a symlink should be served: {found:?}"
+        );
+        assert_eq!(found.len(), 4, "the four real files, and only those: {found:?}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The regression that nearly shipped: the tick screen needs the full list,
+    /// and asking for it must not publish the folder.
+    ///
+    /// The first version had the screen call set_allowed(None) so it could see
+    /// everything, which meant pressing `f` mid-lesson to CHECK what was being
+    /// handed out silently handed out all of it.
+    #[test]
+    fn seeing_the_whole_list_is_not_the_same_as_publishing_it() {
+        let _guard = TICKS.lock().unwrap_or_else(|e| e.into_inner());
+        let root = tree("ticks");
+        let ticked: std::collections::HashSet<String> =
+            ["subject/week1/worksheet.txt".to_string()].into_iter().collect();
+        set_allowed(Some(ticked));
+
+        let all: Vec<String> = all_files(&root).into_iter().map(|(r, _)| r).collect();
+        let served: Vec<String> = visible_files(&root).into_iter().map(|(r, _)| r).collect();
+        set_allowed(None);
+
+        assert_eq!(all.len(), 4, "the screen must see every file: {all:?}");
+        assert_eq!(served, vec!["subject/week1/worksheet.txt".to_string()],
+                   "the network must see only what was ticked: {served:?}");
+        let _ = fs::remove_dir_all(&root);
     }
 }

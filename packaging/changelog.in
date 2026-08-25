@@ -1,5 +1,25 @@
 gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
 
+  * FOLDERS ARE HANDED OUT. Pointing this at a folder used to offer only
+    the files sitting loose at the top level, while everything inside a
+    subfolder was silently left out of every list. A teacher's folder has
+    folders in it: subjects, weeks, a resource pack as downloaded. On a
+    real 68,153-file folder the old behaviour offered six files.
+  * Get a whole folder in one go. The receiving screen could fetch exactly
+    one selected file, so a pack of 200 files meant 200 selections. Press
+    `a` and it takes all of them, rebuilding the folder structure.
+  * Fixed a matching hole: a file inside a subfolder was never listed but
+    was still served to anybody who guessed its path. The permission check
+    looked at the first part of the path instead of the whole of it.
+  * A file one folder down can be READ in the browser now, not only
+    downloaded.
+  * The class page shows the first 300 files and says how many more there
+    are, rather than sending a phone a page it cannot lay out.
+
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+
+gorilla-portable-network-hub (0.7.1) unstable; urgency=medium
+
   * A laptop is now identified in the permanent record. A device is asked
     its name when it joins the network, and phones answer; laptops very
     often answer nothing, so a note from one was filed against a bare
@@ -12,7 +32,7 @@ gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
     roster was being drawn, so a device that joined while the teacher was
     reading waiting work was never looked up at all.
 
- -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  Tue, 25 Aug 2026 13:20:00 +0100
 
 gorilla-portable-network-hub (0.7.0) unstable; urgency=medium
 
