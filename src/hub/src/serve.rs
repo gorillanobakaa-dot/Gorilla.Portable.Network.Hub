@@ -1239,6 +1239,50 @@ fn serve_one(
         let page = crate::page::class_page(root, done, &peer_ip, query.contains("rename=1"), &here);
         return respond_fresh(&mut out, "text/html; charset=utf-8", page.as_bytes()).map(|_| keep);
     }
+    // The whole folder as one download, for browsers, which can take exactly
+    // one thing per click. Streamed as it is built: the teacher's machine
+    // never stages a copy, so a 7 GB folder costs 7 GB of disk on the kid's
+    // side only. Range is not supported here, and honestly cannot be: the
+    // archive is made fresh per request, so "the byte at offset N" is only
+    // defined while one particular stream is running. A browser that loses
+    // this download starts it again.
+    if path_only == "/everything.zip" {
+        let files = visible_files(root);
+        if files.is_empty() {
+            return respond(&mut out, 404, "text/plain", b"nothing is being handed out").map(|_| keep);
+        }
+        let total = crate::zip::exact_size(&files);
+        // An exact Content-Length, possible because store mode makes the size
+        // arithmetic: the difference between a progress bar with an end and a
+        // spinner for twenty minutes.
+        write!(
+            out,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/zip\r\n\
+             Content-Disposition: attachment; filename=\"class-files.zip\"\r\n\
+             Content-Length: {total}\r\nConnection: close\r\n\r\n"
+        )?;
+        let peer_for_roster = peer_ip.clone();
+        let mut last = 0u64;
+        let result = crate::zip::stream(&mut out, root, &files, Some(&mut |written| {
+            // Feed the roster in the same shape a plain download does, so the
+            // teacher sees one row moving rather than nothing for 20 minutes.
+            let delta = written.saturating_sub(last);
+            last = written;
+            if delta > 0 {
+                note_direction(&peer_for_roster, "everything.zip", delta, total, Direction::Getting);
+            }
+        }));
+        match result {
+            Ok(()) => note_direction(&peer_ip, "everything.zip", 0, total, Direction::Done),
+            Err(_) => {
+                // The stream died mid-archive: the browser shows a failed
+                // download, which is the truthful outcome. Nothing to send;
+                // the length promise is already broken.
+            }
+        }
+        return Ok(false);
+    }
+
     if path_only == "/files" {
         mark_page_seen(&peer_ip);
         return respond_fresh(&mut out, "text/html; charset=utf-8", crate::page::files_frame(root).as_bytes()).map(|_| keep);

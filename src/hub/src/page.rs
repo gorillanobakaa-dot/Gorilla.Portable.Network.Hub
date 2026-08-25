@@ -314,6 +314,19 @@ pub fn files_frame(root: &Path) -> String {
     if files.is_empty() && root.exists() {
         s.push_str("<p>Nothing is being handed out right now. This page checks by itself, just wait.</p>\n");
     }
+    // The one button a browser CAN take a whole folder with. A browser
+    // downloads exactly one thing per click, so the folder has to become one
+    // thing: a store-mode zip, streamed, which Explorer has opened without any
+    // software since XP. Only offered when there is more than one file;
+    // "everything" for a single file is the file.
+    if files.len() > 1 {
+        let bytes: u64 = files.iter().map(|(_, b)| b).sum();
+        s.push_str(&format!(
+            "<div class=file><a class=btn href=\"/everything.zip\"              style=\"background:#7a2882\">GET EVERYTHING              ({} files, {})</a><br><span class=size>One download. Your computer              opens it like a folder. Do not switch the machine off while it              runs.</span></div>\n",
+            files.len(),
+            human(bytes)
+        ));
+    }
     // A phone has to render this, and a child has to scroll it with a thumb.
     // A resource pack of 68,000 files would be a page of many megabytes that no
     // browser on a 2015 Android will finish laying out. What is left off is
@@ -334,8 +347,7 @@ pub fn files_frame(root: &Path) -> String {
     if total > shown {
         s.push_str(&format!(
             "<p><b>{} more files are being handed out than fit on this page.</b><br>\
-             Ask your teacher for the one you need by name, or use the address \
-             on their screen from a computer.</p>\n",
+             The GET EVERYTHING button at the top has all of them.</p>\n",
             total - shown
         ));
     }

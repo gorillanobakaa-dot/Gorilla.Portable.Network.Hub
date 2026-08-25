@@ -16,6 +16,7 @@ mod dns;
 mod net;
 mod page;
 mod qr;
+mod zip;
 mod tui;
 mod fetch;
 mod serve;

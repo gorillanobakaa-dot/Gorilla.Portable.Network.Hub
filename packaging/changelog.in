@@ -15,6 +15,12 @@ gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
     downloaded.
   * The class page shows the first 300 files and says how many more there
     are, rather than sending a phone a page it cannot lay out.
+  * GET EVERYTHING: one purple button on the page hands the whole folder
+    over as a single uncompressed zip, streamed as it is built, with an
+    exact size so the browser shows a progress bar with an end. Windows
+    opens it like a folder with nothing installed. Store mode on purpose:
+    the 2026-08-22 ruling against compressing on a weak laptop stands;
+    this is boxing, not squeezing.
 
  -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
 

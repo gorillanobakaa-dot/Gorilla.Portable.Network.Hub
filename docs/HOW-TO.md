@@ -145,6 +145,14 @@ This is the main job. Five steps.
    The class page shows the first 300 files and says how many more there are.
    Another computer running this tool sees all of them.
 
+   The page also carries one purple button: **GET EVERYTHING**. It hands the
+   whole folder over as a single download that Windows opens like a folder,
+   with nothing installed. The files inside are not compressed, so it costs
+   the teacher's laptop almost nothing to produce; it is the files laid end
+   to end with a table of contents. The download shows a real progress bar
+   with an end, and if it fails partway it starts again from the beginning,
+   which is the one way it is weaker than this tool's own resume.
+
 5. Read the network name and password out to the class, or write them on the
    board.
 
