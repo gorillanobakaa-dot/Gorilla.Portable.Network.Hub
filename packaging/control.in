@@ -5,7 +5,7 @@ Priority: optional
 Architecture: amd64
 Installed-Size: @SIZE@
 Depends: libc6 (>= 2.34)
-Recommends: network-manager
+Recommends: libcap2-bin, network-manager
 Maintainer: gorillanobakaa <gorillanobakaa@gmail.com>
 Homepage: https://github.com/gorillanobakaa-dot/Gorilla.Portable.Network.Hub
 Description: Turn a laptop into the network and hand a folder to the room

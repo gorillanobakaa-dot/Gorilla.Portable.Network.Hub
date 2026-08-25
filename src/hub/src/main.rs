@@ -14,6 +14,7 @@ mod sha256;
 mod term;
 mod dns;
 mod net;
+mod page;
 mod tui;
 mod fetch;
 mod serve;

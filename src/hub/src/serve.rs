@@ -52,12 +52,130 @@ pub struct Transfer {
     /// number in the thousands that means nothing.
     window_bytes: u64,
     window_start: Instant,
+    pub handing_in: bool,
 }
 
 /// A plain Vec, not a map. A classroom is thirty devices, and a linear scan of
 /// thirty entries is faster than hashing the key. Const Mutex::new so there is
 /// no lazy initialisation to get wrong.
 static TRANSFERS: Mutex<Vec<Transfer>> = Mutex::new(Vec::new());
+
+/// Which way the bytes are going, in the words the roster uses.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Direction {
+    Getting,
+    HandingIn,
+    Done,
+}
+
+/// Which files the teacher has ticked. None means everything, which is what
+/// the plain command line serves; the screen replaces it with the ticked set
+/// and from then on an unticked file does not exist as far as the network is
+/// concerned: not listed, not fetchable, not even by guessing the name.
+static ALLOWED: Mutex<Option<std::collections::HashSet<String>>> = Mutex::new(None);
+
+pub fn set_allowed(list: Option<std::collections::HashSet<String>>) {
+    *ALLOWED.lock().unwrap_or_else(|e| e.into_inner()) = list;
+}
+
+fn is_allowed(rel: &str) -> bool {
+    let a = ALLOWED.lock().unwrap_or_else(|e| e.into_inner());
+    match &*a {
+        None => true,
+        Some(set) => set.contains(rel),
+    }
+}
+
+/// Device names the screen has resolved, so uploads and notes can be labelled
+/// with "Amina-phone" rather than an address. The screen fills this from its
+/// lookup cache; the plain command line leaves it empty and labels fall back
+/// to the address, which is honest if unfriendly.
+static NAMES: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+pub fn set_device_name(ip: &str, name: &str) {
+    let mut n = NAMES.lock().unwrap_or_else(|e| e.into_inner());
+    match n.iter_mut().find(|(i, _)| i == ip) {
+        Some(e) => e.1 = name.to_string(),
+        None => n.push((ip.to_string(), name.to_string())),
+    }
+}
+
+pub fn device_label(ip: &str) -> String {
+    let n = NAMES.lock().unwrap_or_else(|e| e.into_inner());
+    n.iter().find(|(i, _)| i == ip).map(|(_, name)| name.clone()).unwrap_or_else(|| ip.to_string())
+}
+
+/// Whether handed-in work can actually land in the served folder.
+///
+/// Teachers in the schools this is for serve from USB flash drives and small
+/// portable hard drives, kept as the failsafe copy of everything. A drive can
+/// be read-only, full, or formatted strangely, and the failure must be LOUD
+/// and up front: the page hides the hand-in form and says why, the roster
+/// warns the teacher. The alternative is a lesson's homework quietly eaten.
+static HANDIN_OK: AtomicBool = AtomicBool::new(false);
+
+pub fn probe_handin(root: &Path) -> bool {
+    let dir = crate::page::handed_in_dir(root);
+    let ok = (|| {
+        fs::create_dir_all(&dir).ok()?;
+        let probe = dir.join(".write-probe");
+        fs::write(&probe, b"x").ok()?;
+        let _ = fs::remove_file(&probe);
+        Some(())
+    })()
+    .is_some();
+    HANDIN_OK.store(ok, Ordering::Relaxed);
+    ok
+}
+
+pub fn handin_available() -> bool {
+    HANDIN_OK.load(Ordering::Relaxed)
+}
+
+/// Addresses that have opened the class page, so the roster can tell "on the
+/// network, has not looked yet" from "looking at the page". The teacher walks
+/// to the stuck kid instead of the kid having to self-diagnose.
+static PAGE_SEEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+fn mark_page_seen(ip: &str) {
+    let mut p = PAGE_SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    if !p.iter().any(|x| x == ip) {
+        p.push(ip.to_string());
+    }
+}
+
+pub fn has_seen_page(ip: &str) -> bool {
+    PAGE_SEEN.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|x| x == ip)
+}
+
+/// How many distinct devices have opened the page. Over a network somebody
+/// else provides, this is the only headcount there is: the roster cannot
+/// enumerate a router's clients, but it can count who turned up.
+pub fn pages_seen_count() -> usize {
+    PAGE_SEEN.lock().unwrap_or_else(|e| e.into_inner()).len()
+}
+
+/// The files the network can see right now: ticked, top-level, with handed-in
+/// work excluded by construction because it is not a file in the folder.
+pub fn visible_files(root: &Path) -> Vec<(String, u64)> {
+    let mut out = Vec::new();
+    if let Ok(rd) = fs::read_dir(root) {
+        let mut items: Vec<_> = rd.flatten().collect();
+        items.sort_by_key(|e| e.file_name());
+        for e in items {
+            let Ok(md) = e.metadata() else { continue };
+            if !md.is_file() {
+                continue;
+            }
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') || !is_allowed(&name) {
+                continue;
+            }
+            out.push((name, md.len()));
+        }
+    }
+    out
+}
 
 /// What is happening right now, for the screen to draw.
 pub fn transfers() -> Vec<Transfer> {
@@ -95,6 +213,16 @@ pub fn is_running() -> bool {
 /// `delta` is the bytes just written, not a running total, because the running
 /// total of one connection says nothing about what the device as a whole has.
 fn note(peer: &str, file: &str, delta: u64, total: u64) {
+    note_dir(peer, file, delta, total, false, false);
+}
+
+/// The upload path's view of the same table. Direction::Done marks the row
+/// finished explicitly, because an upload knows its own end.
+pub fn note_direction(peer: &str, file: &str, delta: u64, total: u64, dir: Direction) {
+    note_dir(peer, file, delta, total, dir != Direction::Getting, dir == Direction::Done);
+}
+
+fn note_dir(peer: &str, file: &str, delta: u64, total: u64, handing_in: bool, force_done: bool) {
     let ip = peer.split(':').next().unwrap_or(peer).to_string();
     let mut t = TRANSFERS.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(e) = t.iter_mut().find(|e| e.peer == ip) {
@@ -114,7 +242,8 @@ fn note(peer: &str, file: &str, delta: u64, total: u64) {
             e.window_bytes = 0;
             e.window_start = Instant::now();
         }
-        e.finished = e.done >= total;
+        e.handing_in = handing_in;
+        e.finished = force_done || e.done >= total;
         e.updated = Instant::now();
     } else {
         t.push(Transfer {
@@ -123,10 +252,11 @@ fn note(peer: &str, file: &str, delta: u64, total: u64) {
             done: delta.min(total.max(1)),
             total,
             rate: 0.0,
-            finished: false,
+            finished: force_done,
             updated: Instant::now(),
             window_bytes: delta,
             window_start: Instant::now(),
+            handing_in,
         });
     }
 }
@@ -140,16 +270,56 @@ fn note(peer: &str, file: &str, delta: u64, total: u64) {
 /// screen has already said the network is ready.
 pub fn start(root: &Path, addr: &str, helpers: usize) -> std::io::Result<()> {
     let root = root.canonicalize()?;
-    let listener = TcpListener::bind(addr)?;
+    let listeners = bind_all(addr)?;
+    probe_handin(&root);
     QUIET.store(true, Ordering::Relaxed);
     thread::spawn(move || {
-        accept_loop(listener, root, helpers);
+        accept_loop(listeners, root, helpers);
     });
     RUNNING.store(true, Ordering::Relaxed);
     Ok(())
 }
 
-fn accept_loop(listener: TcpListener, root: PathBuf, helpers: usize) {
+/// Port 80 as well as the named port, when this machine is allowed to.
+///
+/// Port 80 is where a phone's own "is there internet?" probe arrives, so it is
+/// what makes the sign-in screen pop. Ports under 1024 need a permission that
+/// the .deb grants once at install (setcap on the binary); unpackaged builds
+/// simply do not get port 80 and everything else still works. At least one
+/// bind must succeed.
+fn bind_all(addr: &str) -> std::io::Result<Vec<TcpListener>> {
+    let mut listeners = Vec::new();
+    let mut first_err = None;
+    let mut wanted: Vec<String> = vec![addr.to_string()];
+    let host = addr.rsplit_once(':').map(|(h, _)| h).unwrap_or("0.0.0.0");
+    let port80 = format!("{host}:80");
+    if port80 != addr {
+        wanted.push(port80);
+    }
+    for a in wanted {
+        match TcpListener::bind(&a) {
+            Ok(l) => listeners.push(l),
+            Err(e) => {
+                if first_err.is_none() {
+                    first_err = Some(e);
+                }
+            }
+        }
+    }
+    if listeners.is_empty() {
+        return Err(first_err.unwrap_or_else(|| std::io::Error::other("no address to bind")));
+    }
+    Ok(listeners)
+}
+
+/// True when the class can be told an address with no port in it.
+pub fn on_port_80() -> bool {
+    PORT80.load(Ordering::Relaxed)
+}
+
+static PORT80: AtomicBool = AtomicBool::new(false);
+
+fn accept_loop(listeners: Vec<TcpListener>, root: PathBuf, helpers: usize) {
     let (tx, rx) = mpsc::channel::<TcpStream>();
     let rx = Arc::new(Mutex::new(rx));
     for _ in 0..helpers {
@@ -167,9 +337,23 @@ fn accept_loop(listener: TcpListener, root: PathBuf, helpers: usize) {
             }
         });
     }
-    for s in listener.incoming().flatten() {
-        let _ = s.set_nodelay(true);
-        let _ = tx.send(s);
+    for l in &listeners {
+        if l.local_addr().map(|a| a.port()).unwrap_or(0) == 80 {
+            PORT80.store(true, Ordering::Relaxed);
+        }
+    }
+    let mut threads = Vec::new();
+    for l in listeners {
+        let tx = tx.clone();
+        threads.push(thread::spawn(move || {
+            for s in l.incoming().flatten() {
+                let _ = s.set_nodelay(true);
+                let _ = tx.send(s);
+            }
+        }));
+    }
+    for t in threads {
+        let _ = t.join();
     }
 }
 
@@ -180,6 +364,7 @@ hub serve  -  hand out the files in a folder to every device in the room
   hub serve <folder> [options]
 
   --name <network>      create a wifi network with this name and serve over it
+  --notice <text>       a message shown at the top of every kid's page
   --password <word>     password for that network (at least 8 characters)
   --helpers <number>    how many devices to serve at once (default: 8 per core)
   --port <number>       which port to listen on (default 8080)
@@ -220,6 +405,12 @@ hub serve  -  hand out the files in a folder to every device in the room
         let value = || -> Option<String> { args.get(i + 1).cloned() };
         match a {
             "--name" => { ssid = value(); i += 2; }
+            "--notice" => {
+                if let Some(v) = value() {
+                    crate::page::set_notice(&v);
+                }
+                i += 2;
+            }
             "--password" => { password = value(); i += 2; }
             "--helpers" | "--workers" => {
                 helpers = value().and_then(|v| v.parse().ok()).unwrap_or(helpers).clamp(1, 512);
@@ -263,7 +454,7 @@ hub serve  -  hand out the files in a folder to every device in the room
         _ => None,
     };
 
-    let listener = match TcpListener::bind(&addr) {
+    let listeners = match bind_all(&addr) {
         Ok(l) => l,
         Err(e) => {
             if let Some(h) = &hotspot { h.down(); }
@@ -273,6 +464,7 @@ hub serve  -  hand out the files in a folder to every device in the room
         }
     };
 
+    probe_handin(&root);
     if let Some(h) = &hotspot {
         println!("network \"{}\" is up on {}", h.ssid, h.iface);
     }
@@ -291,7 +483,7 @@ hub serve  -  hand out the files in a folder to every device in the room
         crate::net::start_heartbeat();
     }
 
-    accept_loop(listener, root, helpers);
+    accept_loop(listeners, root, helpers);
 }
 
 /// Serving files is I/O-bound: a helper spends most of its life blocked on a
@@ -398,28 +590,95 @@ fn serve_one(
     // then tried to strip again, so every valid range parsed as None and every
     // resumed download got a 416. Caught by the range test, which is the one
     // test this program exists to pass.
-    let range = lines
+    let range = text
+        .lines()
         .find(|l| l.to_ascii_lowercase().starts_with("range:"))
         .and_then(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()));
 
+    let host = text
+        .lines()
+        .find(|l| l.to_ascii_lowercase().starts_with("host:"))
+        .and_then(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()));
+
     let mut out = BufWriter::with_capacity(BUF, sock.try_clone()?);
-    let decoded = percent_decode(raw_path.split('?').next().unwrap_or("/"));
+    let peer_ip = peer.split(':').next().unwrap_or(peer).to_string();
+
+    // The captive answer. A request addressed to any name that is not one of
+    // our own addresses is a phone's connectivity probe (the dnsmasq drop-in
+    // resolves those names to us) or a kid who typed some site into the bar.
+    // Both get sent to the class page, and the redirect is exactly what makes
+    // a joining phone pop "Sign in to this network".
+    if crate::page::is_foreign_host(host.as_deref(), &our_names(sock)) {
+        let to = redirect_base(sock);
+        write!(out, "HTTP/1.1 302 Found\r\nLocation: {to}/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")?;
+        out.flush()?;
+        return Ok(false);
+    }
+
+    let path_only = raw_path.split('?').next().unwrap_or("/");
+    let query = raw_path.split_once('?').map(|(_, q)| q).unwrap_or("");
+
+    if method == "POST" {
+        // POSTs answer with a redirect and the connection closes: the body has
+        // been consumed and a clean start is worth more than one saved
+        // handshake.
+        if path_only == "/note" {
+            let len: usize = text
+                .lines()
+                .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
+                .and_then(|l| l.split_once(':'))
+                .and_then(|(_, v)| v.trim().parse().ok())
+                .unwrap_or(0);
+            let mut body = vec![0u8; len.min(64 * 1024)];
+            reader.read_exact(&mut body)?;
+            let tag = crate::page::take_note(&peer_ip, &String::from_utf8_lossy(&body), root);
+            crate::page::redirect_done(&mut out, tag)?;
+            return Ok(false);
+        }
+        if path_only == "/handin" {
+            let outcome = crate::page::take_upload(reader, &text, &peer_ip, root)?;
+            crate::page::redirect_done(&mut out, outcome.tag)?;
+            return Ok(false);
+        }
+        crate::page::redirect_done(&mut out, "empty")?;
+        return Ok(false);
+    }
+
+    if path_only == "/" {
+        // `?list` is what another copy of this program asks for: one line per
+        // file, size then a tab then the name.
+        if query.contains("list") {
+            return respond(&mut out, 200, "text/plain; charset=utf-8", plain_listing(root, root).as_bytes()).map(|_| keep);
+        }
+        mark_page_seen(&peer_ip);
+        let done = query.strip_prefix("done=");
+        let page = crate::page::class_page(root, done);
+        return respond(&mut out, 200, "text/html; charset=utf-8", page.as_bytes()).map(|_| keep);
+    }
+    if path_only == "/files" {
+        mark_page_seen(&peer_ip);
+        return respond(&mut out, 200, "text/html; charset=utf-8", crate::page::files_frame(root).as_bytes()).map(|_| keep);
+    }
+
+    let decoded = percent_decode(path_only);
     let target = safe_join(root, &decoded);
 
     let target = match target {
         Some(t) => t,
         None => return respond(&mut out, 403, "text/plain", b"forbidden").map(|_| keep),
     };
+    // Handed-in work is INSIDE the folder and NEVER served: kid A's homework
+    // must not be downloadable by kid B. Ticking rules apply to everything
+    // else; an unticked file does not exist as far as the network can tell.
+    let rel = decoded.trim_start_matches('/');
+    let first = rel.split('/').next().unwrap_or("");
+    if first == "handed-in" || first.starts_with('.') || !is_allowed(first) {
+        return respond(&mut out, 404, "text/plain", b"not found").map(|_| keep);
+    }
     if !target.exists() {
         return respond(&mut out, 404, "text/plain", b"not found").map(|_| keep);
     }
     if target.is_dir() {
-        // `?list` is what another copy of this program asks for: one line per
-        // file, size then a tab then the name. The HTML index is for a phone
-        // with only a browser, which is most of the room.
-        if raw_path.contains("?list") {
-            return respond(&mut out, 200, "text/plain; charset=utf-8", plain_listing(&target, root).as_bytes()).map(|_| keep);
-        }
         return respond(&mut out, 200, "text/html; charset=utf-8", listing(&target, root).as_bytes()).map(|_| keep);
     }
     if method == "HEAD" {
@@ -428,11 +687,46 @@ fn serve_one(
         out.flush()?;
         return Ok(keep);
     }
-    send_file(&mut out, &target, range.as_deref(), peer).map(|_| keep)
+    // READ opens in the browser (real content type, inline); GET IT forces the
+    // download (?dl=1). The difference is one header, and it is the difference
+    // between a video that streams and thirty storage-full phones.
+    let force_download = query.contains("dl=1");
+    send_file(&mut out, &target, range.as_deref(), peer, force_download).map(|_| keep)
 }
 
-fn send_file(out: &mut BufWriter<TcpStream>, path: &Path, range: Option<&str>, peer: &str) -> std::io::Result<()> {
+/// Names under which this machine may be legitimately addressed.
+fn our_names(sock: &TcpStream) -> Vec<String> {
+    let mut names: Vec<String> = crate::net::local_addresses().iter().map(|a| a.to_string()).collect();
+    if let Ok(a) = sock.local_addr() {
+        names.push(a.ip().to_string());
+    }
+    names.push("localhost".to_string());
+    names.push("127.0.0.1".to_string());
+    names
+}
+
+/// Where the captive redirect points: our address on this very socket, which
+/// needs no configuration and is right on every interface.
+fn redirect_base(sock: &TcpStream) -> String {
+    let (ip, port) = sock
+        .local_addr()
+        .map(|a| (a.ip().to_string(), a.port()))
+        .unwrap_or_else(|_| ("10.42.0.1".to_string(), 80));
+    if port == 80 {
+        format!("http://{ip}")
+    } else {
+        format!("http://{ip}:{port}")
+    }
+}
+
+fn send_file(out: &mut BufWriter<TcpStream>, path: &Path, range: Option<&str>, peer: &str, force_download: bool) -> std::io::Result<()> {
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let ctype = if force_download { "application/octet-stream" } else { crate::page::content_type(&name) };
+    let disposition = if force_download {
+        format!("Content-Disposition: attachment; filename=\"{name}\"\r\n")
+    } else {
+        String::new()
+    };
     let total = fs::metadata(path)?.len();
     let (start, end) = match range.and_then(|r| parse_range(r, total)) {
         Some(v) => v,
@@ -444,9 +738,9 @@ fn send_file(out: &mut BufWriter<TcpStream>, path: &Path, range: Option<&str>, p
     };
     let len = end - start + 1;
     if range.is_some() {
-        write!(out, "HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nContent-Type: application/octet-stream\r\nContent-Range: bytes {start}-{end}/{total}\r\nContent-Length: {len}\r\n\r\n")?;
+        write!(out, "HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nContent-Type: {ctype}\r\n{disposition}Content-Range: bytes {start}-{end}/{total}\r\nContent-Length: {len}\r\n\r\n")?;
     } else {
-        write!(out, "HTTP/1.1 200 OK\r\nAccept-Ranges: bytes\r\nContent-Type: application/octet-stream\r\nContent-Length: {len}\r\n\r\n")?;
+        write!(out, "HTTP/1.1 200 OK\r\nAccept-Ranges: bytes\r\nContent-Type: {ctype}\r\n{disposition}Content-Length: {len}\r\n\r\n")?;
     }
 
     let mut f = fs::File::open(path)?;
@@ -518,7 +812,7 @@ fn safe_join(root: &Path, rel: &str) -> Option<PathBuf> {
     if p.starts_with(root) { Some(p) } else { None }
 }
 
-fn percent_decode(s: &str) -> String {
+pub fn percent_decode(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
@@ -539,20 +833,12 @@ fn percent_decode(s: &str) -> String {
 /// size<TAB>name, one file per line. Folders are skipped: the tool hands out
 /// a folder of files, and a teacher who nests them can say so and we can walk
 /// them later.
-fn plain_listing(dir: &Path, root: &Path) -> String {
+fn plain_listing(dir: &Path, _root: &Path) -> String {
+    // The same visibility rules as the class page: ticked files only. A tool
+    // and a browser must never disagree about what exists.
     let mut s = String::new();
-    if let Ok(rd) = fs::read_dir(dir) {
-        let mut items: Vec<_> = rd.flatten().collect();
-        items.sort_by_key(|e| e.file_name());
-        for e in items {
-            let Ok(md) = e.metadata() else { continue };
-            if !md.is_file() {
-                continue;
-            }
-            let rel = e.path().strip_prefix(root).map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_else(|_| e.file_name().to_string_lossy().into_owned());
-            s.push_str(&format!("{}\t{}\n", md.len(), rel));
-        }
+    for (name, size) in visible_files(dir) {
+        s.push_str(&format!("{size}\t{name}\n"));
     }
     s
 }

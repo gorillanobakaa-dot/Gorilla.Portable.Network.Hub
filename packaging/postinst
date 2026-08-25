@@ -11,5 +11,12 @@ if [ "$1" = configure ]; then
     if which update-desktop-database >/dev/null 2>&1; then
         update-desktop-database -q /usr/share/applications 2>/dev/null || true
     fi
+    # Port 80 is where a joining phone's own connectivity probe arrives, so it
+    # is what makes the sign-in screen pop up and open the class page. Ports
+    # under 1024 need this one capability; granting it here means the teacher
+    # never types sudo. If setcap is missing the tool still works on 8080.
+    if which setcap >/dev/null 2>&1; then
+        setcap 'cap_net_bind_service=+ep' /usr/bin/hub 2>/dev/null || true
+    fi
 fi
 exit 0

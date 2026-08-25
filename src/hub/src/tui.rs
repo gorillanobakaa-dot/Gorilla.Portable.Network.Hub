@@ -31,7 +31,12 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-const PORT: u16 = 8080;
+/// 8080 unless the bench overrides it. The pty test harness has to run a
+/// second copy on a machine where a real one may already be serving, and
+/// killing the teacher's live instance to free the port is not a test.
+fn port() -> u16 {
+    std::env::var("HUB_PORT").ok().and_then(|v| v.parse().ok()).unwrap_or(8080)
+}
 /// Four redraws a second. Fast enough that a rate reading looks live, slow
 /// enough to be invisible on a 2012 processor: a full frame is one write of a
 /// few kilobytes.
@@ -74,6 +79,10 @@ pub fn run() {
 enum Screen {
     Home,
     Send,
+    /// The tick list: which files in the folder the network is allowed to see.
+    /// `pre` is the review before anything starts; the same screen mid-lesson
+    /// is how the teacher publishes or withdraws a file while kids watch.
+    Tick { pre: bool },
     Sending,
     Receive,
     ReceiveFiles,
@@ -102,6 +111,11 @@ struct App {
     joined: Vec<net::Joined>,
     joined_at: Option<Instant>,
     names: net::NameCache,
+    /// (name, size, ticked) for the tick screen.
+    tick: Vec<(String, u64, bool)>,
+    /// The notice editor borrows the same editing buffer as the form fields;
+    /// this flag says which thing a commit belongs to.
+    editing_notice: bool,
 
     // the receive form
     found: Found,
@@ -140,9 +154,11 @@ impl App {
             joined: Vec::new(),
             joined_at: None,
             names: net::NameCache::default(),
+            tick: Vec::new(),
+            editing_notice: false,
             found: Arc::new(Mutex::new(None)),
             server: None,
-            server_port: PORT,
+            server_port: port(),
             typed_address: String::new(),
             files: Vec::new(),
             save_into: here.to_string_lossy().into_owned(),
@@ -178,6 +194,7 @@ impl App {
         match self.screen {
             Screen::Home => self.draw_home(&mut f),
             Screen::Send => self.draw_send(&mut f),
+            Screen::Tick { pre } => self.draw_tick(&mut f, pre),
             Screen::Sending => self.draw_sending(&mut f),
             Screen::Receive => self.draw_receive(&mut f),
             Screen::ReceiveFiles => self.draw_files(&mut f),
@@ -299,6 +316,37 @@ impl App {
         }
     }
 
+    fn draw_tick(&self, f: &mut Frame, pre: bool) {
+        self.title(f, "What gets handed out");
+        if self.tick.is_empty() {
+            f.push("  The folder has no files in it.");
+        }
+        let lines: Vec<String> = self
+            .tick
+            .iter()
+            .map(|(n, sz, t)| format!("  [{}] {:<34}{:>10}", if *t { "x" } else { " " }, term::truncate(n, 32), human(*sz)))
+            .collect();
+        let w = term::group_width(&lines);
+        let room = f.rows.saturating_sub(f.used() + 5);
+        for (i, line) in lines.iter().enumerate().take(room) {
+            if i == self.row {
+                f.push_selected_within(line, w);
+            } else {
+                f.push(line);
+            }
+        }
+        if lines.len() > room {
+            f.push_dim(&format!("  and {} more not shown, the window is too short", lines.len() - room));
+        }
+        f.blank();
+        let ticked = self.tick.iter().filter(|(_, _, t)| *t).count();
+        f.push(&format!("  {ticked} of {} will be visible to the class.", self.tick.len()));
+        if !pre {
+            f.push_dim("  Ticking a file hands it out NOW; unticking withdraws it.");
+        }
+        self.hints(f, "  space to tick    a all    n none    enter to continue    esc to go back");
+    }
+
     fn draw_sending(&mut self, f: &mut Frame) {
         // A hotspot does not have an address the instant nmcli returns; the
         // interface has to come up and be given one. Asking again while the
@@ -329,6 +377,12 @@ impl App {
                             if j.name.is_none() {
                                 self.names.ensure(j.ip, ours);
                             }
+                            // Whatever name we have, the serving side gets it
+                            // too, so handed-in files and notes are labelled
+                            // "Amina-phone" rather than an address.
+                            if let Some(n) = j.name.clone().or_else(|| self.names.get(j.ip)) {
+                                serve::set_device_name(&j.ip.to_string(), &n);
+                            }
                         }
                         list
                     }
@@ -344,14 +398,35 @@ impl App {
             f.push(&format!("  Wifi network      {}", h.ssid));
             f.push(&format!("  Password          {}", self.password));
         }
+        let port80 = serve::on_port_80();
         for a in &self.addresses {
-            f.push(&format!("  Address to type   http://{a}:{PORT}"));
+            if port80 {
+                f.push(&format!("  Address to type   http://{a}"));
+            } else {
+                f.push(&format!("  Address to type   http://{a}:{}", port()));
+            }
+        }
+        // Two loud states a USB drive causes. The folder is often a flash
+        // drive kept as the teacher's failsafe, and it gets unplugged, filled
+        // and write-locked as a matter of course.
+        let root = PathBuf::from(shellexpand(&self.folder));
+        if !root.exists() {
+            f.blank();
+            f.push("  THE FOLDER CANNOT BE REACHED. If it lives on a USB drive,");
+            f.push("  the drive may have been unplugged. Files stop until it is back.");
+        } else if !serve::handin_available() {
+            f.push_dim("  Hand-in is off: that folder cannot receive files (read-only?).");
+        }
+        let notice = crate::page::notice();
+        if !notice.is_empty() {
+            f.push(&format!("  Notice            {}", notice));
         }
         f.blank();
 
         let live = serve::transfers();
         let sent = serve::total_sent();
-        let getting = live.iter().filter(|t| !t.finished).count();
+        let getting = live.iter().filter(|t| !t.finished && !t.handing_in).count();
+        let handing = live.iter().filter(|t| !t.finished && t.handing_in).count();
         let mut rows: Vec<String> = Vec::new();
 
         // One row per DEVICE ON THE NETWORK, whether or not it has asked for
@@ -367,40 +442,57 @@ impl App {
                 .unwrap_or_else(|| j.ip.to_string());
             match live.iter().find(|t| t.peer == j.ip.to_string()) {
                 Some(t) => rows.push(transfer_row(&who, t)),
-                None => rows.push(format!("  {:<24}on the network, nothing asked for yet", term::truncate(&who, 22))),
+                None if serve::has_seen_page(&j.ip.to_string()) => {
+                    rows.push(format!("  {:<24}looking at the page", term::truncate(&who, 22)));
+                }
+                None => rows.push(format!("  {:<24}on the network, has not opened the page yet", term::truncate(&who, 22))),
             }
         }
         // Anything downloading from an address that is not on our subnet: the
         // case where the class is on a network somebody else provided.
         for t in &live {
             if !self.joined.iter().any(|j| j.ip.to_string() == t.peer) {
-                rows.push(transfer_row(&t.peer, t));
+                let who = serve::device_label(&t.peer);
+                rows.push(transfer_row(&who, t));
             }
         }
 
-        let on_net = self.joined.len().max(rows.len());
-        f.push(&match (on_net, getting) {
+        // With a hotspot the joined list is authoritative. Over somebody
+        // else's network the only headcount is who has opened the page.
+        let on_net = self.joined.len().max(rows.len()).max(serve::pages_seen_count());
+        f.push(&match (on_net, getting + handing) {
             (0, 0) => "  Nothing has connected yet.".to_string(),
-            (n, 0) => format!("  {n} on the network, none getting files yet, {} sent", human(sent)),
-            (n, g) => format!("  {n} on the network, {g} getting files, {} sent", human(sent)),
+            (n, 0) => format!("  {n} on the network, none moving files, {} sent", human(sent)),
+            (n, _) => format!(
+                "  {n} on the network, {getting} getting, {handing} handing in, {} sent",
+                human(sent)
+            ),
         });
         f.blank();
 
         if rows.is_empty() {
-            f.push_dim("  On their computer: open the same tool and choose");
-            f.push_dim("  \"Get files from another computer\".");
-            f.push_dim("  On a phone: open a browser at the address above.");
+            f.push_dim("  On a phone or any computer: join the wifi and the sign-in");
+            f.push_dim("  screen brings them here by itself. Or open a browser at the");
+            f.push_dim("  address above.");
         }
+        let notes = crate::page::notes(4);
+        let note_rows = if notes.is_empty() { 0 } else { notes.len() + 1 };
         // Capped by what is left on screen, and what was dropped is said out
         // loud. A list that silently stops at ten reads as "ten devices".
-        let room = f.rows.saturating_sub(f.used() + 3);
+        let room = f.rows.saturating_sub(f.used() + 3 + note_rows);
         for r in rows.iter().take(room) {
             f.push(r);
         }
         if rows.len() > room {
             f.push_dim(&format!("  and {} more not shown, the window is too short", rows.len() - room));
         }
-        self.hints(f, "  q or esc to stop handing out");
+        if !notes.is_empty() {
+            f.blank();
+            for (who, text) in &notes {
+                f.push_dim(&format!("  {}: {}", term::truncate(who, 18), text));
+            }
+        }
+        self.hints(f, "  f files    n notice    q or esc to stop handing out");
     }
 
     fn draw_receive(&self, f: &mut Frame) {
@@ -451,7 +543,7 @@ impl App {
 
     fn draw_files(&self, f: &mut Frame) {
         let who = match (self.server, self.server_port) {
-            (Some(ip), p) if p == PORT => ip.to_string(),
+            (Some(ip), p) if p == port() => ip.to_string(),
             (Some(ip), p) => format!("{ip} port {p}"),
             _ => String::new(),
         };
@@ -581,6 +673,7 @@ impl App {
         match self.screen {
             Screen::Home => self.home_key(k),
             Screen::Send => self.send_key(k),
+            Screen::Tick { pre } => self.tick_key(k, pre),
             Screen::Sending => self.sending_key(k),
             Screen::Receive => self.receive_key(k),
             Screen::ReceiveFiles => self.files_key(k),
@@ -617,6 +710,11 @@ impl App {
     }
 
     fn commit(&mut self, buf: String) {
+        if self.editing_notice {
+            self.editing_notice = false;
+            crate::page::set_notice(&buf);
+            return;
+        }
         match self.screen {
             Screen::Send => match self.row {
                 0 => self.folder = buf,
@@ -677,7 +775,7 @@ impl App {
         match k {
             Key::Enter => {
                 if self.row == n - 1 {
-                    self.begin_sending();
+                    self.open_tick(true);
                 } else {
                     let fields = self.send_fields();
                     // Editing starts from the real value, not from the
@@ -704,6 +802,15 @@ impl App {
 
     fn sending_key(&mut self, k: Key) -> bool {
         match k {
+            Key::Char('f') => {
+                self.open_tick(false);
+                return false;
+            }
+            Key::Char('n') => {
+                self.editing_notice = true;
+                self.editing = Some(crate::page::notice());
+                return false;
+            }
             Key::Char('q') | Key::Esc => {
                 if let Some(h) = self.hotspot.take() {
                     h.down();
@@ -722,6 +829,64 @@ impl App {
         false
     }
 
+    fn tick_key(&mut self, k: Key, pre: bool) -> bool {
+        self.move_row(k, self.tick.len().max(1));
+        match k {
+            Key::Char(' ') => {
+                if let Some(e) = self.tick.get_mut(self.row) {
+                    e.2 = !e.2;
+                }
+                if !pre {
+                    self.apply_ticks();
+                }
+            }
+            Key::Char('a') => {
+                for e in &mut self.tick {
+                    e.2 = true;
+                }
+                if !pre {
+                    self.apply_ticks();
+                }
+            }
+            Key::Char('n') => {
+                for e in &mut self.tick {
+                    e.2 = false;
+                }
+                if !pre {
+                    self.apply_ticks();
+                }
+            }
+            Key::Enter => {
+                self.apply_ticks();
+                if pre {
+                    self.begin_sending();
+                } else {
+                    self.screen = Screen::Sending;
+                    self.row = 0;
+                }
+            }
+            Key::Esc => {
+                if pre {
+                    self.screen = Screen::Send;
+                } else {
+                    self.apply_ticks();
+                    self.screen = Screen::Sending;
+                }
+                self.row = 0;
+            }
+            Key::Char('q') if !pre => {
+                // q on the mid-lesson tick screen must not quietly quit the
+                // whole program while a class is connected.
+                self.apply_ticks();
+                self.screen = Screen::Sending;
+                self.row = 0;
+            }
+            Key::Quit => return true,
+            _ => {}
+        }
+        false
+    }
+
     fn receive_key(&mut self, k: Key) -> bool {
         let found = self.found.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let list = found.unwrap_or_default();
@@ -729,7 +894,12 @@ impl App {
         match k {
             Key::Enter => {
                 if self.row < list.len() {
-                    self.open_server(list[self.row].0, PORT);
+                    let ip = list[self.row].0;
+                    if net::list_files(ip, 80).is_ok() {
+                        self.open_server(ip, 80);
+                    } else {
+                        self.open_server(ip, port());
+                    }
                 } else {
                     self.editing = Some(self.typed_address.clone());
                 }
@@ -810,6 +980,51 @@ impl App {
         self.row = 0;
     }
 
+    /// Read the folder and open the tick screen. Mid-lesson the list is
+    /// re-read so a file copied in during the lesson appears, UNTICKED:
+    /// putting a file in the folder is not publishing it, ticking it is.
+    fn open_tick(&mut self, pre: bool) {
+        let folder = PathBuf::from(shellexpand(&self.folder));
+        if pre && !folder.is_dir() {
+            self.note(&format!(
+                "There is no folder called\n\n{}\n\nCheck the name, or make the folder first.",
+                self.folder
+            ));
+            self.back = Screen::Send;
+            return;
+        }
+        let mut fresh: Vec<(String, u64, bool)> = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(&folder) {
+            let mut items: Vec<_> = rd.flatten().collect();
+            items.sort_by_key(|e| e.file_name());
+            for e in items {
+                let Ok(md) = e.metadata() else { continue };
+                if !md.is_file() {
+                    continue;
+                }
+                let name = e.file_name().to_string_lossy().into_owned();
+                if name.starts_with('.') {
+                    continue;
+                }
+                let ticked = if pre {
+                    true // the review starts from "everything", the teacher unticks
+                } else {
+                    self.tick.iter().find(|(n, _, _)| *n == name).map(|(_, _, t)| *t).unwrap_or(false)
+                };
+                fresh.push((name, md.len(), ticked));
+            }
+        }
+        self.tick = fresh;
+        self.screen = Screen::Tick { pre };
+        self.row = 0;
+    }
+
+    fn apply_ticks(&mut self) {
+        let set: std::collections::HashSet<String> =
+            self.tick.iter().filter(|(_, _, t)| *t).map(|(n, _, _)| n.clone()).collect();
+        serve::set_allowed(Some(set));
+    }
+
     fn begin_sending(&mut self) {
         let folder = PathBuf::from(shellexpand(&self.folder));
         if !folder.is_dir() {
@@ -839,7 +1054,7 @@ impl App {
                 }
             }
         }
-        let addr = format!("0.0.0.0:{PORT}");
+        let addr = format!("0.0.0.0:{}", port());
         if let Err(e) = serve::start(&folder, &addr, self.helpers) {
             if let Some(h) = self.hotspot.take() {
                 h.down();
@@ -861,7 +1076,14 @@ impl App {
         *self.found.lock().unwrap_or_else(|e| e.into_inner()) = None;
         let found = Arc::clone(&self.found);
         std::thread::spawn(move || {
-            let list = net::find_servers(PORT);
+            // 80 first (the packaged install), 8080 for an unpackaged build.
+            let mut list = net::find_servers(80);
+            let more = net::find_servers(port());
+            for (ip, n) in more {
+                if !list.iter().any(|(i, _)| *i == ip) {
+                    list.push((ip, n));
+                }
+            }
             *found.lock().unwrap_or_else(|e| e.into_inner()) = Some(list);
         });
         self.row = 0;
@@ -875,12 +1097,26 @@ impl App {
             .trim()
             .trim_start_matches("http://")
             .trim_end_matches('/');
-        let (host, port) = match t.split_once(':') {
-            Some((h, p)) => (h, p.parse().unwrap_or(PORT)),
-            None => (t, PORT),
+        let (host, typed_port) = match t.split_once(':') {
+            Some((h, p)) => (h, Some(p.parse().unwrap_or_else(|_| port()))),
+            None => (t, None),
         };
         match host.parse() {
-            Ok(ip) => self.open_server(ip, port),
+            Ok(ip) => {
+                // No port typed: the packaged teacher machine answers on 80,
+                // an unpackaged one on 8080. Try both rather than teach anyone
+                // what a port is.
+                match typed_port {
+                    Some(p) => self.open_server(ip, p),
+                    None => {
+                        if net::list_files(ip, 80).map(|_| ()).is_ok() {
+                            self.open_server(ip, 80);
+                        } else {
+                            self.open_server(ip, port());
+                        }
+                    }
+                }
+            }
             Err(_) => {
                 self.note(&format!(
                     "{} is not an address.\n\nAn address looks like 10.42.0.1",

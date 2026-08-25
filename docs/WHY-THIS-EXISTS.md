@@ -1,4 +1,4 @@
-<!-- Version: 1.2.0 · updated 26-08-24-23-32 -->
+<!-- Version: 1.3.0 · updated 26-08-25-08-14 -->
 # Why this exists
 
 Draft of the layman track, written 2026-08-24, destined for the repository
@@ -231,3 +231,43 @@ them meant that **looking for the teacher's computer had never worked at all**:
 the screen said "nothing found on this network" while a computer sat there
 answering the whole time. Two halves of the program were each correct on their
 own and wrong together, which is exactly the kind of thing reading cannot catch.
+
+## The kid's whole journey, minute by minute
+
+The old world put the knowledge in the user's head. This puts all of it in the
+machines. The kid's total skill set: join a wifi, tap a notification, tap a big
+button. Those are the three things that generation does hundreds of times a day.
+
+**Minute 0, teacher.** Open hub, pick the folder (usually the USB drive that is
+also their failsafe), tick what the class may see, start. The board says the
+network name and the password. Nothing else.
+
+**Minute 1, kid.** Joins the wifi and types the password. The single act of
+typing in the whole flow, and the one ritual every kid already knows.
+
+**Minute 1 and three seconds.** The phone silently asks its built-in question,
+"is there internet here?". The laptop answers wrongly on purpose, which is the
+mechanism behind every hotel sign-in page ever, and the phone itself announces
+the lesson: "Sign in to this network. Tap here." On iPhones the page opens by
+itself. On Windows laptops a toast pops AND the machine stops abandoning the
+network after 16 seconds, a failure we measured before understanding it.
+
+**Minute 2.** The page is the folder: one big row per file. READ or PLAY opens
+it on the spot, and the video streams rather than filling the phone. GET IT
+keeps a copy, which lands in Downloads, where every meme they have ever saved
+already lives. Nothing to navigate, nothing to configure.
+
+**Minute 3.** Homework goes the other way through the same page, using the
+same picker they use to attach a photo. A retried send lands once. A fixed and
+resubmitted version is kept alongside the first, labelled. And a kid who does
+not understand question 3 can say so in a note that arrives on the teacher's
+screen under the device's own name, without raising a hand.
+
+## What the teacher sees while all that happens
+
+One line per device, by name where the network knows it. Who is getting the
+video and how fast, who is handing work in, who joined but has not opened the
+page (the teacher walks to that desk; the kid never self-diagnoses), the last
+few notes. Two warnings exist because real classrooms caused them: the folder
+vanishing (a USB drive pulled mid-lesson) and a drive that refuses writes, which
+switches hand-in off loudly instead of quietly eating homework.

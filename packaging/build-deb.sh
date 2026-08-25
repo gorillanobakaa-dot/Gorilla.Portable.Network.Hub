@@ -1,5 +1,5 @@
 #!/bin/bash
-# Version: 1.0.0 · updated 26-08-24-23-15
+# Version: 1.0.0 · updated 26-08-25-08-06
 #
 # Build the Debian package. Everything the .deb contains is generated here, so
 # the package can be rebuilt from a clone rather than from somebody's shell
@@ -31,10 +31,16 @@ fi
 
 rm -rf "$STAGE"
 mkdir -p "$STAGE"/{DEBIAN,usr/bin,usr/share/applications,usr/share/man/man1}
+mkdir -p "$STAGE/etc/NetworkManager/dnsmasq-shared.d"
 DOC=$STAGE/usr/share/doc/gorilla-portable-network-hub
 mkdir -p "$DOC"
 
 install -m755 "$BIN" "$STAGE/usr/bin/hub"
+
+# The captive-portal answers. Marked as a conffile below so a teacher's local
+# edit (a different hotspot address) survives upgrades.
+install -m644 "$ROOT/packaging/etc/hub-captive.conf"         "$STAGE/etc/NetworkManager/dnsmasq-shared.d/hub-captive.conf"
+echo "/etc/NetworkManager/dnsmasq-shared.d/hub-captive.conf" > "$STAGE/DEBIAN/conffiles"
 
 # Every icon size rendered for real from the master, never one file copied.
 python3 "$ROOT/packaging/make-icons.py" \

@@ -1,4 +1,4 @@
-<!-- Version: 1.2.0 · updated 26-08-24-23-32 -->
+<!-- Version: 1.3.0 · updated 26-08-25-08-14 -->
 # Gorilla Portable Network Hub: the developer track
 
 Companion to `WHY-THIS-EXISTS.md`, which is the layman track and is not a
@@ -551,3 +551,83 @@ discarded. One `stat`, needs nothing from the server, unlike the digest path
 which only runs when the peer offers fingerprints. That is the **second**
 instance of one trap in a single day; the first was verification that could not
 run because of a write-only file handle.
+
+## 8. The class page and the captive portal
+
+Added 2026-08-25. Everything in this section is browser-side zero-install:
+the kids' half of the tool is any browser since roughly 2009.
+
+### The captive chain, piece by piece
+
+1. `packaging/etc/hub-captive.conf` lands in
+   `/etc/NetworkManager/dnsmasq-shared.d/`, which NetworkManager reads ONLY
+   when it starts dnsmasq for a shared (hotspot) connection. It answers the
+   connectivity probe names of Android, iOS, Windows, GNOME, KDE, Ubuntu,
+   Debian and Firefox with 10.42.0.1. Probe names only, not a wildcard, so a
+   hotspot that really is sharing internet keeps working for real sites.
+2. The .deb postinst runs `setcap cap_net_bind_service=+ep` on the binary,
+   so serving binds port 80 (where probes go) with no sudo at lesson time.
+   `bind_all` binds the named port AND port 80, and falls back cleanly when
+   the capability is absent (unpackaged builds: 8080 only).
+3. `serve_one` compares the request's Host header against our own addresses.
+   Foreign host: `302 Location: http://<our addr>/`. That single rule turns
+   the probe into the OS's own "Sign in to this network" screen, whose page
+   is the class page. Verified with curl sending `Host: captive.apple.com`
+   and `Host: connectivitycheck.gstatic.com` [measured 2026-08-25].
+
+The one edge: a phone's sign-in mini-browser is vendor-sandboxed and file
+downloads inside it vary; the page says "open your normal browser" and the
+printed fallback is the bare address, no port, thanks to port 80.
+
+### The page itself
+
+Hand-written HTML, inline CSS, ZERO JavaScript. The file list lives in an
+iframe with a meta refresh every 6 seconds, so the list updates (the teacher
+ticking a file publishes it within seconds) while a half-typed note on the
+parent page survives. READ/PLAY links serve the real content type inline
+(video streams over the byte ranges that already existed for resume); GET IT
+adds `?dl=1`, which is `Content-Disposition: attachment`.
+
+### Hand-in
+
+Multipart parsed by hand, streamed to disk (a 200 MB homework video on a 2 GB
+laptop must never be buffered in memory), with a rolling tail held back so a
+boundary straddling any read edge is handled; the test feeds the same body
+three bytes at a time. Files land in `<folder>/handed-in/` under
+`<device>--<name>`, which the serving side REFUSES to serve (tested).
+Idempotency: same device, same name, same SHA-256 = the retry, dropped with
+the same answer. Different bytes, same name = `--v2`, and the roster says
+"2nd version". Disk trouble (read-only USB drive, full drive, unplugged) is
+an ANSWER ("tell your teacher"), never a dropped socket; writability is
+probed at start and the page hides the hand-in form when the drive refuses.
+Uploads `sync_all` before rename: the drive this lands on is the teacher's
+failsafe and gets unplugged the moment the lesson ends.
+
+### Notes and the notice
+
+`POST /note` with a per-render random token: first arrival lands, every
+repeat of the same token gets the same success and no second note; a content
+net catches browsers that mangle the hidden field; a budget of 6 notes a
+minute per device absorbs the bored. Notes append to `handed-in/notes.txt`
+and show on the roster under the device's own name. The notice is a string
+the teacher edits from the roster (key n) or `--notice`; URLs in it become
+links (LocalSend's message-as-link trick).
+
+### The tick list
+
+`serve::set_allowed` holds the set of visible files; `visible_files` is the
+single source for the class page, `?list` and direct fetches, so a tool and a
+browser can never disagree about what exists. Unticked means 404, even with
+the exact name. The review screen opens before anything starts (default all
+ticked, the teacher unticks the marking sheet); mid-lesson the same screen
+(key f) publishes and withdraws live. A file copied into the folder during
+the lesson appears UNTICKED: putting a file in the folder is not publishing
+it, ticking it is.
+
+### Ports and testing
+
+`HUB_PORT` overrides the TUI's 8080 for the bench: the pty harness must run a
+second copy on a machine where a real one is already serving, and the first
+version of the live test silently probed the WRONG server (the owner's live
+instance) and drew conclusions from it. Prove which process answered before
+believing any localhost test.

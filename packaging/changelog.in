@@ -1,5 +1,26 @@
 gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
 
+  * The class page: a phone that joins the wifi gets its own sign-in screen
+    popped by the operating system, and the sign-in screen is the lesson.
+    Big buttons, works with no JavaScript on browsers back to 2009.
+  * Hand-in: kids send work back from the same page. Retries land once,
+    a changed resubmission is kept as a second version, and nothing in
+    handed-in/ is ever served back to the class.
+  * Notes: a kid can send a short note to the teacher; the teacher can put
+    a notice at the top of every kid's page.
+  * The tick list: the teacher chooses file by file what the network can
+    see, before starting and live during the lesson.
+  * Serves on port 80 as well as 8080 (the install grants that one
+    capability), and answers the connectivity probes of Android, iOS,
+    Windows, GNOME, KDE and Firefox via a NetworkManager dnsmasq drop-in.
+  * USB drives: hand-in switches itself off loudly on a read-only drive,
+    uploads are synced before they get their final name, and the roster
+    says so if the folder vanishes mid-lesson.
+
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+
+gorilla-portable-network-hub (0.1.0) unstable; urgency=medium
+
   * First package. One binary with a screen and four commands: serve, get,
     sums and doctor.
   * Running "hub" with no arguments opens the screen rather than printing
@@ -12,4 +33,4 @@ gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
   * Byte ranges and keep-alive on both sides, so an interrupted transfer
     carries on instead of starting again.
 
- -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  Sun, 24 Aug 2026 23:20:00 +0100

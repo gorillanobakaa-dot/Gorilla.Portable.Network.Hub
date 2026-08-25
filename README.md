@@ -1,4 +1,4 @@
-<!-- Version: 1.2.0 · updated 26-08-24-23-05 -->
+<!-- Version: 1.3.0 · updated 26-08-25-08-14 -->
 # Gorilla Portable Network Hub
 
 <!-- WHO-THIS-IS-FOR: managed block, do not edit by hand -->
@@ -101,20 +101,35 @@ the binary name here is not settled yet.
 ## How it is used
 
 **Handing out.** Open `hub`, choose *Hand out files to the class*, point it at a
-folder, and optionally give the wifi network a name and a password. It shows the
-address to write on the board and one line per device as they connect.
+folder (a USB drive is fine, that is what teachers actually carry), tick which
+files the class may see, and optionally give the wifi network a name and a
+password. It shows the address for the board and one line per device.
 
-**Going and getting.** Open `hub`, choose *Get files from another computer*. It
-looks for the teacher by itself: whoever runs the hotspot is the gateway, so
-that is the first place it asks, and if the room has a real router it sweeps the
-local addresses instead. Pick a file and it downloads, resuming by itself if the
-signal drops.
+**The kids need nothing installed, ever.** A phone or laptop that joins the
+wifi is told by its own operating system that something is waiting: the same
+"Sign in to this network" screen every hotel wifi uses, and the sign-in screen
+IS the class page. Big buttons: READ or PLAY opens a file right there (video
+streams instead of filling an 8 GB phone), GET IT keeps a copy in Downloads.
+The page also has *Hand in your work* (homework goes back to the teacher, with
+retries landing exactly once and a changed resubmission kept as a second
+version) and *Send a note to your teacher*. No addresses typed, no apps, no
+JavaScript needed, works in browsers back to 2009.
+
+**The teacher stays in charge.** A notice at the top of every kid's page (the
+blackboard, duplicated), a tick list that publishes or withdraws a file live
+during the lesson, and a roster naming every device: who is getting, who is
+handing in, who has not opened the page yet.
+
+**Going and getting, tool to tool.** Open `hub`, choose *Get files from another
+computer*. It looks for the teacher by itself and downloads with resume and
+per-piece verification, which is the upgrade over a browser for huge files on a
+bad signal.
 
 Everything is still there from the command line, for anybody who prefers it:
 
 ```
-hub serve ~/lessons --name Classroom --password chalkdust
-hub get http://10.42.0.1:8080/lessons.zip
+hub serve ~/lessons --name Classroom --password chalkdust --notice "Test on Friday."
+hub get http://10.42.0.1/lessons.zip
 hub doctor
 ```
 
