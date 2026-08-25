@@ -601,14 +601,43 @@ fetch  -  download a file, resuming if it was interrupted
 /// NOT exit the process and it does NOT print progress: both of those belong to
 /// the caller, because the same function is driven from a command line and from
 /// a screen that is redrawing four times a second.
+/// Download one file, with its size already known.
+///
+/// Every round trip is paid per FILE, and a folder is tens of thousands of
+/// them. Over wifi a round trip is about 4 ms (measured 2026-08-22, 4 ms ping),
+/// so three of them per file across 68,130 files is roughly thirteen minutes
+/// spent waiting rather than moving bytes.
+///
+/// Two of the three are avoidable when a listing has already been read:
+///
+///   * the size came with the listing, so probe_total is asking for something
+///     already known;
+///   * a file smaller than one chunk has exactly one piece, so per-piece
+///     fingerprints cannot tell you anything a failed fetch would not.
+///
+/// The plain command line still pays both, because there a URL arrives with no
+/// context and guessing would be worse than asking.
+pub fn download_known(url_str: &str, out: &str, workers: usize, verify: bool, known: u64)
+    -> Result<f64, String>
+{
+    download_inner(url_str, out, workers, verify, Some(known))
+}
+
 pub fn download(url_str: &str, out: &str, workers: usize, verify: bool) -> Result<f64, String> {
+    download_inner(url_str, out, workers, verify, None)
+}
+
+fn download_inner(url_str: &str, out: &str, workers: usize, verify: bool, known: Option<u64>) -> Result<f64, String> {
     let url = parse_url(url_str).ok_or_else(|| format!("That is not a web address: {url_str}"))?;
 
     // Held until main returns, so it covers the entire transfer and is
     // released automatically however we exit.
     let _awake = StayAwake::new();
 
-    let total = probe_total(&url).map_err(|e| describe(&e))?;
+    let total = match known {
+        Some(n) if n > 0 => n,
+        _ => probe_total(&url).map_err(|e| describe(&e))?,
+    };
     if total == 0 {
         return Err("That computer answered, but not with a file. \
                     Check the name is right.".into());
@@ -620,7 +649,11 @@ pub fn download(url_str: &str, out: &str, workers: usize, verify: bool) -> Resul
     DAMAGED.store(0, Ordering::Relaxed);
     // Per-chunk digests, if the server offers them. A mismatch requeues that
     // chunk alone; there is no whole-file rehash and no all-or-nothing verdict.
-    let sums: Arc<HashMap<u64, String>> = Arc::new(if verify {
+    // A file that fits in one piece has nothing to verify piecewise: the piece
+    // IS the file. Asking for its fingerprints costs a round trip to be told
+    // something the next failed fetch would tell us anyway.
+    let worth_verifying = verify && total > CHUNK;
+    let sums: Arc<HashMap<u64, String>> = Arc::new(if worth_verifying {
         match fetch_sums(&url) {
             Ok(m) if !m.is_empty() => { log(&format!("checking every piece against {} fingerprints", m.len())); m }
             _ => { log("no fingerprints offered, so the pieces cannot be checked"); HashMap::new() }

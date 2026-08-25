@@ -1827,7 +1827,10 @@ impl App {
                     }
                 }
                 let url = format!("http://{ip}:{port}/{}", crate::fetch::url_path(&e.name));
-                match crate::fetch::download(&url, &dest.to_string_lossy(), at_once, true) {
+                // The size came with the listing. Asking the server for it
+                // again is a round trip per file, and there are tens of
+                // thousands of files.
+                match crate::fetch::download_known(&url, &dest.to_string_lossy(), at_once, true, e.size) {
                     Ok(_) => bytes += e.size,
                     Err(err) => failed.push(format!("{}: {err}", e.name)),
                 }
