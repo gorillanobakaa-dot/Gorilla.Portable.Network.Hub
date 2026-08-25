@@ -507,7 +507,8 @@ pub fn take_note(peer_ip: &str, body: &str, root: &Path) -> &'static str {
     let dir = handed_in_dir(root);
     if std::fs::create_dir_all(&dir).is_ok() {
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("notes.txt")) {
-            let _ = writeln!(f, "{}: {text}", serve::full_label(peer_ip));
+            // Time first, so the log sorts and reads like a register.
+            let _ = writeln!(f, "{}  {}: {text}", crate::net::timestamp(), serve::full_label(peer_ip));
         }
     }
     "note"

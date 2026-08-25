@@ -120,12 +120,42 @@ pub fn full_label(ip: &str) -> String {
         let n = NAMES.lock().unwrap_or_else(|e| e.into_inner());
         n.iter().find(|(i, _)| i == ip).map(|(_, name)| name.clone())
     };
+    // The tag is the part that survives a reconnect. Everything else in this
+    // line can be shared by two devices or changed by one.
+    let tag = crate::net::device_tag(ip).map(|t| format!(" #{t}")).unwrap_or_default();
     match (claimed, device) {
-        (Some(c), Some(d)) => format!("{c} [{d}, {ip}]"),
-        (Some(c), None) => format!("{c} [{ip}]"),
-        (None, Some(d)) => format!("{d} [{ip}]"),
-        (None, None) => ip.to_string(),
+        (Some(c), Some(d)) => format!("{c}{tag} [{d}, {ip}]"),
+        (Some(c), None) => format!("{c}{tag} [{ip}]"),
+        (None, Some(d)) => format!("{d}{tag} [{ip}]"),
+        (None, None) => format!("{ip}{tag}"),
     }
+}
+
+/// Devices that have claimed a name somebody else is also using.
+///
+/// The direct answer to "thirty Cuntius.Maximuses and you cannot tell who is
+/// who": the teacher does not have to work it out, the screen says it. Keyed
+/// on the device tag, not the address, so one phone reconnecting under a new
+/// lease is NOT reported as a second impostor.
+pub fn duplicate_claims() -> Vec<String> {
+    let c = CLAIMED.lock().unwrap_or_else(|e| e.into_inner());
+    let mut seen: Vec<(String, String)> = Vec::new(); // (name, tag)
+    let mut dupes: Vec<String> = Vec::new();
+    for (ip, name) in c.iter() {
+        let tag = crate::net::device_tag(ip).unwrap_or_else(|| ip.clone());
+        if seen.iter().any(|(n, t)| n == name && t != &tag) {
+            if !dupes.contains(name) {
+                dupes.push(name.clone());
+            }
+        }
+        seen.push((name.clone(), tag));
+    }
+    dupes
+}
+
+/// The tag alone, for the roster.
+pub fn tag_for(ip: &str) -> Option<String> {
+    crate::net::device_tag(ip)
 }
 
 /// Device names the screen has resolved, so uploads and notes can be labelled

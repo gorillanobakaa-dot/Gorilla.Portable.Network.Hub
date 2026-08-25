@@ -448,6 +448,7 @@ impl App {
 
         let live = serve::transfers();
         let sent = serve::total_sent();
+        let dupes = serve::duplicate_claims();
         let getting = live.iter().filter(|t| !t.finished && !t.handing_in).count();
         let handing = live.iter().filter(|t| !t.finished && t.handing_in).count();
         let mut rows: Vec<String> = Vec::new();
@@ -499,6 +500,14 @@ impl App {
             f.push_dim("  On a phone or any computer: join the wifi and the sign-in");
             f.push_dim("  screen brings them here by itself. Or open a browser at the");
             f.push_dim("  address above.");
+        }
+        if !dupes.is_empty() {
+            f.push(&format!(
+                "  MORE THAN ONE DEVICE IS CALLING ITSELF: {}",
+                dupes.join(", ")
+            ));
+            f.push_dim("  The #tag after each name tells those devices apart.");
+            f.blank();
         }
         let notes = crate::page::notes(4);
         let note_rows = if notes.is_empty() { 0 } else { notes.len() + 1 };

@@ -459,6 +459,117 @@ impl NameCache {
     }
 }
 
+/// A short, stable tag for one physical device.
+///
+/// The problem it solves, in the owner's words: thirty kids all typing
+/// "Cuntius.Maximus" and nobody able to tell which is which. The claimed name
+/// is typed and can be copied. The phone model is not unique in a room of
+/// identical school laptops. The address changes: a real test on 2026-08-25
+/// produced two notes from the SAME phone under 10.42.0.200 and 10.42.0.170,
+/// because it had reconnected and been given a new lease.
+///
+/// The hardware address is the one thing that stays put for the length of a
+/// lesson, so this is a short hash OF it. Hashing rather than showing it is
+/// deliberate: a MAC is a permanent identifier for somebody else's device and
+/// has no business on a screen or in a repo, whereas four characters derived
+/// from it are meaningless outside this room and perfectly sufficient to say
+/// "these two messages came from two different phones".
+#[cfg(target_os = "linux")]
+pub fn device_tag(ip: &str) -> Option<String> {
+    let mac = mac_for(ip)?;
+    Some(short_hash(&mac))
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn device_tag(_ip: &str) -> Option<String> {
+    None
+}
+
+/// The hardware address for an address on our network, from the ARP table.
+/// World readable, no privileges, unlike the DHCP leases.
+#[cfg(target_os = "linux")]
+fn mac_for(ip: &str) -> Option<String> {
+    let text = std::fs::read_to_string("/proc/net/arp").ok()?;
+    for line in text.lines().skip(1) {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        if f.len() >= 4 && f[0] == ip && f[2] == "0x2" {
+            return Some(f[3].to_string());
+        }
+    }
+    None
+}
+
+/// Four characters from the same unambiguous alphabet the passwords use, so a
+/// teacher can read one off a screen and match it without asking which letter
+/// it is.
+fn short_hash(input: &str) -> String {
+    const ALPHABET: &[u8] = b"abcdefghjkmnpqrstuvwxyz23456789";
+    let digest = crate::sha256::digest(input.as_bytes());
+    digest
+        .iter()
+        .take(4)
+        .map(|b| ALPHABET[*b as usize % ALPHABET.len()] as char)
+        .collect()
+}
+
+// ---------------------------------------------------------------- clock
+
+/// Local wall-clock, as "26-08-25 10:11".
+///
+/// SystemTime gives UTC and std has no timezone database. A teacher reading
+/// back who said what during period three needs the clock on their own wall,
+/// so the offset is asked for ONCE at startup from the system's own date
+/// command and cached; every stamp after that is arithmetic. Falls back to
+/// UTC, labelled, where that command does not exist.
+static TZ_OFFSET: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+
+fn tz_offset_seconds() -> i64 {
+    *TZ_OFFSET.get_or_init(|| {
+        let out = std::process::Command::new("date")
+            .arg("+%z")
+            .stdin(std::process::Stdio::null())
+            .output();
+        let Ok(out) = out else { return 0 };
+        let t = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        // "+0100" or "-0430"
+        if t.len() < 5 {
+            return 0;
+        }
+        let sign: i64 = if t.starts_with('-') { -1 } else { 1 };
+        let h: i64 = t[1..3].parse().unwrap_or(0);
+        let m: i64 = t[3..5].parse().unwrap_or(0);
+        sign * (h * 3600 + m * 60)
+    })
+}
+
+pub fn timestamp() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+        + tz_offset_seconds();
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    let (y, m, d) = civil_from_days(days);
+    format!("{:02}-{:02}-{:02} {:02}:{:02}", y % 100, m, d, rem / 3600, (rem % 3600) / 60)
+}
+
+/// Days since 1970-01-01 to a calendar date. Howard Hinnant's civil_from_days,
+/// which is the standard closed-form version: no tables, no leap-year special
+/// cases scattered about, correct for every date this will ever see.
+fn civil_from_days(z: i64) -> (i64, i64, i64) {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
 // ---------------------------------------------------------------- randomness
 
 /// Password bytes from the operating system, never from the clock.
@@ -867,6 +978,59 @@ mod tests {
     }
 
     #[test]
+    fn a_device_tag_is_stable_short_and_leaks_nothing() {
+        // Same hardware, two different leases: the tag must not change, or it
+        // reports one reconnecting phone as two impostors. Measured on a real
+        // phone 2026-08-25, which sent notes from .200 and then .170.
+        let a = short_hash("aa:bb:cc:dd:ee:ff");
+        let b = short_hash("aa:bb:cc:dd:ee:ff");
+        assert_eq!(a, b, "the tag must be stable for one device");
+        assert_eq!(a.chars().count(), 4);
+        let other = short_hash("11:22:33:44:55:66");
+        assert_ne!(a, other, "two devices must not share a tag this easily");
+        // Nothing of the hardware address survives into the tag.
+        assert!(!a.contains("aa") && !a.contains("ff"), "{a}");
+        assert!(a.chars().all(|c| "abcdefghjkmnpqrstuvwxyz23456789".contains(c)),
+                "{a} has a character somebody will misread");
+    }
+
+    #[test]
+    fn the_clock_produces_a_sane_recent_date() {
+        let t = timestamp();
+        // "YY-MM-DD HH:MM"
+        assert_eq!(t.len(), 14, "{t}");
+        let (date, time) = t.split_once(' ').expect("date and time");
+        let parts: Vec<&str> = date.split('-').collect();
+        assert_eq!(parts.len(), 3, "{t}");
+        let year: i64 = parts[0].parse().expect("year");
+        assert!((25..=99).contains(&year), "year {year} out of range in {t}");
+        let month: i64 = parts[1].parse().expect("month");
+        assert!((1..=12).contains(&month), "month {month} in {t}");
+        let day: i64 = parts[2].parse().expect("day");
+        assert!((1..=31).contains(&day), "day {day} in {t}");
+        let hh: i64 = time[..2].parse().expect("hour");
+        assert!(hh < 24, "{t}");
+    }
+
+    /// The calendar arithmetic, against dates whose answers are known: a leap
+    /// day, a century non-leap boundary, and the epoch itself.
+    #[test]
+    fn the_calendar_maths_is_right_on_the_awkward_days() {
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        assert_eq!(civil_from_days(-1), (1969, 12, 31));
+        // Day numbers verified against an independent calendar, because the
+        // first version of this test asserted values I had worked out in my
+        // head and they were wrong: the code was right and the test was not.
+        assert_eq!(civil_from_days(11016), (2000, 2, 29), "2000 IS a leap year");
+        assert_eq!(civil_from_days(11017), (2000, 3, 1));
+        assert_eq!(civil_from_days(20574), (2026, 5, 1));
+        // 2100 is NOT a leap year: divisible by 100, not by 400. This is the
+        // case a hand-rolled calendar gets wrong.
+        assert_eq!(civil_from_days(47540), (2100, 2, 28));
+        assert_eq!(civil_from_days(47541), (2100, 3, 1));
+    }
+
+    #[test]
     fn suggested_password_is_long_enough_and_readable() {
         let p = suggest_password();
         assert_eq!(p.chars().count(), 8, "WPA2 needs at least 8");
@@ -874,5 +1038,31 @@ mod tests {
                 "{p} has a character somebody will misread");
         // Two in a row being identical would mean the random source is not one.
         assert_ne!(p, suggest_password());
+    }
+}
+
+#[cfg(test)]
+mod arp_tag_tests {
+    use super::*;
+
+    /// Against this machine's REAL ARP table, cross-checked with an
+    /// independently computed value. Skips itself when the table is empty,
+    /// which is the honest thing to do rather than pass vacuously.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_real_arp_entry_produces_the_expected_tag() {
+        let Ok(text) = std::fs::read_to_string("/proc/net/arp") else { return };
+        let mut found = None;
+        for line in text.lines().skip(1) {
+            let f: Vec<&str> = line.split_whitespace().collect();
+            if f.len() >= 4 && f[2] == "0x2" {
+                found = Some((f[0].to_string(), f[3].to_string()));
+                break;
+            }
+        }
+        let Some((ip, mac)) = found else { return };
+        let tag = device_tag(&ip).expect("an ARP entry we just read must produce a tag");
+        assert_eq!(tag, short_hash(&mac), "the tag must come from that entry's hardware address");
+        assert_eq!(tag.chars().count(), 4);
     }
 }

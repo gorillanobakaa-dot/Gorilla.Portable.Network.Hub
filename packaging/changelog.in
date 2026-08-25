@@ -1,4 +1,19 @@
-gorilla-portable-network-hub (@VERSION@) unstable; urgency=high
+gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
+
+  * Notes now carry a timestamp and a stable device tag:
+    "26-08-25 10:35  Amina #wa3x [Xiaomi-11-Lite-5G-NE, 10.42.0.90]: ...".
+    Thirty children typing the same name are now thirty distinguishable
+    lines. The tag is four characters hashed from the hardware address, so
+    it survives a reconnect (a real test produced two notes from ONE phone
+    under two different addresses) while putting no permanent identifier
+    for somebody else's device on a screen or in a repo.
+  * The roster names any name that two devices are both claiming, and
+    shows the tag beside those entries only. The teacher is told, rather
+    than left to work it out.
+
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+
+gorilla-portable-network-hub (0.4.2) unstable; urgency=high
 
   * Fix worker starvation that made the server stop answering while looking
     healthy. The class page refreshed its list every 6 seconds while an idle
@@ -15,7 +30,7 @@ gorilla-portable-network-hub (@VERSION@) unstable; urgency=high
     intent:// breakout, a plain link, and the menu instruction.
   * The file list refreshes every 10 seconds instead of 6.
 
- -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  Mon, 25 Aug 2026 10:20:00 +0100
 
 gorilla-portable-network-hub (0.4.1) unstable; urgency=medium
 
