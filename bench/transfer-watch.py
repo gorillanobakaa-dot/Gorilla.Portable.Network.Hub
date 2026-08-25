@@ -227,6 +227,19 @@ def main():
     ap.add_argument("--outdir", default=str(HERE / "results"), help="where to write the results")
     args = ap.parse_args()
 
+    # One monitor at a time. On 2026-08-25 two instances ran side by side,
+    # shared the same minute-stamp, and would have silently overwritten each
+    # other's CSV on exit; the data survived by renaming between the two
+    # Ctrl-Cs, which is luck, not design.
+    lock = Path("/tmp/transfer-watch.pid")
+    if lock.exists():
+        other = lock.read_text().strip()
+        if other and Path("/proc", other).is_dir():
+            print("\n  Another transfer-watch (pid {}) is already running.".format(other), file=sys.stderr)
+            print("  Two monitors on one stamp overwrite each other's results.\n", file=sys.stderr)
+            raise SystemExit(2)
+    lock.write_text(str(os.getpid()))
+
     iface = args.iface or find_ap_interface()
     if not iface:
         print("\n  No interface found. Is the hotspot up?\n"

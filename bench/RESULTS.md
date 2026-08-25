@@ -76,8 +76,39 @@ Runs measured with `bench/transfer-watch.py`, which samples the kernel's own
 counters once a second and never asks the hub how it thinks it is doing.
 
 <!-- REAL-TRANSFERS -->
-_No full-size transfer has been measured over a live hotspot yet. The next one
-lands here, with its chart and its per-second CSV._
+### 25 August 2026: 7.56 GB to a Windows laptop, browser only
+
+The whole 68,153-file folder as one GET EVERYTHING download, Edge on the far
+side, nothing installed there. Measured from the kernel's counters and a
+headers-only packet capture, not from the tool's own opinion of itself.
+
+| | |
+|---|---|
+| carried | **7,560,168,427 bytes** in 1,626 moving seconds |
+| mean while moving | **4.65 MB/s**, sd 0.91, best second 5.64 |
+| wifi retries | 92,427 of 4.9M frames = **1.87%** |
+| TCP retransmissions | 5,930 of 1.9M segments = **0.31%** |
+| receiver stalls | **zero** zero-window, zero window-full events |
+| ACK latency under load | 20.1 ms mean, 78 ms worst |
+| the serving laptop | 4% mean CPU, 66 C peak, **no throttling** |
+
+Every suspect was checked and exonerated by name: the air is clean, the
+receiver never said stop, Defender was switched off mid-run with no change,
+and the 2012 laptop was loafing. What remains is the honest finding:
+
+**A browser's single TCP connection pays about a 30% tax on this radio.**
+4.65 MB/s against the 6.57 this tool's own four-connection client gets from
+the same air. One stream at 20 ms of queue simply keeps less data in flight
+than four streams do, and no setting on either side changes that. The tool
+exists for exactly this reason; the button exists for the person who cannot
+install it.
+
+Also on the record: the Windows laptop spent the entire lesson trying to
+reach Microsoft, Akamai and Facebook through the classroom hotspot, dozens
+of doomed HTTPS attempts a minute. Byte-wise it is nothing. It is worth
+knowing whose traffic a classroom access point carries.
+
+Chart and per-second data: `results/transfer-26-08-25-16-20-runA.md`
 <!-- /REAL-TRANSFERS -->
 
 ---
