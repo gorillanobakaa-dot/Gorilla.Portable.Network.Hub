@@ -117,6 +117,41 @@ of doomed HTTPS attempts a minute. Byte-wise it is nothing. It is worth
 knowing whose traffic a classroom access point carries.
 
 Chart and per-second data: `results/transfer-26-08-25-16-20-runA.md`
+
+### The same evening: the missing 2 MB/s found, and it was the channel
+
+The 4.65 above was 2 MB/s below the previous day's browser download of a
+single 8 GB file. The single-stream-equilibrium explanation offered first
+was WRONG, and this corrects it: the same laptop re-ran the same static
+download and the cause was hunted by elimination. The zip streamer was
+cleared (static path: 4.73, zipped path: 4.65, same number), the packet
+capture's own overhead was cleared (4.85 with, 4.82 without), both machines
+were on mains both days, and the driver's survey counters showed the radio
+holding 87% of all airtime to deliver 4.8: full effort, clean retries, low
+yield. Nothing in any counter names a bad channel; that IS what a bad
+channel looks like.
+
+The proof was surgical because nobody stopped the download: the hotspot was
+hopped from channel 1, which the system had picked automatically, to
+channel 13 **under a live transfer**, and the stream rode through the ten
+second outage and carried on. One variable changed mid-flight:
+
+| | airtime held | delivered | per airtime-second |
+|---|---|---|---|
+| channel 1 | 87% | 4.82 MB/s | 5.5 |
+| channel 13 | 89% | **6.07 MB/s** | 6.8 |
+
+Same radio, same negotiated rate, same TCP connection: channel 1 burned
+about a quarter of every transmitting second on overhead that carried no
+data. This is why 0.8.0 gained the channel field, with the allowed list
+read from the radio and the country rather than assumed.
+
+Two honest residuals: 6.07 is still short of the previous day's ~7, which
+may be evening air or may be nothing, and remains unattributed. And the
+browser-versus-tool comparison on one pairing is still unmeasured; on a
+clean channel the browser's single stream came within 8% of the tool's
+four-connection sweep figure, so the earlier "30% browser tax" framing is
+withdrawn for good.
 <!-- /REAL-TRANSFERS -->
 
 ---
