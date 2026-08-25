@@ -1080,3 +1080,106 @@ keying against the live ARP table, idempotent pause, a paused device that
 leaves), 1 terse unescaping, 8 QR (published format table, syndrome check with a
 negative case, five-version round trip, escaped punctuation, hand-written
 structural coordinates, oversize refusal, render shape and explicit colours).
+
+## 11. Identifying a device that tells the network nothing
+
+Version 0.7.1, from a live session half an hour after 0.7.0 was built.
+
+### 11.1 The record that prompted it
+
+```
+26-08-25 11:37  County.Cunt #cyyr [Xiaomi-11-Lite-5G-NE, 10.42.0.183]: ...
+26-08-25 13:16  biggus.dickus #nzrm [10.42.0.251]: ...
+```
+
+Phone, then laptop. `full_label`'s device column is filled from `NAMES`, which
+is fed from `joined_devices` (DHCP lease name, needs root) then the `NameCache`
+PTR lookup against dnsmasq. **Both of those depend on the client having sent a
+hostname in its DHCP request.** Android always does. A laptop frequently does
+not, and nothing on this side can make it.
+
+That column is the load-bearing one. The claimed name is typed by the child and
+the address is recycled by dnsmasq; the device is the part neither of those is
+true of.
+
+### 11.2 The device is asked twice, so use the second answer
+
+Every HTTP request carries a `User-Agent`. A device that sent a note has by
+definition already told us roughly what it is.
+
+```rust
+static AGENTS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());   // ip -> description
+fn describe_agent(ua: &str) -> Option<String>
+```
+
+Stored per address, captured once, guarded by `knows_agent` so the common case
+costs one `Vec` scan rather than a header parse on every ten-second refresh from
+every device in the room.
+
+**Only the classification is stored, never the header.** A full User-Agent is a
+fingerprint precise enough to follow one person between networks; "a Windows
+laptop" is all a teacher needs. Storing the raw string in a file that lives on a
+teacher's laptop would be collecting something nobody asked for.
+
+Precedence in `full_label`, `roster_label` and `device_label`:
+
+```
+claimed name        typed by the child
+device name         NAMES: lease or PTR, more specific, so it wins
+browser description AGENTS: the fallback, and a laptop's only entry
+address             last resort
+tag                 always, and OUTSIDE the bracket: nobody typed it
+```
+
+### 11.3 Ordering is the whole difficulty of reading a User-Agent
+
+Android calls itself Linux. An iPad in desktop mode calls itself a Macintosh. A
+Chromebook calls itself X11. Testing most specific first is the entire trick,
+and reversing it labels every phone in the room a laptop.
+
+| test | result |
+|---|---|
+| `android` + `mobile` | an Android phone |
+| `android` without `mobile` | an Android tablet |
+| `iphone` / `ipad` | an iPhone / an iPad |
+| `cros` | a Chromebook |
+| `windows` | a Windows laptop |
+| `macintosh` or `mac os x` | a Mac |
+| `linux` / `x11` / `bsd` | a Linux laptop |
+| anything else | **None** |
+
+`None`, never a guess. A gap is missing evidence; a wrong device is evidence
+pointing at the wrong child.
+
+### 11.4 The second bug, which was the worse one
+
+`self.joined`, `NameCache::ensure` and `set_device_name` were **all** driven from
+inside `draw_sending`. A teacher on the class screen or reading waiting work
+froze discovery entirely: no new device noticed, no lookup even started.
+
+Which screen somebody was looking at decided whether a device got its name into
+the permanent record.
+
+Hoisted to `refresh_joined()`, called from `draw()` before dispatch whenever a
+hotspot exists. Same one-second staleness gate, so the cost is unchanged.
+
+> Work everything depends on must not be a side effect of drawing one screen.
+
+### 11.5 Verification
+
+Reproduced with two clients on one machine, which 127.0.0.0/8 makes possible:
+`curl --interface 127.0.0.2` and `--interface 127.0.0.3` are two distinct peer
+addresses to the server. Each claimed a name, each sent a note with its own
+User-Agent. **[measured] 2026-08-25**, the resulting `notes.txt`:
+
+```
+26-08-25 13:25  County.Cunt [an Android phone, 127.0.0.2]: from the phone
+26-08-25 13:25  biggus.dickus [a Windows laptop, 127.0.0.3]: from the laptop
+```
+
+No `#tag`, correctly: a loopback address has no ARP entry, so there is no
+hardware address to derive one from.
+
+Three tests added (52 total): the ordering traps against nine real User-Agent
+shapes plus two that must return `None`; the reported line reproduced before and
+after; and the header read off a real socket through to the store.

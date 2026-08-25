@@ -210,6 +210,12 @@ impl App {
             f.draw();
             return;
         }
+        // Before anything is drawn, and for every screen. See refresh_joined:
+        // this being a side effect of one screen's drawing cost a laptop its
+        // identity in the permanent record.
+        if self.hotspot.is_some() {
+            self.refresh_joined();
+        }
         let mut f = Frame::new(rows, cols);
         match self.screen {
             Screen::Home => self.draw_home(&mut f),
@@ -605,7 +611,23 @@ impl App {
         self.hints(f, "  type to edit    enter to change it    esc to leave it alone");
     }
 
-    fn draw_sending(&mut self, f: &mut Frame) {
+    /// Who is on the network, and what each device is called. Runs on a tick
+    /// whatever screen is showing.
+    ///
+    /// This USED TO live inside the roster's draw function, and that was a real
+    /// bug rather than untidiness. A teacher sitting on the class screen or
+    /// looking through waiting work froze the whole thing: no new device was
+    /// noticed, and no name lookup was ever STARTED for one. Seen in the record
+    /// on 2026-08-25, a laptop that joined while the teacher was on another
+    /// screen was filed as `biggus.dickus #nzrm [10.42.0.251]`, with the device
+    /// column empty, while a phone that joined during the roster got its model.
+    /// The device column is the part a child cannot argue with, so losing it
+    /// because of which screen somebody happened to be looking at is the worst
+    /// place to lose it.
+    ///
+    /// The lesson generalises past this program: work everything depends on
+    /// must not be a side effect of drawing one screen.
+    fn refresh_joined(&mut self) {
         // A hotspot does not have an address the instant nmcli returns; the
         // interface has to come up and be given one. Asking again while the
         // list is empty costs four UDP sockets and stops the screen from
@@ -616,41 +638,44 @@ impl App {
         // Once a second, not four times: two small files, but there is no
         // reason to read them at the frame rate.
         let stale = self.joined_at.map(|t| t.elapsed().as_secs() >= 1).unwrap_or(true);
-        if stale {
-            // Only when WE made the network. Handing files out over a network
-            // somebody else provided, "who is on it" is the whole building, and
-            // a teacher's screen filling with three hundred strangers is worse
-            // than showing none of them.
-            self.joined = match &self.hotspot {
-                Some(h) => match h.address() {
-                    Some(ours) => {
-                        let list = net::joined_devices(ours);
-                        // The names are already known: every device said what
-                        // it was called when it asked for an address, and the
-                        // same dnsmasq that wrote them down is the DNS server
-                        // for this network. Asking it needs no privileges, so
-                        // a teacher sees "Amina-Laptop" rather than a number
-                        // without touching a terminal or a password prompt.
-                        for j in &list {
-                            if j.name.is_none() {
-                                self.names.ensure(j.ip, ours);
-                            }
-                            // Whatever name we have, the serving side gets it
-                            // too, so handed-in files and notes are labelled
-                            // "Amina-phone" rather than an address.
-                            if let Some(n) = j.name.clone().or_else(|| self.names.get(j.ip)) {
-                                serve::set_device_name(&j.ip.to_string(), &n);
-                            }
-                        }
-                        list
-                    }
-                    None => Vec::new(),
-                },
-                None => Vec::new(),
-            };
-            self.joined_at = Some(Instant::now());
+        if !stale {
+            return;
         }
+        // Only when WE made the network. Handing files out over a network
+        // somebody else provided, "who is on it" is the whole building, and
+        // a teacher's screen filling with three hundred strangers is worse
+        // than showing none of them.
+        self.joined = match &self.hotspot {
+            Some(h) => match h.address() {
+                Some(ours) => {
+                    let list = net::joined_devices(ours);
+                    // Most names are already known: a device says what it is
+                    // called when it asks for an address, and the same dnsmasq
+                    // that wrote that down is the DNS server for this network.
+                    // Asking it needs no privileges, so a teacher sees
+                    // "Amina-Laptop" rather than a number without touching a
+                    // terminal or a password prompt.
+                    for j in &list {
+                        if j.name.is_none() {
+                            self.names.ensure(j.ip, ours);
+                        }
+                        // Whatever name we have, the serving side gets it too,
+                        // so handed-in files and notes are labelled
+                        // "Amina-phone" rather than an address.
+                        if let Some(n) = j.name.clone().or_else(|| self.names.get(j.ip)) {
+                            serve::set_device_name(&j.ip.to_string(), &n);
+                        }
+                    }
+                    list
+                }
+                None => Vec::new(),
+            },
+            None => Vec::new(),
+        };
+        self.joined_at = Some(Instant::now());
+    }
 
+    fn draw_sending(&mut self, f: &mut Frame) {
         self.title(f, "Handing out files");
         if let Some(h) = &self.hotspot {
             f.push(&format!("  Wifi network      {}", h.ssid));

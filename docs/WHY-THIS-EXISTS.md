@@ -574,3 +574,57 @@ coordinates written out by hand from the standard, rather than by asking the
 program whether it agreed with itself.
 
 The final word still belongs to a phone camera, which is where it went next.
+
+## The laptop that would not say what it was
+
+Half an hour after 0.7.0 was built, a real session put two devices on the
+network and the record came back like this:
+
+```
+26-08-25 11:37  County.Cunt #cyyr [Xiaomi-11-Lite-5G-NE, 10.42.0.183]: ...
+26-08-25 13:16  biggus.dickus #nzrm [10.42.0.251]: ...
+```
+
+The first is a phone. The second is a laptop, and the part in brackets that
+should say what it is says nothing.
+
+This matters more than it looks. That column is the reason the whole
+attribution scheme exists: a child can type any name they like, so the thing
+that settles an argument is the device sitting next to the name, because the
+child did not type it. An address is no use for that. It means nothing to a
+teacher and it changes the next time the device reconnects.
+
+**Why it happened.** A device is asked its name when it joins the network, by
+the part of the system that hands out addresses. Phones answer, which is where
+`Xiaomi-11-Lite-5G-NE` comes from. Laptops very often answer nothing at all,
+and there is no way to make them.
+
+**The fix is that the device was asked twice.** Every browser announces roughly
+what it is on every single request, so a device that sent a note has already
+said whether it is a Windows laptop, a Mac, an iPhone or an Android tablet. The
+record now falls back to that, and the same line would read:
+
+```
+26-08-25 13:16  biggus.dickus #nzrm [a Windows laptop, 10.42.0.251]: ...
+```
+
+Only the description is kept, never the full text it came from. That full text
+is precise enough to recognise one person across different networks, and "a
+Windows laptop" is all a teacher needs. Where nothing recognisable arrives, the
+tool says nothing rather than guessing: a gap is missing evidence, a wrong
+device is evidence pointing at the wrong child.
+
+## A second bug, hiding behind the first
+
+Looking for the cause turned up something worse. The work of noticing who is on
+the network, and looking up what each device is called, was being done **as a
+side effect of drawing the roster screen**.
+
+So a teacher who pressed `c` to look at the class, or `w` to read through
+waiting work, silently froze it. New devices were not noticed, and no name
+lookup was even started for one. Which screen somebody happened to be looking
+at decided whether a device got its name into the permanent record.
+
+That is now done on a tick, whatever is on screen. The general lesson is worth
+more than the fix: work that everything depends on must not be a side effect of
+drawing one screen.

@@ -234,7 +234,12 @@ pub fn full_label(ip: &str) -> String {
     let device = {
         let n = NAMES.lock().unwrap_or_else(|e| e.into_inner());
         n.iter().find(|(i, _)| i == ip).map(|(_, name)| name.clone())
-    };
+    }
+    // The name the device gave the NETWORK first, because it is more specific:
+    // "Xiaomi-11-Lite-5G-NE" beats "an Android phone". What its BROWSER said is
+    // the fallback, and it is the only thing there is for a laptop that told
+    // the network nothing.
+    .or_else(|| agent_label(ip));
     // The tag is the part that survives a reconnect. Everything else in this
     // line can be shared by two devices or changed by one.
     let tag = crate::net::device_tag(ip).map(|t| format!(" #{t}")).unwrap_or_default();
@@ -331,6 +336,89 @@ pub fn refuse_pending(root: &Path, on_disk: &str) -> std::io::Result<()> {
     Ok(())
 }
 
+/// What each device's BROWSER says it is, when the network was told nothing.
+///
+/// A device is asked its name twice over, by two different parties. dnsmasq
+/// asks when it hands out an address, and phones answer: that is where
+/// "Xiaomi-11-Lite-5G-NE" comes from. Laptops very often answer nothing at all,
+/// and the record then falls back to a bare address.
+///
+/// Seen in the permanent record on 2026-08-25, one line apart:
+///
+///   County.Cunt   #cyyr [Xiaomi-11-Lite-5G-NE, 10.42.0.183]: ...
+///   biggus.dickus #nzrm [10.42.0.251]: ...
+///
+/// The second was a laptop. Losing the device column is not cosmetic: it exists
+/// so that a child cannot talk their way out of a note, and an address means
+/// nothing to a teacher and changes on the next reconnect.
+///
+/// The browser knows. Every request carries a User-Agent, so a device that
+/// sends a note has, by definition, already told us roughly what it is. Only
+/// the CLASSIFICATION is kept, never the header: the full string is a
+/// fingerprint precise enough to follow one person between networks, and
+/// "a Windows laptop" is all a teacher needs.
+///
+/// Both sources are self-reported and neither is proof. The tag is the part
+/// that is not typed by anybody, which is why it sits outside the bracket.
+static AGENTS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+pub fn knows_agent(ip: &str) -> bool {
+    let a = AGENTS.lock().unwrap_or_else(|e| e.into_inner());
+    a.iter().any(|(i, _)| i == ip)
+}
+
+pub fn note_agent(ip: &str, user_agent: &str) {
+    let Some(what) = describe_agent(user_agent) else { return };
+    let mut a = AGENTS.lock().unwrap_or_else(|e| e.into_inner());
+    match a.iter_mut().find(|(i, _)| i == ip) {
+        Some(e) => e.1 = what,
+        None => a.push((ip.to_string(), what)),
+    }
+}
+
+fn agent_label(ip: &str) -> Option<String> {
+    let a = AGENTS.lock().unwrap_or_else(|e| e.into_inner());
+    a.iter().find(|(i, _)| i == ip).map(|(_, w)| w.clone())
+}
+
+/// Turn a User-Agent into something a teacher can read, or nothing.
+///
+/// Order matters more than the patterns do. Android calls itself Linux, an iPad
+/// asked to behave like a desktop calls itself a Macintosh, and a Chromebook
+/// calls itself X11. Testing from the most specific to the least is the whole
+/// trick, and getting it backwards labels every phone in the room a laptop.
+///
+/// Returns None rather than guessing. A wrong device in the record is worse
+/// than no device: one is a gap, the other is evidence pointing at the wrong
+/// child.
+fn describe_agent(ua: &str) -> Option<String> {
+    let u = ua.to_ascii_lowercase();
+    if u.contains("android") {
+        // "Mobile" is what separates an Android phone from an Android tablet,
+        // and it is the only thing that does.
+        return Some(if u.contains("mobile") { "an Android phone" } else { "an Android tablet" }.into());
+    }
+    if u.contains("iphone") {
+        return Some("an iPhone".into());
+    }
+    if u.contains("ipad") {
+        return Some("an iPad".into());
+    }
+    if u.contains("cros") {
+        return Some("a Chromebook".into());
+    }
+    if u.contains("windows") {
+        return Some("a Windows laptop".into());
+    }
+    if u.contains("macintosh") || u.contains("mac os x") {
+        return Some("a Mac".into());
+    }
+    if u.contains("linux") || u.contains("x11") || u.contains("bsd") {
+        return Some("a Linux laptop".into());
+    }
+    None
+}
+
 /// The key this address's claims and blocks are filed under, so the screen can
 /// hold on to a device that has left the network.
 pub fn device_key(ip: &str) -> String {
@@ -368,7 +456,8 @@ pub fn roster_label(ip: &str) -> String {
     let device = {
         let n = NAMES.lock().unwrap_or_else(|e| e.into_inner());
         n.iter().find(|(i, _)| i == ip).map(|(_, name)| name.clone())
-    };
+    }
+    .or_else(|| agent_label(ip));
     match (claimed, device) {
         (Some(c), Some(d)) => format!("{c} [{d}]"),
         (Some(c), None) => c,
@@ -381,8 +470,11 @@ pub fn device_label(ip: &str) -> String {
     if let Some(c) = claimed_name(ip) {
         return c;
     }
-    let n = NAMES.lock().unwrap_or_else(|e| e.into_inner());
-    n.iter().find(|(i, _)| i == ip).map(|(_, name)| name.clone()).unwrap_or_else(|| ip.to_string())
+    let named = {
+        let n = NAMES.lock().unwrap_or_else(|e| e.into_inner());
+        n.iter().find(|(i, _)| i == ip).map(|(_, name)| name.clone())
+    };
+    named.or_else(|| agent_label(ip)).unwrap_or_else(|| ip.to_string())
 }
 
 /// Whether handed-in work can actually land in the served folder.
@@ -937,6 +1029,20 @@ fn serve_one(
     let mut out = BufWriter::with_capacity(BUF, sock.try_clone()?);
     let peer_ip = peer.split(':').next().unwrap_or(peer).to_string();
 
+    // What this device says it is, taken once and then never looked at again.
+    // The check comes first so that a device already recorded costs nothing
+    // per request: this runs on every single one, including every ten-second
+    // refresh of the file list, from every device in the room.
+    if !knows_agent(&peer_ip) {
+        if let Some(ua) = text
+            .lines()
+            .find(|l| l.to_ascii_lowercase().starts_with("user-agent:"))
+            .and_then(|l| l.split_once(':').map(|(_, v)| v.trim()))
+        {
+            note_agent(&peer_ip, ua);
+        }
+    }
+
     // The captive answer. A request addressed to any name that is not one of
     // our own addresses is a phone's connectivity probe (the dnsmasq drop-in
     // resolves those names to us) or a kid who typed some site into the bar.
@@ -1423,6 +1529,82 @@ mod block_tests {
         let after = get(port, "/");
         assert!(after.contains("type your name"), "expected the class page back, got:\n{after}");
 
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The ordering traps, which are the whole difficulty of reading a
+    /// User-Agent. Every string here is a real shape a browser sends.
+    #[test]
+    fn a_phone_is_not_filed_as_a_laptop_because_android_calls_itself_linux() {
+        let cases = [
+            ("Mozilla/5.0 (Linux; Android 13; 2109119DG) AppleWebKit/537.36 (KHTML, like Gecko) \
+              Chrome/119.0.0.0 Mobile Safari/537.36", "an Android phone"),
+            // Same string without "Mobile": that one word is the only thing
+            // separating an Android tablet from an Android phone.
+            ("Mozilla/5.0 (Linux; Android 13; SM-X200) AppleWebKit/537.36 (KHTML, like Gecko) \
+              Chrome/119.0.0.0 Safari/537.36", "an Android tablet"),
+            ("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15", "an iPhone"),
+            ("Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15", "an iPad"),
+            ("Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36", "a Chromebook"),
+            ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/119", "a Windows laptop"),
+            ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15", "a Mac"),
+            ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/119", "a Linux laptop"),
+            ("Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0", "a Linux laptop"),
+        ];
+        for (ua, want) in cases {
+            assert_eq!(describe_agent(ua).as_deref(), Some(want), "for {ua}");
+        }
+        // Nothing recognisable produces nothing. A wrong device in the record
+        // is worse than a gap: one is missing evidence, the other is evidence
+        // pointing at the wrong child.
+        assert_eq!(describe_agent("curl/8.5.0"), None);
+        assert_eq!(describe_agent(""), None);
+    }
+
+    /// The exact line from the record on 2026-08-25, before and after.
+    ///
+    /// A laptop that told the network nothing was filed with an empty device
+    /// column, which is the one column that exists so a child cannot argue.
+    #[test]
+    fn a_laptop_that_names_itself_to_nobody_is_still_identified() {
+        let ip = "203.0.113.11";
+        set_claimed_name(ip, "biggus.dickus");
+        // Before: the network was told nothing, so the bracket is bare.
+        let before = full_label(ip);
+        assert!(before.contains(ip), "{before}");
+        assert!(!before.contains("laptop"), "nothing should be known yet: {before}");
+
+        note_agent(ip, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/119");
+        let after = full_label(ip);
+        forget_claim(ip);
+
+        assert!(after.starts_with("biggus.dickus"), "{after}");
+        assert!(after.contains("a Windows laptop"), "the device column is still empty: {after}");
+        assert!(after.contains(ip), "the address stays alongside it: {after}");
+    }
+
+    /// The header has to survive the trip: read off a real socket, classified,
+    /// and reachable from the label the record is written with.
+    #[test]
+    fn the_browser_description_arrives_over_a_real_request() {
+        let root = tmproot("agent");
+        let port = serve_loopback(root.clone());
+        let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        write!(
+            s,
+            "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\
+             User-Agent: Mozilla/5.0 (Linux; Android 13; 2109119DG) Mobile Safari/537.36\r\n\
+             Connection: close\r\n\r\n"
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        let _ = s.read_to_end(&mut out);
+        assert_eq!(
+            agent_label("127.0.0.1").as_deref(),
+            Some("an Android phone"),
+            "the User-Agent did not reach the store"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
