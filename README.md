@@ -137,6 +137,20 @@ blackboard, duplicated), a tick list that publishes or withdraws a file live
 during the lesson, and a roster naming every device: who is getting, who is
 handing in, how long is left, and who has not opened the page yet.
 
+**Two ways to remove somebody, and they are not the same.** Pausing a device
+leaves it on the wifi and cuts it off from the lesson: no files, no handing in,
+no notes, and a page that says its teacher paused it. It refreshes itself, so
+letting them back in needs nothing from the child. Changing the wifi password
+knocks the whole room off at once. The screen is honest about the difference:
+a pause recognises a device, and a phone can come back wearing a different
+name, which is what the password is for.
+
+**Joining by camera, as a bonus and never the way in.** Press `j` and the
+screen draws a code a phone camera can read. The network name and password stay
+printed underneath at the same size, because plenty of these phones have a
+cracked camera or a camera app that wants an account first, and a screen
+showing only a code locks those children out invisibly.
+
 **Going and getting, tool to tool.** Open `hub`, choose *Get files from another
 computer*. It looks for the teacher by itself and downloads with resume and
 per-piece verification, which is the upgrade over a browser for huge files on a

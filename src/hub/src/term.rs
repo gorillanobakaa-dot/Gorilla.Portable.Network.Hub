@@ -463,6 +463,20 @@ impl Frame {
         self.lines.push(format!("\x1b[7m{t}{}\x1b[0m", " ".repeat(pad)));
     }
 
+    /// A line already carrying its own escape sequences, passed through whole.
+    ///
+    /// `push` truncates by DISPLAY width, and display width counts the bytes of
+    /// an escape sequence as though a person could see them. A QR code row is
+    /// mostly escape sequences, so pushing it normally would cut it to ribbons
+    /// at a column somewhere inside the first few modules. The caller owns the
+    /// width here, which is why the screen that draws one measures first and
+    /// refuses to draw at all if the window is too narrow.
+    pub fn push_raw(&mut self, s: &str) {
+        if self.lines.len() < self.rows {
+            self.lines.push(s.to_string());
+        }
+    }
+
     pub fn push_dim(&mut self, s: &str) {
         if self.lines.len() >= self.rows {
             return;

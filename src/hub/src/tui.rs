@@ -84,6 +84,12 @@ enum Screen {
     /// is how the teacher publishes or withdraws a file while kids watch.
     Tick { pre: bool },
     Sending,
+    /// Who is on the network, and the two ways to remove somebody.
+    Class,
+    /// Confirming a password change, which knocks the whole room off.
+    NewPassword,
+    /// The join code, for the phones in the room whose cameras work.
+    JoinCode,
     /// Work children have sent, waiting for the teacher to accept or refuse.
     Waiting,
     Receive,
@@ -118,6 +124,13 @@ struct App {
     /// The notice editor borrows the same editing buffer as the form fields;
     /// this flag says which thing a commit belongs to.
     editing_notice: bool,
+    /// The replacement password being typed on the change-password screen.
+    ///
+    /// Deliberately NOT the shared `editing` buffer. Anything in `editing` is
+    /// intercepted before the per-screen keys and committed through commit(),
+    /// so a password typed there would be filed as a folder name and the
+    /// change would never run.
+    new_password: String,
     /// What Tab found: the sibling names when a completion was ambiguous,
     /// drawn under the field being edited and cleared by the next keystroke.
     tab_hint: Option<String>,
@@ -161,6 +174,7 @@ impl App {
             names: net::NameCache::default(),
             tick: Vec::new(),
             editing_notice: false,
+            new_password: String::new(),
             tab_hint: None,
             found: Arc::new(Mutex::new(None)),
             server: None,
@@ -203,6 +217,9 @@ impl App {
             Screen::Tick { pre } => self.draw_tick(&mut f, pre),
             Screen::Waiting => self.draw_waiting(&mut f),
             Screen::Sending => self.draw_sending(&mut f),
+            Screen::Class => self.draw_class(&mut f),
+            Screen::NewPassword => self.draw_newpassword(&mut f),
+            Screen::JoinCode => self.draw_joincode(&mut f),
             Screen::Receive => self.draw_receive(&mut f),
             Screen::ReceiveFiles => self.draw_files(&mut f),
             Screen::Receiving => self.draw_receiving(&mut f),
@@ -389,6 +406,205 @@ impl App {
         self.hints(f, "  a accept    r refuse    o open and look    esc to go back");
     }
 
+}
+
+/// One line on the class screen.
+struct ClassRow {
+    /// The address, while the device is still on the network.
+    ip: Option<String>,
+    /// What a block on this device is filed under. Present for a paused device
+    /// that has since disappeared, which is the only handle left on it.
+    key: Option<String>,
+    label: String,
+    state: String,
+    blocked: bool,
+}
+
+impl App {
+    /// Who is on the network, built fresh from live state.
+    ///
+    /// Built by ONE function used by both the drawing and the keys, because
+    /// the cursor and the thing the cursor acts on have to be the same list.
+    /// Two lists built the same way from the same data is how a teacher ends
+    /// up pausing the child below the one they highlighted.
+    fn class_rows(&self) -> Vec<ClassRow> {
+        let live = serve::transfers();
+        let mut rows: Vec<ClassRow> = Vec::new();
+        for j in &self.joined {
+            let ip = j.ip.to_string();
+            // Same precedence as the roster: the name the child picked, then
+            // the lease name, then the reverse lookup, then the address.
+            let who = serve::claimed_name(&ip)
+                .or_else(|| j.name.clone())
+                .or_else(|| self.names.get(j.ip))
+                .unwrap_or_else(|| ip.clone());
+            // The tag is what a name cannot be argued out of, so the screen
+            // that hands out punishment shows it.
+            let label = match serve::tag_for(&ip) {
+                Some(t) => format!("{who} #{t}"),
+                None => who,
+            };
+            let blocked = serve::is_blocked(&ip);
+            let state = if blocked {
+                "PAUSED BY YOU".to_string()
+            } else if let Some(t) = live.iter().find(|t| t.peer == ip && !t.finished) {
+                if t.handing_in { "handing work in".to_string() } else { "getting a file".to_string() }
+            } else if serve::has_seen_page(&ip) {
+                "looking at the page".to_string()
+            } else {
+                "on the network".to_string()
+            };
+            rows.push(ClassRow {
+                ip: Some(ip.clone()),
+                key: Some(serve::device_key(&ip)),
+                label,
+                state,
+                blocked,
+            });
+        }
+        // Paused devices that are no longer on the network still need a row.
+        // A phone that is switched off, or has wandered out of range, drops
+        // off every other list on this screen; if its block dropped off with
+        // it there would be no way to undo one, and the teacher would find out
+        // at the start of the next lesson.
+        for (key, label) in serve::blocked_devices() {
+            if rows.iter().any(|r| r.key.as_deref() == Some(key.as_str())) {
+                continue;
+            }
+            rows.push(ClassRow {
+                ip: None,
+                key: Some(key),
+                label,
+                state: "PAUSED, and no longer on the network".to_string(),
+                blocked: true,
+            });
+        }
+        rows
+    }
+
+    fn draw_class(&self, f: &mut Frame) {
+        self.title(f, "Who is on the network");
+        let rows = self.class_rows();
+        if rows.is_empty() {
+            f.push("  Nobody has joined yet.");
+            self.hints(f, "  p change the wifi password    esc to go back");
+            return;
+        }
+        let lines: Vec<String> = rows
+            .iter()
+            .map(|r| format!("  {:<34}{}", term::truncate(&r.label, 32), r.state))
+            .collect();
+        let w = term::group_width(&lines);
+        // Six rows kept back for the two explanations and the hint line. They
+        // are not decoration: a teacher who believes a pause is a lock will
+        // find out otherwise from a child, not from the screen.
+        let room = f.rows.saturating_sub(f.used() + 7);
+        for (i, line) in lines.iter().enumerate().take(room) {
+            if i == self.row {
+                f.push_selected_within(line, w);
+            } else {
+                f.push(line);
+            }
+        }
+        if lines.len() > room {
+            f.push_dim(&format!("  and {} more not shown, the window is too short", lines.len() - room));
+        }
+        f.blank();
+        f.push_dim("  A paused device still has the wifi. It just cannot reach this");
+        f.push_dim("  lesson: no files, no handing in, no notes.");
+        f.push_dim("  A phone can come back wearing a different name. The #tag is the");
+        f.push_dim("  part that does not change. If one keeps coming back, change the");
+        f.push_dim("  password: that is the one they cannot walk around.");
+        let hint = match rows.get(self.row) {
+            Some(r) if r.blocked => "  space let them back in    p change the wifi password    esc to go back",
+            _ => "  space pause this device    p change the wifi password    esc to go back",
+        };
+        self.hints(f, hint);
+    }
+
+    /// The join code, and the words that make it optional.
+    ///
+    /// The credentials are printed alongside, always. That is not belt and
+    /// braces, it is the main lane: a good share of the phones in these rooms
+    /// have a cracked camera, a camera app that wants an account first, or an
+    /// Android old enough to have no scanner in the camera at all. A screen
+    /// that shows only a code has locked those children out in a way a teacher
+    /// cannot see from the front of the room.
+    ///
+    /// Laid out tight on purpose. A version 3 code with the quiet zone the
+    /// standard requires is 19 rows, and the default terminal is 24, so every
+    /// other line on this screen has to earn its place. Anything optional is
+    /// added only once the code is known to fit.
+    fn draw_joincode(&self, f: &mut Frame) {
+        let Some(h) = &self.hotspot else {
+            self.title(f, "Join by camera");
+            f.push("  This computer did not make the network, so there is no");
+            f.push("  password for it to put in a code.");
+            f.blank();
+            f.push_dim("  The class is on a network somebody else set up. They join it");
+            f.push_dim("  the way they always do, then open the address on the roster.");
+            self.hints(f, "  esc to go back");
+            return;
+        };
+        let code = crate::qr::wifi_join(&h.ssid, &self.password);
+        // Four modules of quiet zone on every side, which the standard requires
+        // and cameras genuinely rely on. Not negotiable for a shorter window:
+        // a code with a clipped margin is one that fails in the room.
+        const QUIET: usize = 4;
+
+        f.push(&format!("  Wifi network {}      Password {}", h.ssid, self.password));
+        f.blank();
+
+        let Some(code) = code else {
+            f.push("  That network name and password are too long to fit in a code.");
+            f.push("  Everything still works; the class types them in as usual.");
+            self.hints(f, "  esc to go back");
+            return;
+        };
+        let (cols, rows) = crate::qr::rendered_size(&code, QUIET);
+        // Measured BEFORE anything is drawn. A code that runs off the edge of
+        // the window is not a smaller code, it is an unreadable one, and half a
+        // code is worse than a line saying there is no room for one.
+        let room = f.rows.saturating_sub(f.used() + 1);
+        if cols + 2 > f.cols || rows > room {
+            f.push("  The window is too small to draw the code.");
+            f.push(&format!("  It needs {} rows and {} columns; this window has {} by {}.", rows + 3, cols + 2, f.rows, f.cols));
+            f.push("  Make it bigger, or just read the password out.");
+            self.hints(f, "  esc to go back");
+            return;
+        }
+        for line in crate::qr::render(&code, QUIET) {
+            f.push_raw(&format!("  {line}"));
+        }
+        // Only if the window can spare them.
+        if f.rows.saturating_sub(f.used()) > 3 {
+            f.blank();
+            f.push_dim("  Point a phone camera at this. If nothing happens, that phone");
+            f.push_dim("  cannot scan; type the name and password in above instead.");
+        }
+        self.hints(f, "  esc to go back");
+    }
+
+    fn draw_newpassword(&self, f: &mut Frame) {
+        self.title(f, "Change the wifi password");
+        f.push("  This knocks EVERY device off the network, not just one.");
+        f.blank();
+        f.push("  Everybody has to type the new password to come back, so plan");
+        f.push("  on writing it on the board before you press enter.");
+        f.blank();
+        f.push(&format!("  New password      {}", self.new_password));
+        f.blank();
+        if serve::blocked_count() > 0 {
+            f.push_dim(&format!(
+                "  The {} paused device{} stay paused. Changing the password does",
+                serve::blocked_count(),
+                if serve::blocked_count() == 1 { "" } else { "s" }
+            ));
+            f.push_dim("  not let anybody back in.");
+        }
+        self.hints(f, "  type to edit    enter to change it    esc to leave it alone");
+    }
+
     fn draw_sending(&mut self, f: &mut Frame) {
         // A hotspot does not have an address the instant nmcli returns; the
         // interface has to come up and be given one. Asking again while the
@@ -504,6 +720,10 @@ impl App {
                 .or_else(|| j.name.clone())
                 .or_else(|| self.names.get(j.ip))
                 .unwrap_or_else(|| j.ip.to_string());
+            if serve::is_blocked(&j.ip.to_string()) {
+                rows.push(format!("  {:<34}PAUSED BY YOU", term::truncate(&who, 32)));
+                continue;
+            }
             match live.iter().find(|t| t.peer == j.ip.to_string()) {
                 Some(t) => rows.push(transfer_row(&who, t)),
                 None if serve::has_seen_page(&j.ip.to_string()) => {
@@ -548,6 +768,15 @@ impl App {
             f.push_dim("  Nothing lands in your folder until you accept it.");
             f.blank();
         }
+        let paused = serve::blocked_count();
+        if paused > 0 {
+            f.push(&format!(
+                "  {paused} device{} paused. Press c to let {} back in.",
+                if paused == 1 { "" } else { "s" },
+                if paused == 1 { "it" } else { "them" }
+            ));
+            f.blank();
+        }
         if !dupes.is_empty() {
             f.push(&format!(
                 "  MORE THAN ONE DEVICE IS CALLING ITSELF: {}",
@@ -573,7 +802,7 @@ impl App {
                 f.push_dim(&format!("  {}: {}", term::truncate(who, 18), text));
             }
         }
-        self.hints(f, "  f files    n notice    w waiting work    q or esc to stop");
+        self.hints(f, "  f files  n notice  w waiting  c who is on  j join code  q to stop");
     }
 
     fn draw_receive(&self, f: &mut Frame) {
@@ -761,6 +990,9 @@ impl App {
             Screen::Tick { pre } => self.tick_key(k, pre),
             Screen::Waiting => self.waiting_key(k),
             Screen::Sending => self.sending_key(k),
+            Screen::Class => self.class_key(k),
+            Screen::NewPassword => self.newpassword_key(k),
+            Screen::JoinCode => self.joincode_key(k),
             Screen::Receive => self.receive_key(k),
             Screen::ReceiveFiles => self.files_key(k),
             Screen::Receiving => self.receiving_key(k),
@@ -921,6 +1153,16 @@ impl App {
                 self.row = 0;
                 return false;
             }
+            Key::Char('c') => {
+                self.screen = Screen::Class;
+                self.row = 0;
+                return false;
+            }
+            Key::Char('j') => {
+                self.screen = Screen::JoinCode;
+                self.row = 0;
+                return false;
+            }
             Key::Char('q') | Key::Esc => {
                 if let Some(h) = self.hotspot.take() {
                     h.down();
@@ -932,6 +1174,127 @@ impl App {
                 // one case that would fail. Said plainly rather than hidden.
                 self.note("Stopped handing out.\n\nThe network has been put back the way it was.\n\nTo hand out a different folder, close this and start it again.");
                 self.back = Screen::Home;
+            }
+            Key::Quit => return true,
+            _ => {}
+        }
+        false
+    }
+
+    fn class_key(&mut self, k: Key) -> bool {
+        let rows = self.class_rows();
+        self.move_row(k, rows.len().max(1));
+        match k {
+            Key::Char(' ') => {
+                let Some(r) = rows.get(self.row) else { return false };
+                if r.blocked {
+                    // By key, not by address. A paused device that has gone
+                    // quiet has no address left to name it by, and that is the
+                    // one most likely to need letting back in.
+                    match &r.key {
+                        Some(key) => serve::unblock_key(key),
+                        None => {}
+                    }
+                } else if let Some(ip) = &r.ip {
+                    let who = serve::block_device(ip);
+                    self.note(&format!(
+                        "Paused {who}.\n\n\
+                         That device can still see the wifi. It cannot get the class \
+                         files, hand anything in, or send you a note.\n\n\
+                         It sees a page saying you paused it. When you let it back in \
+                         the page comes back on its own; the child does not have to \
+                         do anything.\n\n\
+                         If they reappear under a different name, the password is the \
+                         way to remove them for real."
+                    ));
+                    self.back = Screen::Class;
+                }
+            }
+            Key::Char('p') => {
+                if self.hotspot.is_none() {
+                    self.note(
+                        "This computer did not make the network, so it cannot change \
+                         its password.\n\nThe network belongs to whoever set up the \
+                         router or the phone hotspot the class is using.",
+                    );
+                    self.back = Screen::Class;
+                    return false;
+                }
+                // Offered filled in, so the common case is one keypress. A
+                // teacher inventing a password under thirty pairs of eyes is
+                // how a network ends up called 12345678.
+                self.new_password = net::suggest_password();
+                self.screen = Screen::NewPassword;
+            }
+            Key::Esc => {
+                self.screen = Screen::Sending;
+                self.row = 0;
+            }
+            Key::Quit => return true,
+            _ => {}
+        }
+        false
+    }
+
+    fn joincode_key(&mut self, k: Key) -> bool {
+        match k {
+            Key::Esc | Key::Enter => {
+                self.screen = Screen::Sending;
+                self.row = 0;
+            }
+            Key::Char('q') | Key::Quit => return true,
+            _ => {}
+        }
+        false
+    }
+
+    fn newpassword_key(&mut self, k: Key) -> bool {
+        match k {
+            Key::Enter => {
+                let new = std::mem::take(&mut self.new_password);
+                let Some(h) = self.hotspot.as_mut() else {
+                    self.screen = Screen::Class;
+                    return false;
+                };
+                match h.change_password(&new) {
+                    Ok(()) => {
+                        self.password = new.clone();
+                        // The roster is now a list of devices that were on a
+                        // network which no longer exists under that key. Clear
+                        // it rather than let it decay, so the screen does not
+                        // show a room that has already emptied.
+                        self.joined.clear();
+                        self.joined_at = None;
+                        self.note(&format!(
+                            "The network is back with a new password.\n\n\
+                             {new}\n\n\
+                             Everybody has been knocked off. Write that on the board; \
+                             nobody can rejoin without it.\n\n\
+                             The wifi name has not changed, so devices will still see \
+                             it in their list."
+                        ));
+                        self.back = Screen::Class;
+                    }
+                    Err(e) => {
+                        self.note(&format!("The password was not changed.\n\n{e}"));
+                        self.back = Screen::Class;
+                    }
+                }
+            }
+            Key::Esc => {
+                self.new_password.clear();
+                self.screen = Screen::Class;
+            }
+            Key::Backspace => {
+                self.new_password.pop();
+            }
+            Key::Char(c) => {
+                // 63 is the WPA2 passphrase ceiling. Stopping at it here means
+                // a teacher who leans on a key gets a full field rather than a
+                // refusal from nmcli after the fact.
+                if self.new_password.chars().count() < 63 {
+                    self.new_password.push(c);
+                }
             }
             Key::Quit => return true,
             _ => {}

@@ -135,6 +135,97 @@ pub fn forget_claim(ip: &str) {
     c.retain(|(k, _)| *k != key);
 }
 
+/// Devices the teacher has paused, keyed the same way names are: by the device
+/// where we can identify it, by address only where we cannot.
+///
+/// The address is the wrong key here for the same reason it is the wrong key
+/// for a name, only sharper. A child told to stop can get a new address in
+/// about four taps (forget the network, join it again), so an address-keyed
+/// block lasts until they think of that. The tag comes from the hardware
+/// address, and those four taps do not change it.
+///
+/// What this is NOT: a lock. It is a classroom instruction the software
+/// enforces, in the same sense as being moved to the front of the room. Two
+/// things escape it, and both are said out loud on the teacher's screen rather
+/// than left to be discovered:
+///
+///   * A phone can be made to present a different hardware address. Android
+///     already randomises one per network, and forgetting the network can draw
+///     a fresh one. A new address means a new tag and the block does not follow.
+///   * A blocked device is still ON the wifi. It cannot reach the lesson, and
+///     that is the whole of what it cannot do.
+///
+/// The answer to both is the password change, which is the other control and
+/// is deliberately a separate one.
+///
+/// The label is captured AT THE MOMENT OF BLOCKING and kept, so the list still
+/// reads the same after that device has gone quiet and dropped off every other
+/// list on the screen. A blocked device you can no longer see is exactly the
+/// one worth being reminded about.
+static BLOCKED: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+/// Pause this device. Returns the label it was filed under, for the teacher.
+pub fn block_device(ip: &str) -> String {
+    let key = claim_key(ip);
+    let label = full_label(ip);
+    let mut b = BLOCKED.lock().unwrap_or_else(|e| e.into_inner());
+    match b.iter_mut().find(|(k, _)| *k == key) {
+        // Already paused: refresh the label rather than queue a second entry,
+        // so a double press is not a second block to undo.
+        Some(e) => e.1 = label.clone(),
+        None => b.push((key, label.clone())),
+    }
+    label
+}
+
+/// Let them back in.
+pub fn unblock_device(ip: &str) {
+    let key = claim_key(ip);
+    let mut b = BLOCKED.lock().unwrap_or_else(|e| e.into_inner());
+    b.retain(|(k, _)| *k != key);
+}
+
+/// Undo the block on a list entry, which is the only handle the teacher has
+/// left once the device has stopped appearing on the roster.
+pub fn unblock_key(key: &str) {
+    let mut b = BLOCKED.lock().unwrap_or_else(|e| e.into_inner());
+    b.retain(|(k, _)| k != key);
+}
+
+pub fn is_blocked(ip: &str) -> bool {
+    // The common case is an empty list, and this runs on every single request.
+    // Checking that first means a lesson with nobody paused pays nothing at
+    // all: no /proc read, no hashing, no allocation.
+    {
+        let b = BLOCKED.lock().unwrap_or_else(|e| e.into_inner());
+        if b.is_empty() {
+            return false;
+        }
+    }
+    let key = claim_key(ip);
+    let b = BLOCKED.lock().unwrap_or_else(|e| e.into_inner());
+    b.iter().any(|(k, _)| *k == key)
+}
+
+/// (key, label) for every paused device, for the screen.
+pub fn blocked_devices() -> Vec<(String, String)> {
+    BLOCKED.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+pub fn blocked_count() -> usize {
+    BLOCKED.lock().unwrap_or_else(|e| e.into_inner()).len()
+}
+
+/// Deliberately NOT called when the password changes.
+///
+/// A password change knocks everybody off, which makes it tempting to treat
+/// the blocks as spent. It is the wrong way round: the child who was paused is
+/// the one most likely to get the new password from a friend, and they should
+/// come back to the same closed door. The two controls stack.
+pub fn clear_blocks() {
+    BLOCKED.lock().unwrap_or_else(|e| e.into_inner()).clear();
+}
+
 /// Everything known about a device, for the permanent record:
 /// "Johnny [Xiaomi-11-Lite, 10.42.0.90]", degrading gracefully to whatever
 /// parts exist.
@@ -238,6 +329,12 @@ pub fn refuse_pending(root: &Path, on_disk: &str) -> std::io::Result<()> {
     fs::rename(&from, refused.join(on_disk))?;
     drop_pending(on_disk);
     Ok(())
+}
+
+/// The key this address's claims and blocks are filed under, so the screen can
+/// hold on to a device that has left the network.
+pub fn device_key(ip: &str) -> String {
+    claim_key(ip)
 }
 
 /// The tag alone, for the roster.
@@ -855,6 +952,40 @@ fn serve_one(
     let path_only = raw_path.split('?').next().unwrap_or("/");
     let query = raw_path.split_once('?').map(|(_, q)| q).unwrap_or("");
 
+    // Paused by the teacher.
+    //
+    // Checked AFTER the captive redirect on purpose. A phone whose
+    // connectivity probe is refused concludes it has no network, and some
+    // Android builds then drop it and rejoin, which is the one action that
+    // gets a device a new address and therefore a new tag. Letting the probe
+    // succeed keeps the phone sitting still on a network where the block
+    // holds. The refusal is delivered where a person will read it, on the
+    // page, and nowhere else.
+    //
+    // Deliberately a 200 and not a 403. The only reader is a child holding a
+    // phone, and the message has to render; a browser that decides to show its
+    // own error page instead has turned "your teacher paused you" into
+    // "something is broken", which sends them to the teacher to report a fault.
+    if is_blocked(&peer_ip) {
+        if method == "POST" {
+            // Drain what fits and no more. Nothing is parsed and nothing is
+            // kept; this runs only so the browser gets an answer it will
+            // render rather than a dropped connection. A paused device is not
+            // owed the bandwidth to finish uploading whatever it was sending.
+            let len: usize = text
+                .lines()
+                .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
+                .and_then(|l| l.split_once(':'))
+                .and_then(|(_, v)| v.trim().parse().ok())
+                .unwrap_or(0);
+            let mut sink = vec![0u8; len.min(64 * 1024)];
+            let _ = reader.read_exact(&mut sink);
+        }
+        let page = crate::page::paused_page();
+        respond_fresh(&mut out, "text/html; charset=utf-8", page.as_bytes())?;
+        return Ok(false);
+    }
+
     if method == "POST" {
         // POSTs answer with a redirect and the connection closes: the body has
         // been consumed and a clean start is worth more than one saved
@@ -1071,7 +1202,15 @@ fn parse_range(r: &str, total: u64) -> Option<(u64, u64)> {
 }
 
 fn respond(out: &mut BufWriter<TcpStream>, code: u16, ctype: &str, body: &[u8]) -> std::io::Result<()> {
-    write!(out, "HTTP/1.1 {code} OK\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\n\r\n", body.len())?;
+    let why = match code {
+        200 => "OK",
+        206 => "Partial Content",
+        403 => "Forbidden",
+        404 => "Not Found",
+        416 => "Range Not Satisfiable",
+        _ => "OK",
+    };
+    write!(out, "HTTP/1.1 {code} {why}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\n\r\n", body.len())?;
     out.write_all(body)?;
     out.flush()
 }
@@ -1172,5 +1311,181 @@ mod bind_scope_tests {
     fn a_wildcard_serve_still_binds_its_own_port() {
         let listeners = bind_all("0.0.0.0:0").expect("wildcard bind");
         assert!(!listeners.is_empty(), "the requested port must always bind");
+    }
+}
+
+#[cfg(test)]
+mod block_tests {
+    use super::*;
+    use std::io::{Read as _, Write as _};
+    use std::net::TcpStream;
+
+    /// Undo the block whatever happens, including a panic partway through an
+    /// assertion. BLOCKED is process-wide state and a test that leaves it set
+    /// hands its failure to whichever test runs next, which is the worst kind
+    /// to debug: the one that fails somewhere else.
+    struct Unblock(&'static str);
+    impl Drop for Unblock {
+        fn drop(&mut self) {
+            unblock_device(self.0);
+        }
+    }
+
+    fn tmproot(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("hub-block-test-{}-{tag}", std::process::id()));
+        let _ = fs::create_dir_all(&d);
+        d
+    }
+
+    fn serve_loopback(root: PathBuf) -> u16 {
+        let listeners = bind_all("127.0.0.1:0").expect("loopback bind");
+        let port = listeners[0].local_addr().expect("port").port();
+        thread::spawn(move || accept_loop(listeners, root, 2));
+        port
+    }
+
+    fn get(port: u16, path: &str) -> String {
+        let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        write!(s, "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").unwrap();
+        let mut out = Vec::new();
+        let _ = s.read_to_end(&mut out);
+        String::from_utf8_lossy(&out).to_string()
+    }
+
+    fn post(port: u16, path: &str, body: &str) -> String {
+        let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        write!(
+            s,
+            "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        let _ = s.read_to_end(&mut out);
+        String::from_utf8_lossy(&out).to_string()
+    }
+
+    /// The whole point of the feature, end to end over a real socket: a paused
+    /// device gets nothing, and letting it back in needs nothing from the child.
+    ///
+    /// One test, not five. BLOCKED is process-wide and cargo runs tests in
+    /// parallel, so a paused loopback in one test would be a paused loopback in
+    /// all of them. Keeping the sequence in a single function is what makes the
+    /// ordering real rather than hoped for.
+    #[test]
+    fn a_paused_device_gets_nothing_and_a_freed_one_gets_it_back() {
+        let root = tmproot("gate");
+        fs::write(root.join("lesson.txt"), b"the lesson").unwrap();
+        let port = serve_loopback(root.clone());
+
+        // Before: the page asks who you are, which is how the class page starts.
+        let before = get(port, "/");
+        assert!(before.contains("type your name"), "expected the name prompt, got:\n{before}");
+
+        let _guard = Unblock("127.0.0.1");
+        block_device("127.0.0.1");
+        assert!(is_blocked("127.0.0.1"));
+
+        // The page is replaced, not decorated. A paused device must not be
+        // able to see what it is missing.
+        let paused = get(port, "/");
+        assert!(paused.contains("Paused"), "expected the paused page, got:\n{paused}");
+        assert!(!paused.contains("type your name"), "a paused device must not get the class page");
+
+        // Guessing the file name directly is the obvious way round a page that
+        // has stopped listing files.
+        let direct = get(port, "/lesson.txt");
+        assert!(!direct.contains("the lesson"), "a paused device fetched the file anyway:\n{direct}");
+
+        // And the machine-readable listing, which is what another copy of this
+        // program asks for.
+        let listing = get(port, "/?list");
+        assert!(!listing.contains("lesson.txt"), "a paused device read the file list:\n{listing}");
+
+        // Sending is stopped too, not merely receiving. This is the direction
+        // that matters: the reason to pause somebody is usually what they are
+        // sending, not what they are reading.
+        let secret = "paused-device-must-not-be-heard";
+        let noted = post(port, "/note", &format!("text={secret}&token=x"));
+        assert!(noted.contains("Paused"), "a paused device should be told, got:\n{noted}");
+        let notes_after = crate::page::notes(50);
+        assert!(
+            !notes_after.iter().any(|(_, t)| t.contains(secret)),
+            "a note from a paused device was recorded"
+        );
+
+        // Letting them back in restores everything, with no action from the
+        // child: their page refreshes itself.
+        unblock_device("127.0.0.1");
+        assert!(!is_blocked("127.0.0.1"));
+        let after = get(port, "/");
+        assert!(after.contains("type your name"), "expected the class page back, got:\n{after}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Filed under the DEVICE, not the address, whenever the device can be
+    /// identified. This is what makes a pause survive a child forgetting the
+    /// network and joining it again, which is a four-tap escape otherwise.
+    ///
+    /// Uses this machine's real ARP table, and skips itself honestly when it is
+    /// empty rather than passing on nothing.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_block_is_filed_against_the_device_not_the_address() {
+        let Ok(text) = fs::read_to_string("/proc/net/arp") else { return };
+        let mut found = None;
+        for line in text.lines().skip(1) {
+            let f: Vec<&str> = line.split_whitespace().collect();
+            // 0x2 is a complete entry: an address we have actually spoken to.
+            if f.len() >= 4 && f[2] == "0x2" {
+                found = Some(f[0].to_string());
+                break;
+            }
+        }
+        let Some(ip) = found else { return };
+        let key = device_key(&ip);
+        assert!(key.starts_with("tag:"), "a device we know the hardware for must key by tag, got {key}");
+
+        block_device(&ip);
+        let listed = blocked_devices();
+        unblock_key(&key);
+        assert!(
+            listed.iter().any(|(k, _)| *k == key),
+            "the block was not filed under the device key {key}: {listed:?}"
+        );
+        assert!(!is_blocked(&ip), "the cleanup did not take");
+    }
+
+    /// Pressing pause twice is one pause, not two to undo. A list that grows
+    /// per keypress would leave a device that reads as freed still blocked.
+    #[test]
+    fn pausing_twice_leaves_one_entry() {
+        // TEST-NET-3, reserved for documentation, so nothing else in the suite
+        // can be talking to it.
+        let ip = "203.0.113.7";
+        let key = device_key(ip);
+        block_device(ip);
+        block_device(ip);
+        let mine = blocked_devices().iter().filter(|(k, _)| *k == key).count();
+        unblock_device(ip);
+        assert_eq!(mine, 1, "a second pause added a second entry to undo");
+        assert!(!is_blocked(ip));
+    }
+
+    /// A paused device that walks out of the room keeps its row, because
+    /// otherwise there is no way left to un-pause it.
+    #[test]
+    fn a_paused_device_that_disappears_keeps_its_label() {
+        let ip = "203.0.113.9";
+        block_device(ip);
+        let listed = blocked_devices();
+        let key = device_key(ip);
+        let kept = listed.iter().find(|(k, _)| *k == key).cloned();
+        unblock_key(&key);
+        let (_, label) = kept.expect("a paused device must stay on the list");
+        assert!(label.contains(ip), "the label has to name it somehow: {label}");
     }
 }

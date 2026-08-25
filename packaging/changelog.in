@@ -1,5 +1,28 @@
 gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
 
+  * Two ways to take a device off, and the screen says which is which.
+    Pause one from the roster (c, then space): it keeps the wifi and loses
+    the lesson, seeing a page that says its teacher paused it and nothing
+    else. That page refreshes itself, so letting them back in needs nothing
+    from the child. A pause is keyed to the device, not the address, so
+    forgetting the network and rejoining does not shake it off.
+  * Change the wifi password and restart the network (c, then p): the
+    heavier control, for a device that comes back wearing a different name.
+    Pauses deliberately survive it.
+  * A paused device that leaves the room keeps its row, because otherwise
+    there is no way left to un-pause it.
+  * Join by camera (j): a QR code drawn without a dependency. The network
+    name and password stay printed underneath at the same size; plenty of
+    these phones cannot scan, and a screen showing only a code locks those
+    children out invisibly.
+  * Fixed: restoring the teacher's own wifi failed silently for any network
+    with a colon in its name, because the name was fed back still escaped.
+    That is the exact failure the restore path exists to prevent.
+
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+
+gorilla-portable-network-hub (0.6.0) unstable; urgency=medium
+
   * Work a child sends now WAITS for the teacher. It lands in a holding
     area, the roster says "N pieces of work waiting for you", and she
     accepts or refuses each one (w on the roster; a, r, o to look). Nothing
@@ -14,7 +37,7 @@ gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
     left, so a teacher knows whether she can shut the lid. A finished row
     no longer reads "99% done".
 
- -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  Mon, 25 Aug 2026 11:00:00 +0100
 
 gorilla-portable-network-hub (0.5.1) unstable; urgency=high
 

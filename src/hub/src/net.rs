@@ -708,11 +708,20 @@ pub fn rearm_restore(seconds: u64) {
 pub fn rearm_restore(_seconds: u64) {}
 
 #[derive(Debug)]
+// Only ever built on Linux: everywhere else hotspot_up refuses and points
+// the teacher at their own settings, so every field here is unread there.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub struct Hotspot {
     pub ssid: String,
     pub iface: String,
     /// The wifi network that was connected before, so it can be put back.
     previous: Option<String>,
+    /// The NetworkManager profile actually serving this hotspot, read back
+    /// from the system rather than assumed to be "Hotspot".
+    profile: Option<String>,
+    /// The password in force right now, which is not the one the lesson
+    /// started with once it has been changed.
+    pub password: String,
 }
 
 /// The first wifi interface NetworkManager knows about.
@@ -742,6 +751,40 @@ pub fn wifi_interface() -> Option<String> {
     None
 }
 
+/// Undo nmcli's terse-mode escaping.
+///
+/// `nmcli -t` separates fields with a colon, so any colon or backslash INSIDE
+/// a value is escaped. Feeding the escaped form back to nmcli does not find
+/// the connection, it finds nothing, and the failure is silent.
+///
+/// This is not a hypothetical. The machine this was written on has a wifi
+/// profile whose name contains a colon. Measured 2026-08-25 against nmcli
+/// itself: `nmcli connection show` exits 10 (not found) for the escaped
+/// spelling of that name and 0 for the real one. Everything that put a
+/// teacher's wifi BACK went through this function, so a teacher whose home or
+/// school network has a colon in its name would have finished a lesson with no
+/// wifi and no message. That is precisely the outcome the restore path exists
+/// to prevent, and it had been carrying its own defeat since it was written.
+#[cfg(target_os = "linux")]
+fn unescape_terse(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            // A backslash escapes exactly one following character. A trailing
+            // lone backslash is not something nmcli emits, but dropping it
+            // silently would be worse than keeping it.
+            match chars.next() {
+                Some(next) => out.push(next),
+                None => out.push('\\'),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 #[cfg(target_os = "linux")]
 fn active_wifi_connection() -> Option<String> {
     let out = std::process::Command::new("nmcli")
@@ -750,10 +793,42 @@ fn active_wifi_connection() -> Option<String> {
         .output()
         .ok()?;
     for line in String::from_utf8_lossy(&out.stdout).lines() {
+        // Split from the RIGHT: TYPE cannot contain a colon, NAME very much
+        // can, and splitting from the left cuts a name like `Room:5 spare` into
+        // pieces.
         if let Some((name, kind)) = line.rsplit_once(':') {
             if kind.contains("wireless") {
-                return Some(name.to_string());
+                return Some(unescape_terse(name));
             }
+        }
+    }
+    None
+}
+
+/// The connection profile currently active on one interface.
+///
+/// Needed because the profile is NOT reliably called "Hotspot". nmcli appends
+/// a number when a profile of that name already exists, and this machine has
+/// accumulated Hotspot-1 through Hotspot-4 from previous runs. Anything that
+/// addresses the hotspot by the literal name "Hotspot" is therefore addressing
+/// somebody else's leftover, which for a password change means changing the
+/// password on a network that is not running.
+#[cfg(target_os = "linux")]
+fn active_profile_on(iface: &str) -> Option<String> {
+    let out = std::process::Command::new("nmcli")
+        .args(["-t", "-f", "NAME,DEVICE,TYPE", "connection", "show", "--active"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        // NAME, DEVICE, TYPE. Only NAME can contain a colon, so take the two
+        // trailing fields from the right and everything before them is the name.
+        let mut parts = line.rsplitn(3, ':');
+        let kind = parts.next().unwrap_or("");
+        let dev = parts.next().unwrap_or("");
+        let name = parts.next().unwrap_or("");
+        if dev == iface && kind.contains("wireless") {
+            return Some(unescape_terse(name));
         }
     }
     None
@@ -787,7 +862,16 @@ pub fn hotspot_up(ssid: &str, password: &str) -> Result<Hotspot, String> {
     if let Some(p) = &previous {
         let _ = PREVIOUS_WIFI.set(p.clone());
     }
-    Ok(Hotspot { ssid: ssid.to_string(), iface, previous })
+    // Read back which profile nmcli actually used. Asked for, never assumed:
+    // see active_profile_on.
+    let profile = active_profile_on(&iface);
+    Ok(Hotspot {
+        ssid: ssid.to_string(),
+        iface,
+        previous,
+        profile,
+        password: password.to_string(),
+    })
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -828,8 +912,12 @@ impl Hotspot {
     /// second time, and will have no idea what did it.
     #[cfg(target_os = "linux")]
     pub fn down(&self) {
+        // By the name the system gave it, falling back to the usual one only
+        // when we could not read it back. "Hotspot" is a good guess and a bad
+        // certainty: this machine has four leftovers called Hotspot-1 upwards.
+        let profile = self.profile.clone().unwrap_or_else(|| "Hotspot".to_string());
         let _ = std::process::Command::new("nmcli")
-            .args(["connection", "down", "Hotspot"])
+            .args(["connection", "down", &profile])
             .output();
         let _ = std::process::Command::new("nmcli")
             .args(["device", "disconnect", &self.iface])
@@ -847,6 +935,75 @@ impl Hotspot {
 
     #[cfg(not(target_os = "linux"))]
     pub fn down(&self) {}
+
+    /// Change the password and restart the network under it.
+    ///
+    /// The heavier of the two ways to remove somebody, and the only one that
+    /// actually removes them: pausing a device stops it reaching the lesson,
+    /// this stops it reaching the NETWORK. Bringing the profile back up
+    /// re-forms the access point, so every device in the room is dropped and
+    /// only those told the new password return. A child who has worked out how
+    /// to present a new hardware address, and so escaped a pause, does not
+    /// escape this one, because it is not their device being recognised, it is
+    /// a key they do not have.
+    ///
+    /// It is blunt on purpose and the screen says so before it runs. Thirty
+    /// children have to retype a password to remove one, and half a lesson can
+    /// go on that. It is the answer when the pause is not holding, not the
+    /// first move.
+    #[cfg(target_os = "linux")]
+    pub fn change_password(&mut self, new: &str) -> Result<(), String> {
+        if new.chars().count() < 8 {
+            return Err("A wifi password has to be at least 8 characters. That is a rule of WPA2, not ours.".into());
+        }
+        // Refuse rather than guess. Changing the key on a profile that is not
+        // the one serving the room does nothing visible, and would leave the
+        // teacher reading a new password off the screen that no device is
+        // being asked for. Better to say we cannot.
+        let profile = match self.profile.clone().or_else(|| active_profile_on(&self.iface)) {
+            Some(p) => p,
+            None => {
+                return Err("Could not work out which network this computer is serving, \
+                            so the password was left alone. Nothing has changed."
+                    .into())
+            }
+        };
+        let out = std::process::Command::new("nmcli")
+            .args(["connection", "modify", &profile, "wifi-sec.psk", new])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(|e| format!("Could not run nmcli: {e}"))?;
+        if !out.status.success() {
+            return Err(explain_nmcli(String::from_utf8_lossy(&out.stderr).trim()));
+        }
+        // Modifying a live profile does not re-key the running access point;
+        // the change sits in the stored profile until the profile is brought
+        // up again. Without this the teacher would be given a new password
+        // while the old one still worked, which is worse than doing nothing:
+        // they would believe the room had been cleared when it had not.
+        let out = std::process::Command::new("nmcli")
+            .args(["connection", "up", &profile])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(|e| format!("Could not run nmcli: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "The password was changed but the network did not come back up.\n{}\n\
+                 The old password no longer works. Stop and start the lesson again.",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        self.profile = Some(profile);
+        self.password = new.to_string();
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn change_password(&mut self, _new: &str) -> Result<(), String> {
+        Err("On this system the password is changed where the hotspot was \
+             switched on: Settings, Network and internet, Mobile hotspot."
+            .into())
+    }
 
     /// A restore that survives this program being killed outright.
     ///
@@ -1028,6 +1185,27 @@ mod tests {
         // case a hand-rolled calendar gets wrong.
         assert_eq!(civil_from_days(47540), (2100, 2, 28));
         assert_eq!(civil_from_days(47541), (2100, 3, 1));
+    }
+
+    /// The escaping bug that had been sitting in the wifi restore path since
+    /// it was written.
+    ///
+    /// Found against a real profile on this machine whose name contains a
+    /// colon, not against an invented one. Measured 2026-08-25 with nmcli
+    /// itself: the escaped spelling exits 10 (unknown connection), the real
+    /// one exits 0. Everything that put a teacher's wifi back was passing the
+    /// escaped spelling.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_connection_name_survives_the_round_trip_through_terse_mode() {
+        assert_eq!(unescape_terse(r"\:-\) staff \:-\) room"), ":-) staff :-) room");
+        assert_eq!(unescape_terse("ASK4 Wireless"), "ASK4 Wireless");
+        assert_eq!(unescape_terse(r"Room\:5"), "Room:5");
+        // A backslash in a name is escaped as two, and must come back as one.
+        assert_eq!(unescape_terse(r"back\\slash"), r"back\slash");
+        // An escape with nothing after it is not something nmcli emits, but
+        // swallowing the character silently would be the worse answer.
+        assert_eq!(unescape_terse(r"trailing\"), r"trailing\");
     }
 
     #[test]

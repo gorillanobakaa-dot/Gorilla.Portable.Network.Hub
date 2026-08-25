@@ -15,7 +15,7 @@
 // hands in a 200 MB video on a laptop with 2 GB of RAM, so the body must go
 // to disk as it arrives, never into memory.
 
-use crate::serve::{self, Direction};
+use crate::serve::{self};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
@@ -335,6 +335,37 @@ pub fn files_frame(root: &Path) -> String {
 /// correct in a browser with a back button and a trap inside a captive
 /// sign-in sheet, which has none. The owner's words: "I am forever stuck on
 /// that page viewing it." A viewer page costs nothing and has a door.
+/// What a paused device sees, and the only thing it can reach.
+///
+/// A dead end on purpose: no form, no button, nothing to press. Every escape
+/// hatch that exists elsewhere on the class page is a way to send something,
+/// and a paused device sending something is the exact thing being stopped.
+///
+/// It refreshes itself every fifteen seconds so that unpausing needs nothing
+/// from the child. They will have put the phone down; the phone comes back on
+/// its own. The whole design assumes the person holding it does not know how
+/// to help, and should not have to.
+pub fn paused_page() -> String {
+    String::from(
+        "<!doctype html><html><head><meta charset=\"utf-8\">\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+         <meta http-equiv=\"refresh\" content=\"15\">\
+         <title>Paused</title><style>\
+         body{font-family:sans-serif;margin:0;padding:24px;background:#fff;color:#111;max-width:620px}\
+         h1{font-size:1.4em}\
+         .box{background:#fdecea;border:2px solid #c0392b;padding:14px;font-size:1.15em;margin:14px 0}\
+         p{font-size:1.05em;line-height:1.5}\
+         </style></head><body>\n\
+         <h1>Paused</h1>\n\
+         <div class=box>Your teacher has paused this device.</div>\n\
+         <p>You cannot get the class files or hand anything in right now.\
+         Nothing you send will arrive.</p>\n\
+         <p>Speak to your teacher. When they let you back in, this page comes\
+         back by itself. You do not need to do anything.</p>\n\
+         </body></html>\n",
+    )
+}
+
 pub fn view_page(name: &str) -> String {
     let esc = html_escape(name);
     let url = urlencode(name);

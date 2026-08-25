@@ -443,3 +443,134 @@ Phones that join will see that program, not this lesson.
 ```
 
 Silence was the failure. Saying so is the fix.
+
+# Taking somebody off the network, 25 August 2026
+
+Everything up to here was about getting work to move. This part is about
+stopping it, which turns out to be a different problem with a different honest
+answer.
+
+## Two ways to remove somebody, and they are not the same
+
+The request was simple to say: a teacher needs to be able to kick a device off.
+Working out what "off" means took longer than building it.
+
+There are two things a teacher might want, and they are far enough apart that
+the tool now offers both and says plainly which is which.
+
+**Pause a device.** Press `c` on the roster, pick a name, press space. That
+device can still see the wifi, and its bars are still full. It cannot get the
+class files, cannot hand anything in, cannot send a note, and cannot reach the
+list of files by guessing a name. It gets a page that says its teacher paused
+it, and nothing else: no form, no button, nothing to press.
+
+That page refreshes itself every fifteen seconds. When the teacher lets them
+back in, the phone returns to the lesson by itself. The child does not have to
+know how to help, because the child holding the phone usually does not.
+
+**Change the password.** Press `p`. Everybody in the room is knocked off at
+once, and only those told the new password come back. This is heavier than it
+sounds: thirty children retyping a password to remove one is half a lesson, and
+the screen says so before it does anything.
+
+## Why a pause is not a lock, and why we say so on the screen
+
+A pause is recognition, not a barrier. It works by recognising the device, and
+a phone can be told to present a different identity. Android already gives each
+network a made-up hardware address by default, and forgetting a network and
+rejoining it can draw a new one. A child who works that out is back, under a new
+name, and the pause does not follow them.
+
+We could have left that unsaid. A teacher who believes a pause is absolute will
+find out otherwise from a child, in front of a class, which is the worst
+possible way to learn it. So the screen says it, in the room, at the moment the
+decision is being made:
+
+> A paused device still has the wifi. It just cannot reach this lesson.
+> A phone can come back wearing a different name. The #tag is the part that
+> does not change. If one keeps coming back, change the password: that is the
+> one they cannot walk around.
+
+The password is the answer to that escape, because it is not recognising a
+device at all. It is a key they do not have.
+
+The two stack deliberately. Changing the password does **not** clear the pauses,
+and that is a decision rather than an oversight: the child who was paused is the
+one most likely to get the new password from a friend, and they should come back
+to the same closed door.
+
+## A paused device that leaves the room keeps its place on the list
+
+A phone that is switched off, or carried out of range, drops off every other
+list on the screen. If its pause dropped off with it, there would be no way left
+to undo one, and the teacher would find out at the start of the next lesson.
+
+So a paused device keeps its row, with the name it had when it was paused, and
+the row says it is no longer on the network. A paused device you can no longer
+see is exactly the one worth being reminded about.
+
+## A bug we found in something we thought was finished
+
+While building the password change, we found that the code which puts a
+teacher's own wifi back at the end of a lesson had been broken from the day it
+was written, for anybody whose network has a colon in its name.
+
+The tool asks the system what wifi you were on, so it can put you back. The
+system answers in a format that uses colons to separate fields, so a colon
+inside a name gets marked with a backslash. We were feeding that marked-up
+spelling straight back. The system does not recognise it, and says nothing
+useful about why.
+
+This machine has a wifi profile whose name really does contain a colon, which
+is how we found it. On 25 August 2026 we checked with the system's own tool:
+the marked-up spelling is rejected as unknown, the real one is accepted. The
+name itself is kept out of the write-up, because an unusual network name is
+searchable and would say more about where this machine lives than the bug
+needs it to.
+
+A teacher on a network with a colon in its name would have finished a lesson
+with no wifi and no message. That is precisely the outcome that code exists to
+prevent, and it had been carrying its own defeat since it was written.
+
+## Joining by camera, which is a bonus and never the way in
+
+There is now a join code: press `j` and the screen shows a square a phone camera
+can read, which offers to join the network without anybody typing a password.
+
+It is drawn by us, not by a library. That is not pride; a library for this pulls
+in a build tree, and the whole program is under a megabyte because somebody has
+to download it over a connection measured in single digits of KB per second. The
+three features in this release cost 22,624 bytes between them, measured.
+
+The network name and the password stay printed underneath, in full, at the same
+size as everything else. A good share of the phones in these rooms have a
+cracked camera, a camera app that wants an account before it will scan anything,
+or an Android old enough to have no scanner in the camera at all. A screen
+showing only a code has locked those children out in a way a teacher at the
+front of the room cannot see.
+
+If the window is too small to draw the code properly, the screen says so and
+shows nothing rather than drawing a code that will not scan. Half a QR code is
+not a smaller QR code.
+
+## How we checked the code without a scanner
+
+There is no QR library on this machine to check against, so we wrote a reader,
+separately, from the published standard: its own map of which parts of the
+square are structure rather than data, its own arithmetic, its own reading
+order. It reads our codes back correctly.
+
+Two further checks, because a reader written by the same hand can share a
+mistake with the writer. The error correction is verified the way a reader
+verifies it, which is a different calculation from the one that produces it. And
+the small block of information that tells a camera how to read the rest is
+checked against the eight published values from the standard, all eight of which
+matched.
+
+That found a real bug. Our code was blanking the one square that is always meant
+to be black. Nothing else noticed, because that square carries no information
+and the code still read back perfectly. It was caught by a test that checks
+coordinates written out by hand from the standard, rather than by asking the
+program whether it agreed with itself.
+
+The final word still belongs to a phone camera, which is where it went next.

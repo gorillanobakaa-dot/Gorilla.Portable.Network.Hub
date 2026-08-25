@@ -844,3 +844,239 @@ Plus two harnesses in the scratchpad, both of which found bugs review did not:
 `drive.py` (pty + escape-sequence interpreter, asserts the frame is exactly the
 terminal height) and `exhaust.py` (parks N idle connections, then times a
 latecomer).
+
+## 10. Removing a device, and the join code
+
+Version 0.7.0. Three features, 22,624 bytes of release binary between them
+(708,216 at 0.6.0, 730,840 at 0.7.0, both **[measured]** on this machine,
+`--release`, same toolchain).
+
+### 10.1 Two controls, deliberately not one
+
+| | pause a device | change the password |
+|---|---|---|
+| key | `c`, then space | `c`, then `p` |
+| scope | one device | the whole room |
+| enforced by | this program | WPA2 |
+| defeated by | a new hardware address | nothing short of the key |
+| costs | nothing | thirty children retyping |
+| survives a reconnect | yes, by device tag | n/a |
+
+They compose on purpose. `clear_blocks()` exists and is **not** called on a
+password change: the child who was paused is the likeliest to get the new
+password from a friend, and should meet the same closed door.
+
+### 10.2 Keying a block
+
+`BLOCKED: Mutex<Vec<(String, String)>>` of `(claim_key, label_at_time_of_block)`,
+keyed by exactly the function names are keyed by:
+
+```rust
+fn claim_key(ip: &str) -> String {
+    match crate::net::device_tag(ip) {          // sha256(MAC)[0..4]
+        Some(tag) => format!("tag:{tag}"),
+        None => format!("ip:{ip}"),
+    }
+}
+```
+
+Address keying fails in both directions and the second one is the dangerous
+one. A reconnecting phone gets a new lease, so an address-keyed block ends after
+four taps. Worse, dnsmasq **recycles** addresses, so a later child can inherit
+the block belonging to an earlier one.
+
+The label is captured at block time and kept. A device that goes quiet drops off
+`joined_devices` and off the roster; without a stored label there would be no
+handle left to unblock it with. `unblock_key(&str)` exists for exactly that row.
+
+`is_blocked` short-circuits on an empty list **before** computing the key,
+because it runs on every request and the common case is nobody paused:
+
+```rust
+{ let b = BLOCKED.lock()...; if b.is_empty() { return false; } }
+let key = claim_key(ip);          // only now: /proc/net/arp read + sha256
+```
+
+### 10.3 Where the gate sits, and why not earlier
+
+In `serve_one`, **after** the captive-portal foreign-host redirect and before
+route dispatch. Ordering is load bearing in both directions:
+
+* **After the redirect.** A phone whose connectivity probe is refused concludes
+  it has no network, and some Android builds then drop it and rejoin, which is
+  the single action that earns a new address and therefore a new tag. Letting
+  the probe succeed keeps the phone still, on a network where the block holds.
+* **Before dispatch.** `/`, `/files`, `/view/...`, `/?list`, a direct file path,
+  `/note`, `/name` and `/handin` are all downstream of one check. A gate per
+  route is a gate somebody forgets to add to route nine.
+
+A `POST` drains up to 64 KB and no further, discarded unparsed, purely so the
+browser renders an answer instead of showing a connection error. A paused device
+is not owed the bandwidth to finish an upload.
+
+The response is **200, not 403**. The only reader is a child holding a phone and
+the message has to render; a browser that substitutes its own error page has
+turned "your teacher paused you" into "something is broken", which sends the
+child to the teacher to report a fault.
+
+`paused_page()` has no form, no button and no link. Every escape hatch elsewhere
+on the class page is a way to send something. It carries
+`<meta http-equiv="refresh" content="15">` so unpausing needs nothing from the
+child.
+
+### 10.4 Password rotation, and a bug it uncovered
+
+```rust
+nmcli connection modify <profile> wifi-sec.psk <new>
+nmcli connection up     <profile>          // re-forms the AP; this is the kick
+```
+
+The `up` is not optional. `modify` alone writes the stored profile and leaves
+the running AP on the old key, which would hand the teacher a new password while
+the old one still worked: worse than doing nothing, because they would believe
+the room had been cleared when it had not.
+
+`<profile>` is **read back**, never assumed to be `"Hotspot"`. nmcli appends a
+number when that name is taken, and this machine has accumulated `Hotspot-1`
+through `Hotspot-4`. Addressing the wrong profile changes the key on a network
+that is not running. If the profile cannot be determined, `change_password`
+refuses and says so rather than guessing.
+
+**[measured] 2026-08-25**, against a throwaway profile created and deleted for
+the purpose: `modify` then `nmcli -s -g 802-11-wireless-security.psk connection
+show` returns the new key. `nmcli connection modify` against a name that does
+not exist fails with `Error: unknown connection`, which `change_password`
+surfaces. The reactivation kick itself is **unproven**: it needs a live AP with
+a real client on it, and taking this machine's wifi down mid-session was not
+worth it. That is the one part of 0.7.0 waiting on a field test.
+
+#### The terse-escaping bug
+
+`nmcli -t` separates fields with `:` and therefore escapes any `:` or `\` inside
+a value. `active_wifi_connection()` returned the escaped spelling, and everything
+that restores a teacher's wifi consumed it: `Hotspot::down()`, and the systemd
+transient service armed by `rearm_restore`.
+
+This machine has a wifi profile whose name really does contain a colon, which is
+how the bug surfaced. Its actual name is left out of a public repo on purpose:
+an unusual SSID is searchable in wardriving databases, which would turn "found
+here" into a location. The measurement is the evidence, not the name.
+**[measured] 2026-08-25**, against that profile:
+
+```
+nmcli connection show '<name with the colons escaped>'   -> exit 10  (unknown connection)
+nmcli connection show '<name as it really is>'           -> exit 0
+```
+
+A teacher whose network has a colon in its name would have finished a lesson
+with no wifi and no message, which is the exact failure `previous` exists to
+prevent. Fixed by `unescape_terse`, applied at the one place both paths read
+from. Field order matters too: `NAME` may contain `:`, `DEVICE` and `TYPE` may
+not, so both parsers split from the **right** (`rsplitn(3, ':')`).
+
+### 10.5 The QR encoder
+
+`src/hub/src/qr.rs`, no dependency. Deliberately narrow: byte mode, ECC level
+**L**, versions **1 to 5**. That range is chosen for one property beyond
+capacity: at level L, versions 1 to 5 are all a **single** error-correction
+block, so block splitting and interleaving do not exist in this file at all. A
+`WIFI:` payload is around 38 bytes; version 3 holds 55.
+
+| version | modules | data cw | ec cw |
+|---|---|---|---|
+| 1 | 21 | 19 | 7 |
+| 2 | 25 | 34 | 10 |
+| 3 | 29 | 55 | 15 |
+| 4 | 33 | 80 | 20 |
+| 5 | 37 | 108 | 26 |
+
+Byte ceiling is `DATA_CODEWORDS - 2` (4 bits mode + 8 bits count = 12 bits of
+header). 106 bytes fits, 107 returns `None`; oversize is **refused, not
+truncated**, because half a password in a code that scans perfectly is the worst
+of both.
+
+GF(256) mod 0x11D, no log tables: the largest code is 108 x 26 multiplications
+and a table is two more arrays to get wrong. All eight masks are built, scored
+against the four penalty rules, lowest wins.
+
+`WIFI:T:WPA;S:<ssid>;P:<pass>;;` with `\ ; , : "` backslash-escaped. Unescaped, a
+semicolon in a password ends the field early and the phone offers to join with a
+truncated key, which presents as a wrong password rather than a broken code.
+
+#### Verifying an encoder with no decoder on the machine
+
+No `qrencode`, no `zbarimg`, no python `qrcode`. Three independent checks
+instead, because an encoder and a reader written by the same hand can share a
+misunderstanding:
+
+1. **Known answer.** `format_bits` against the eight published level-L values.
+   Those constants were cross-checked against an independent implementation of
+   the BCH division before either was trusted; all eight agreed.
+2. **A reader's check, not a writer's.** A valid codeword is a multiple of the
+   generator, so every syndrome is zero. Computed as
+   `sum_j codeword[j] * alpha^(i*(n-1-j))`, which is a different calculation
+   from the long division that produced them. Includes a negative case: flip a
+   byte, assert the syndromes are no longer zero.
+3. **Hand-written coordinates.** Finder rings, separators, timing parity and the
+   always-dark module at `(4v+9, 8)`, asserted at literal positions taken from
+   the standard rather than from the code that placed them.
+
+Check 3 found a real bug. The format-information reservation ran `0..8` on both
+copies; the second copy is **7** modules up the left edge and **8** along the
+bottom-right, so the eighth step landed on `(size-8, 8)`, which is the always-
+dark module, and blanked it. Nothing downstream noticed: that module carries no
+data and every round trip still passed.
+
+Then an independently written reader (`scratchpad/qrdecode.py`, its own function
+pattern map, its own zigzag, its own GF tables, written from the specification)
+decoded a real `WIFI:` payload: version 3, mask 0, 70 codewords, syndromes all
+zero, 38 bytes out, byte for byte. Then a PNG of it went to a phone camera.
+
+#### Drawing it in a terminal
+
+Upper half block `U+2580`: foreground paints the top module row, background the
+bottom. Two module rows per character cell, which is roughly square given a
+terminal cell's 2:1 aspect. One module per cell would be twice as tall as wide
+and some scanners refuse it.
+
+Colours are **stated**, never inherited: `\x1b[38;5;0m` / `\x1b[48;5;15m`. Half
+the terminals in the world have a dark background, where a code in default
+colours is inverted and most cameras will not read it.
+
+Quiet zone is 4 modules, per the standard. A version 3 code is therefore
+`29 + 8 = 37` columns and 19 character rows.
+
+`Frame::push_raw` exists because `push` truncates by **display width**, and
+display width counts the bytes of an escape sequence as though they were
+visible; a QR row is mostly escape sequences and would be cut to ribbons inside
+the first few modules. The caller owns the width, so `draw_joincode` calls
+`rendered_size()` and **measures before drawing**: too narrow or too short and
+it prints one honest line instead of a code that cannot scan.
+
+### 10.6 Two tests that were wrong while the code was right
+
+Both from the same cause, and both worth naming because the first one did not
+teach me the second.
+
+`BLOCKED`, `CLAIMED`, `NOTES` and `PENDING` are process-wide, and cargo runs
+tests in parallel threads of one process.
+
+* A block test asserted that no recorded note contained `"hello"`. The note
+  idempotency test writes `"hello"` into the same list. The assertion read
+  somebody else's evidence. Fixed by using a string no other test uses.
+* A double-pause test compared `blocked_count()` before and after. Another test
+  moves that number underneath it. Fixed by counting entries matching **this
+  key**, never the global total.
+
+The end-to-end gate test keeps its whole sequence in **one** `#[test]` for the
+same reason, with an `Unblock` guard whose `Drop` runs even on a failed
+assertion: process-wide state left set hands the failure to whichever test runs
+next, somewhere else entirely.
+
+### 10.7 Test inventory at 0.7.0
+
+49 tests, up from 36. New: 4 block (end-to-end gate over a real socket, tag
+keying against the live ARP table, idempotent pause, a paused device that
+leaves), 1 terse unescaping, 8 QR (published format table, syndrome check with a
+negative case, five-version round trip, escaped punctuation, hand-written
+structural coordinates, oversize refusal, render shape and explicit colours).
