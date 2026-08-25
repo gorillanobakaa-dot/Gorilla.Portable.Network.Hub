@@ -126,6 +126,14 @@ The receipt for the largest single thing this tool has moved over real air: a
 transfer that survived its own network being moved to another wifi channel
 mid-flight. The screen at the end of it, looking bored, is the point.
 
+### The channel picker, hours after it was born
+
+[![The send form with the wifi channel field set to 13, the explanation that channels are lanes on the same road, the radio's own allowed list reading 1 to 14, and the warning that some phones with American radios cannot see 12 or 13](gallery/send-form-channel-13-lanes-explained.png)](gallery/send-form-channel-13-lanes-explained.png)
+
+The feature this release's field test produced, set to the channel that fixed
+the room. The allowed list on screen is read live from this radio and this
+country's rules; on another machine it reads differently, which is the point.
+
 ## Still missing
 
 - **The paused page**, as it appears on the child's phone.
