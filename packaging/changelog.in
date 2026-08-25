@@ -1,11 +1,29 @@
 gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
 
+  * The roster shows the name the kid picked, not the phone model. Picking
+    a name was the point; the screen forgot to listen.
+  * READ opens files in a viewer with a BACK TO THE FILES bar. A bare file
+    inside a sign-in sheet, which has no back button, was a room with no
+    door: "I am forever stuck on that page viewing it."
+  * The class page is served with no-store. Swiping back onto a cached
+    copy carried already-spent one-time tokens, so sending quietly did
+    nothing and every button looked dead until a manual refresh.
+  * A plain-words hint under hand-in for sign-in sheets that disable the
+    file chooser: open the normal browser and use the address instead.
+  * Tab completion in the folder fields, directories only: a unique
+    prefix completes with its slash, an ambiguous one stops at the shared
+    part and shows the choices. Decades of fingers know what Tab does.
+
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+
+gorilla-portable-network-hub (0.3.1) unstable; urgency=medium
+
   * Say so, loudly, when another program owns port 80 while the hotspot is
     up: the sign-in screen would bring every joining phone to THAT program
     instead of the lesson. This happened in testing (a leftover test copy
     hijacked a real phone's sign-in) and the teacher's screen said nothing.
 
- -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  Mon, 25 Aug 2026 09:10:00 +0100
 
 gorilla-portable-network-hub (0.3.0) unstable; urgency=medium
 

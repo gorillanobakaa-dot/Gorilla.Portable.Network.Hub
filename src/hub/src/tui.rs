@@ -116,6 +116,9 @@ struct App {
     /// The notice editor borrows the same editing buffer as the form fields;
     /// this flag says which thing a commit belongs to.
     editing_notice: bool,
+    /// What Tab found: the sibling names when a completion was ambiguous,
+    /// drawn under the field being edited and cleared by the next keystroke.
+    tab_hint: Option<String>,
 
     // the receive form
     found: Found,
@@ -156,6 +159,7 @@ impl App {
             names: net::NameCache::default(),
             tick: Vec::new(),
             editing_notice: false,
+            tab_hint: None,
             found: Arc::new(Mutex::new(None)),
             server: None,
             server_port: port(),
@@ -454,9 +458,11 @@ impl App {
         for j in &self.joined {
             // Lease name if we could read it (root), then the name the network
             // answered with, then the bare address.
-            let who = j
-                .name
-                .clone()
+            // The name the kid picked outranks everything: that is the whole
+            // point of asking. Then the lease name, then the reverse lookup,
+            // then the bare address.
+            let who = serve::claimed_name(&j.ip.to_string())
+                .or_else(|| j.name.clone())
                 .or_else(|| self.names.get(j.ip))
                 .unwrap_or_else(|| j.ip.to_string());
             match live.iter().find(|t| t.peer == j.ip.to_string()) {
@@ -600,8 +606,12 @@ impl App {
         if self.files.len() > room {
             f.push_dim(&format!("  and {} more not shown, the window is too short", self.files.len() - room));
         }
+        if let Some(h) = &self.tab_hint {
+            f.blank();
+            f.push_dim(&format!("  {h}"));
+        }
         if self.editing.is_some() {
-            self.hints(f, "  type to change    enter to keep it    esc to leave it alone");
+            self.hints(f, "  type to change    tab completes a path    enter to keep it    esc to leave it");
         } else {
             self.hints(f, "  up and down to move    enter to get the file    esc to go back");
         }
@@ -708,6 +718,9 @@ impl App {
     }
 
     fn edit_key(&mut self, k: Key, mut buf: String) -> bool {
+        if !matches!(k, Key::Tab) {
+            self.tab_hint = None;
+        }
         match k {
             Key::Char(c) => {
                 buf.push(c);
@@ -717,7 +730,23 @@ impl App {
                 buf.pop();
                 self.editing = Some(buf);
             }
-            Key::Esc => self.editing = None,
+            Key::Tab => {
+                // Shell muscle memory, honoured. Decades of fingers know that
+                // /home/gorilla/P and Tab either finishes the word or shows
+                // the choices; a field that ignores it is a field that makes
+                // somebody type a path out letter by letter like it is 1985.
+                let is_path_field = (matches!(self.screen, Screen::Send) && self.row == 0)
+                    || (matches!(self.screen, Screen::ReceiveFiles) && self.row == 0);
+                if is_path_field && !self.editing_notice {
+                    let (done, hint) = complete_path(&buf);
+                    self.editing = Some(done);
+                    self.tab_hint = hint;
+                }
+            }
+            Key::Esc => {
+                self.editing = None;
+                self.editing_notice = false;
+            }
             Key::Enter => {
                 self.commit(buf);
                 self.editing = None;
@@ -1256,6 +1285,54 @@ fn wrap(line: &str, cols: usize) -> Vec<String> {
     out
 }
 
+/// Bash-shaped path completion over DIRECTORIES, for the two fields that hold
+/// one. Returns the new buffer and, when the answer is ambiguous, the choices
+/// to show. Only directories: both fields want a folder, and offering files
+/// in them is noise.
+fn complete_path(buf: &str) -> (String, Option<String>) {
+    let expanded = shellexpand(buf);
+    let (dir_part, prefix) = match expanded.rfind('/') {
+        Some(i) => (expanded[..=i].to_string(), expanded[i + 1..].to_string()),
+        None => ("./".to_string(), expanded.clone()),
+    };
+    let Ok(rd) = std::fs::read_dir(if dir_part.is_empty() { "/" } else { &dir_part }) else {
+        return (buf.to_string(), None);
+    };
+    let mut matches: Vec<String> = rd
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with(&prefix) && (!n.starts_with('.') || prefix.starts_with('.')))
+        .collect();
+    matches.sort();
+    match matches.len() {
+        0 => (buf.to_string(), Some("nothing here starts with that".to_string())),
+        1 => (format!("{dir_part}{}/", matches[0]), None),
+        _ => {
+            // Complete to the longest shared start, like a shell, and show
+            // the choices so the next letter is an informed one.
+            let mut common = matches[0].clone();
+            for m in &matches[1..] {
+                while !m.starts_with(&common) {
+                    common.pop();
+                }
+            }
+            let shown = matches
+                .iter()
+                .take(8)
+                .map(|m| format!("{m}/"))
+                .collect::<Vec<_>>()
+                .join("  ");
+            let more = if matches.len() > 8 {
+                format!("  and {} more", matches.len() - 8)
+            } else {
+                String::new()
+            };
+            (format!("{dir_part}{common}"), Some(format!("{shown}{more}")))
+        }
+    }
+}
+
 /// A teacher types `~/lessons`, because that is what is written in every set of
 /// instructions they have ever seen. The shell expands it; a program started by
 /// double-clicking has no shell.
@@ -1266,4 +1343,50 @@ fn shellexpand(p: &str) -> String {
         }
     }
     p.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scaffold() -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("hub-tab-test-{}", std::process::id()));
+        for sub in ["Pictures", "Public", "Music", "Pictures/Screenshots"] {
+            std::fs::create_dir_all(d.join(sub)).unwrap();
+        }
+        std::fs::write(d.join("Pictures/a-file.txt"), b"x").unwrap();
+        d
+    }
+
+    #[test]
+    fn a_unique_prefix_completes_with_a_trailing_slash() {
+        let d = scaffold();
+        let (done, hint) = complete_path(&format!("{}/Mu", d.display()));
+        assert_eq!(done, format!("{}/Music/", d.display()));
+        assert!(hint.is_none());
+    }
+
+    #[test]
+    fn an_ambiguous_prefix_stops_at_the_shared_part_and_shows_the_choices() {
+        let d = scaffold();
+        let (done, hint) = complete_path(&format!("{}/P", d.display()));
+        // P matches Pictures and Public: the shared start is "P".
+        assert_eq!(done, format!("{}/P", d.display()));
+        let h = hint.expect("choices must be shown");
+        assert!(h.contains("Pictures/") && h.contains("Public/"), "{h}");
+    }
+
+    #[test]
+    fn files_are_not_offered_because_the_field_wants_a_folder() {
+        let d = scaffold();
+        let (done, _) = complete_path(&format!("{}/Pictures/a-f", d.display()));
+        assert_eq!(done, format!("{}/Pictures/a-f", d.display()), "a file must not complete");
+    }
+
+    #[test]
+    fn completion_descends_into_the_completed_folder_on_the_next_tab() {
+        let d = scaffold();
+        let (done, _) = complete_path(&format!("{}/Pictures/Scr", d.display()));
+        assert_eq!(done, format!("{}/Pictures/Screenshots/", d.display()));
+    }
 }

@@ -720,11 +720,22 @@ fn serve_one(
         mark_page_seen(&peer_ip);
         let done = query.strip_prefix("done=");
         let page = crate::page::class_page(root, done, &peer_ip, query.contains("rename=1"));
-        return respond(&mut out, 200, "text/html; charset=utf-8", page.as_bytes()).map(|_| keep);
+        return respond_fresh(&mut out, "text/html; charset=utf-8", page.as_bytes()).map(|_| keep);
     }
     if path_only == "/files" {
         mark_page_seen(&peer_ip);
-        return respond(&mut out, 200, "text/html; charset=utf-8", crate::page::files_frame(root).as_bytes()).map(|_| keep);
+        return respond_fresh(&mut out, "text/html; charset=utf-8", crate::page::files_frame(root).as_bytes()).map(|_| keep);
+    }
+    // The viewer: the same file the READ button used to open bare, wrapped in
+    // a page that keeps a way BACK. Inside a sign-in sheet there is no back
+    // button, so a bare file was a room with no door.
+    if let Some(rest) = path_only.strip_prefix("/view/") {
+        let name = percent_decode(rest);
+        if !name.contains('/') && is_allowed(&name) && root.join(&name).is_file() {
+            return respond_fresh(&mut out, "text/html; charset=utf-8",
+                crate::page::view_page(&name).as_bytes()).map(|_| keep);
+        }
+        return respond(&mut out, 404, "text/plain", b"not found").map(|_| keep);
     }
 
     let decoded = percent_decode(path_only);
@@ -870,6 +881,19 @@ fn parse_range(r: &str, total: u64) -> Option<(u64, u64)> {
 
 fn respond(out: &mut BufWriter<TcpStream>, code: u16, ctype: &str, body: &[u8]) -> std::io::Result<()> {
     write!(out, "HTTP/1.1 {code} OK\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\n\r\n", body.len())?;
+    out.write_all(body)?;
+    out.flush()
+}
+
+/// Like respond, but forbidding every cache between here and the kid.
+///
+/// Found on a real phone 2026-08-25: swiping back onto a cached copy of the
+/// page meant its one-time tokens were already spent, so sending a note was
+/// silently treated as a retry and the buttons looked dead until a manual
+/// refresh. A page whose forms carry one-time tokens must never come out of
+/// a cache.
+fn respond_fresh(out: &mut BufWriter<TcpStream>, ctype: &str, body: &[u8]) -> std::io::Result<()> {
+    write!(out, "HTTP/1.1 200 OK\r\nContent-Type: {ctype}\r\nCache-Control: no-store, must-revalidate\r\nPragma: no-cache\r\nContent-Length: {}\r\n\r\n", body.len())?;
     out.write_all(body)?;
     out.flush()
 }

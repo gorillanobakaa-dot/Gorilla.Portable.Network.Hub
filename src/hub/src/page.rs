@@ -231,7 +231,9 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool) 
              <b>Hand in your work</b><br>\
              <input type=\"hidden\" name=\"token\" value=\"{token}\">\
              <input type=\"file\" name=\"work\"><br>\
-             <button type=\"submit\">SEND IT TO YOUR TEACHER</button></form>\n"
+             <button type=\"submit\">SEND IT TO YOUR TEACHER</button>\
+             <br><small>If choosing a file does nothing here, open your normal \
+             browser, type the address from the board, and hand in from there.</small></form>\n"
         ));
     } else {
         // Teachers serve from USB drives kept as their failsafe copy. When
@@ -284,9 +286,52 @@ pub fn files_frame(root: &Path) -> String {
         s.push_str(&format!("<div class=file><span class=name>{esc}</span><span class=size>{}</span><br>", human(size)));
         if openable(&name) {
             let verb = if is_media(&name) { "PLAY" } else { "READ" };
-            s.push_str(&format!("<a class=\"btn read\" href=\"/{url}\">{verb}</a>"));
+            s.push_str(&format!("<a class=\"btn read\" href=\"/view/{url}\">{verb}</a>"));
         }
         s.push_str(&format!("<a class=btn href=\"/{url}?dl=1\">GET IT</a></div>\n"));
+    }
+    s.push_str("</body></html>\n");
+    s
+}
+
+/// The viewer: the file, wrapped in a page whose first element is the way
+/// back.
+///
+/// Found on a real phone 2026-08-25: READ opened the bare file, which is
+/// correct in a browser with a back button and a trap inside a captive
+/// sign-in sheet, which has none. The owner's words: "I am forever stuck on
+/// that page viewing it." A viewer page costs nothing and has a door.
+pub fn view_page(name: &str) -> String {
+    let esc = html_escape(name);
+    let url = urlencode(name);
+    let mut s = String::with_capacity(1024);
+    s.push_str(
+        "<!doctype html><html><head><meta charset=\"utf-8\">\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+         <style>body{font-family:sans-serif;margin:0;background:#222;color:#eee}\
+         .bar{position:sticky;top:0;background:#1a6b1a;padding:10px}\
+         .bar a{color:#fff;font-size:1.1em;text-decoration:none;font-weight:bold}\
+         .name{padding:6px 10px;color:#bbb;font-size:.9em;word-break:break-all}\
+         img,video{max-width:100%;display:block;margin:0 auto}\
+         iframe{width:100%;height:82vh;border:0;background:#fff}\
+         audio{width:100%;margin:20px 0}</style></head><body>\n",
+    );
+    s.push_str(&format!(
+        "<div class=bar><a href=\"/\">&#8592; BACK TO THE FILES</a></div><div class=name>{esc}</div>\n"
+    ));
+    match ext(name).as_str() {
+        "jpg" | "jpeg" | "png" | "gif" | "webp" => {
+            s.push_str(&format!("<img src=\"/{url}\" alt=\"{esc}\">\n"));
+        }
+        "mp4" | "webm" => {
+            s.push_str(&format!("<video controls autoplay src=\"/{url}\"></video>\n"));
+        }
+        "mp3" | "ogg" | "m4a" | "wav" => {
+            s.push_str(&format!("<audio controls src=\"/{url}\"></audio>\n"));
+        }
+        _ => {
+            s.push_str(&format!("<iframe src=\"/{url}\"></iframe>\n"));
+        }
     }
     s.push_str("</body></html>\n");
     s
