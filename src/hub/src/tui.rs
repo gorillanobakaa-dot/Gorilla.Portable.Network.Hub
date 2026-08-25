@@ -406,6 +406,13 @@ impl App {
                 f.push(&format!("  Address to type   http://{a}:{}", port()));
             }
         }
+        if self.hotspot.is_some() && port80 {
+            // The dnsmasq drop-in answers these names on OUR hotspot only.
+            // The slash is what stops a phone's browser treating the word as
+            // a search; a colon is three keyboard layers deep, a slash is on
+            // the first.
+            f.push_dim("  or type           classroom/   (the slash matters)");
+        }
         // Two loud states a USB drive causes. The folder is often a flash
         // drive kept as the teacher's failsafe, and it gets unplugged, filled
         // and write-locked as a matter of course.

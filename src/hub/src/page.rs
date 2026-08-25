@@ -37,8 +37,10 @@ const NOTES_PER_MINUTE: usize = 6;
 /// The teacher's notice, shown at the top of every kid's page.
 static NOTICE: Mutex<String> = Mutex::new(String::new());
 
-/// Notes the kids sent: (who, text). Bounded; the full record is on disk.
-static NOTES: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+/// Notes the kids sent: (address, shown-as, text). The address is what dedup
+/// keys on; the label is what the roster shows. Bounded; the full record is
+/// on disk.
+static NOTES: Mutex<Vec<(String, String, String)>> = Mutex::new(Vec::new());
 
 /// Tokens already honoured, per device address, so a browser retry or a
 /// double-tap lands exactly once. A VecDeque would be tidier; a Vec of 32 is
@@ -59,7 +61,40 @@ pub fn notice() -> String {
 /// The most recent notes, oldest first, for the teacher's roster.
 pub fn notes(last: usize) -> Vec<(String, String)> {
     let n = NOTES.lock().unwrap_or_else(|e| e.into_inner());
-    n.iter().rev().take(last).rev().cloned().collect()
+    n.iter().rev().take(last).rev().map(|(_, who, text)| (who.clone(), text.clone())).collect()
+}
+
+/// A kid's claimed name, arriving from the /name form.
+pub fn claim_name(peer_ip: &str, body: &str) {
+    let mut who = String::new();
+    for pair in body.split('&') {
+        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+        if k == "who" {
+            who = form_decode(v);
+        }
+    }
+    if let Some(name) = sanitize_display_name(&who) {
+        serve::set_claimed_name(peer_ip, &name);
+    }
+}
+
+/// A name a teacher reads off a screen: letters, digits, spaces and a few
+/// joiners, capped short. Angle brackets and quotes go because the name is
+/// rendered into HTML; a kid typing markup gets a name, not an element.
+pub fn sanitize_display_name(raw: &str) -> Option<String> {
+    let mut out = String::new();
+    for c in raw.chars() {
+        match c {
+            c if c.is_alphanumeric() => out.push(c),
+            ' ' | '-' | '_' | '.' | '\'' => out.push(c),
+            _ => {}
+        }
+        if out.chars().count() >= 24 {
+            break;
+        }
+    }
+    let out = out.trim().to_string();
+    if out.is_empty() { None } else { Some(out) }
 }
 
 // ---------------------------------------------------------------- captive
@@ -123,7 +158,7 @@ fn token_already_used(peer_ip: &str, token: &str) -> bool {
 /// The whole page. `done` names a just-finished action so the reloaded page
 /// can say so (the POST answered with a redirect here; refresh never
 /// resubmits).
-pub fn class_page(root: &Path, done: Option<&str>) -> String {
+pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool) -> String {
     let notice = notice();
     let mut s = String::with_capacity(4096);
     s.push_str(
@@ -146,6 +181,31 @@ pub fn class_page(root: &Path, done: Option<&str>) -> String {
          iframe{width:100%;border:0;min-height:340px}\
          </style></head><body>\n<h1>Class files</h1>\n",
     );
+    // WHO ARE YOU comes before everything else. Thirty identical phones make
+    // device models useless to a teacher, so the first thing a device is
+    // asked, once per lesson, is a name. Unauthenticated on purpose (no
+    // accounts, ever); the honesty comes from the permanent record keeping
+    // name, device and address side by side.
+    let claimed = serve::claimed_name(peer_ip);
+    if claimed.is_none() || rename {
+        let current = claimed.unwrap_or_default();
+        s.push_str(&format!(
+            "<form method=\"post\" action=\"/name\">\
+             <b>Before you start: type your name.</b><br>\
+             Your teacher needs to know whose work is whose.<br>\
+             <input type=\"text\" name=\"who\" value=\"{}\" maxlength=\"24\" \
+             style=\"width:100%;font-size:1.2em;margin:8px 0;padding:8px\"><br>\
+             <button type=\"submit\">THAT'S ME</button></form>\n",
+            html_escape(&current)
+        ));
+        s.push_str("</body></html>\n");
+        return s;
+    }
+    let me = claimed.unwrap_or_default();
+    s.push_str(&format!(
+        "<p>You are <b>{}</b>. <a href=\"/?rename=1\">Not you?</a></p>\n",
+        html_escape(&me)
+    ));
     match done {
         Some("handin") => s.push_str("<div class=done>Handed in. Your teacher has it.</div>\n"),
         Some("note") => s.push_str("<div class=done>Sent. Your teacher can see it.</div>\n"),
@@ -337,7 +397,7 @@ pub fn take_note(peer_ip: &str, body: &str, root: &Path) -> &'static str {
     // The content net underneath, for a browser too old to keep the field.
     {
         let n = NOTES.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((_, last_text)) = n.iter().rev().find(|(who, _)| who_ip(who) == peer_ip) {
+        if let Some((_, _, last_text)) = n.iter().rev().find(|(ip, _, _)| ip == peer_ip) {
             if *last_text == text {
                 return "note";
             }
@@ -354,28 +414,25 @@ pub fn take_note(peer_ip: &str, body: &str, root: &Path) -> &'static str {
         }
         times.push((peer_ip.to_string(), Instant::now()));
     }
-    let who = serve::device_label(peer_ip);
+    let shown = serve::device_label(peer_ip);
     {
         let mut n = NOTES.lock().unwrap_or_else(|e| e.into_inner());
         if n.len() >= 200 {
             n.remove(0);
         }
-        n.push((who.clone(), text.clone()));
+        n.push((peer_ip.to_string(), shown.clone(), text.clone()));
     }
-    // The permanent copy. The roster scrolls; this does not.
+    // The permanent copy, with EVERYTHING known about the sender. Thirty kids
+    // sending the same message for kicks are thirty separate lines here, each
+    // carrying the claimed name, the device and the address. The roster shows
+    // the friendly name; this file is for the reckoning afterwards.
     let dir = handed_in_dir(root);
     if std::fs::create_dir_all(&dir).is_ok() {
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("notes.txt")) {
-            let _ = writeln!(f, "{who}: {text}");
+            let _ = writeln!(f, "{}: {text}", serve::full_label(peer_ip));
         }
     }
     "note"
-}
-
-/// The note arrives as who; the dedup compares by address even after the
-/// device gets a proper name mid-lesson.
-fn who_ip(who: &str) -> &str {
-    who
 }
 
 fn form_decode(s: &str) -> String {
@@ -876,6 +933,47 @@ mod tests {
         let out = upload(&dir, "10.42.0.96", "hw.txt", b"bytes");
         assert_eq!(out.tag, "cantsave", "a read-only drive must be an answer, not an error");
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn the_page_asks_for_a_name_first_and_then_shows_files() {
+        let dir = tmpdir();
+        let before = class_page(&dir, None, "10.42.0.201", false);
+        assert!(before.contains("type your name"), "an unnamed device must be asked first");
+        assert!(!before.contains("Hand in your work"), "no forms before a name");
+        claim_name("10.42.0.201", "who=Amina+N.");
+        let after = class_page(&dir, None, "10.42.0.201", false);
+        assert!(after.contains("You are <b>Amina N.</b>"), "{after}");
+        assert!(after.contains("Send a note") || after.contains("Hand in"), "the page must open up after the name");
+    }
+
+    #[test]
+    fn a_name_typed_as_markup_becomes_text_not_an_element() {
+        claim_name("10.42.0.202", "who=%3Cscript%3Ezap%3C%2Fscript%3E");
+        let got = crate::serve::claimed_name("10.42.0.202").unwrap();
+        assert!(!got.contains('<') && !got.contains('>'), "{got}");
+        assert!(got.contains("script"), "letters survive, markup does not: {got}");
+    }
+
+    #[test]
+    fn a_note_from_a_named_device_is_attributable_in_the_permanent_record() {
+        let dir = tmpdir();
+        claim_name("10.42.0.203", "who=Johnny");
+        crate::serve::set_device_name("10.42.0.203", "Xiaomi-11-Lite-5G-NE");
+        let _ = take_note("10.42.0.203", "token=fj1&text=the+same+message+for+kicks", &dir);
+        let txt = std::fs::read_to_string(dir.join("handed-in/notes.txt")).unwrap();
+        assert!(txt.contains("Johnny [Xiaomi-11-Lite-5G-NE, 10.42.0.203]:"),
+                "the reckoning line needs name, device AND address: {txt}");
+    }
+
+    #[test]
+    fn a_named_device_hands_in_under_its_name() {
+        let dir = tmpdir();
+        claim_name("10.42.0.204", "who=Amina");
+        let out = upload(&dir, "10.42.0.204", "essay.docx", b"real work");
+        assert_eq!(out.tag, "handin");
+        assert!(dir.join("handed-in").join("Amina--essay.docx").exists(),
+                "the teacher marks names, not phone models");
     }
 
     #[test]

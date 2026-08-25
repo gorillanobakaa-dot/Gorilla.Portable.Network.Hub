@@ -1,4 +1,21 @@
-gorilla-portable-network-hub (@VERSION@) unstable; urgency=high
+gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
+
+  * Every device is asked for a name before the page opens up, once per
+    lesson. Notes and handed-in work then carry the name a teacher can
+    actually mark: "Amina--essay.docx", "Johnny: I do not understand".
+    The permanent notes record keeps name, device model AND address side
+    by side, so thirty identical messages sent for kicks are thirty
+    attributable lines.
+  * Downloads now declare their real type. They were served as "unknown
+    binary" to force saving, and Android believed it: tapping a finished
+    download said "We can't open this file". Found on a real phone.
+  * Friendly names on the hotspot: typing "classroom/" (or class, lesson,
+    school, hub, each with the slash) opens the page. No colons, no
+    addresses; a colon is three keyboard layers deep on a phone.
+
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+
+gorilla-portable-network-hub (0.2.1) unstable; urgency=high
 
   * Fix: the wifi-restore safety fuse fired INTO the running lesson every
     three to four minutes, because a systemd timer's deadline cannot be
@@ -7,7 +24,7 @@ gorilla-portable-network-hub (@VERSION@) unstable; urgency=high
     truly moves the deadline. Proven with a short fuse before shipping:
     beats push it back, abandonment fires it, stopping disarms it.
 
- -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  Mon, 25 Aug 2026 08:35:00 +0100
 
 gorilla-portable-network-hub (0.2.0) unstable; urgency=medium
 

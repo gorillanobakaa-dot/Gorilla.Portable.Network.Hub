@@ -86,6 +86,48 @@ fn is_allowed(rel: &str) -> bool {
     }
 }
 
+/// Names the kids CLAIMED on the class page, keyed by address.
+///
+/// Thirty identical phones make device models useless for attribution: the
+/// owner's phrase was that a note must say who it came from, or thirty kids
+/// sending the same message for kicks are indistinguishable. So the page asks
+/// each device for a name before it shows anything else. The claim is not
+/// authenticated (there are no accounts, on purpose); what makes it honest is
+/// that the permanent record keeps the claimed name AND the device AND the
+/// address side by side, and two devices claiming the same name are visible
+/// as exactly that on the roster.
+static CLAIMED: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+pub fn set_claimed_name(ip: &str, name: &str) {
+    let mut c = CLAIMED.lock().unwrap_or_else(|e| e.into_inner());
+    match c.iter_mut().find(|(i, _)| i == ip) {
+        Some(e) => e.1 = name.to_string(),
+        None => c.push((ip.to_string(), name.to_string())),
+    }
+}
+
+pub fn claimed_name(ip: &str) -> Option<String> {
+    let c = CLAIMED.lock().unwrap_or_else(|e| e.into_inner());
+    c.iter().find(|(i, _)| i == ip).map(|(_, n)| n.clone())
+}
+
+/// Everything known about a device, for the permanent record:
+/// "Johnny [Xiaomi-11-Lite, 10.42.0.90]", degrading gracefully to whatever
+/// parts exist.
+pub fn full_label(ip: &str) -> String {
+    let claimed = claimed_name(ip);
+    let device = {
+        let n = NAMES.lock().unwrap_or_else(|e| e.into_inner());
+        n.iter().find(|(i, _)| i == ip).map(|(_, name)| name.clone())
+    };
+    match (claimed, device) {
+        (Some(c), Some(d)) => format!("{c} [{d}, {ip}]"),
+        (Some(c), None) => format!("{c} [{ip}]"),
+        (None, Some(d)) => format!("{d} [{ip}]"),
+        (None, None) => ip.to_string(),
+    }
+}
+
 /// Device names the screen has resolved, so uploads and notes can be labelled
 /// with "Amina-phone" rather than an address. The screen fills this from its
 /// lookup cache; the plain command line leaves it empty and labels fall back
@@ -101,6 +143,9 @@ pub fn set_device_name(ip: &str, name: &str) {
 }
 
 pub fn device_label(ip: &str) -> String {
+    if let Some(c) = claimed_name(ip) {
+        return c;
+    }
     let n = NAMES.lock().unwrap_or_else(|e| e.into_inner());
     n.iter().find(|(i, _)| i == ip).map(|(_, name)| name.clone()).unwrap_or_else(|| ip.to_string())
 }
@@ -635,6 +680,20 @@ fn serve_one(
             crate::page::redirect_done(&mut out, tag)?;
             return Ok(false);
         }
+        if path_only == "/name" {
+            let len: usize = text
+                .lines()
+                .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
+                .and_then(|l| l.split_once(':'))
+                .and_then(|(_, v)| v.trim().parse().ok())
+                .unwrap_or(0);
+            let mut body = vec![0u8; len.min(4096)];
+            reader.read_exact(&mut body)?;
+            crate::page::claim_name(&peer_ip, &String::from_utf8_lossy(&body));
+            write!(out, "HTTP/1.1 303 See Other\r\nLocation: /\r\nContent-Length: 0\r\n\r\n")?;
+            out.flush()?;
+            return Ok(false);
+        }
         if path_only == "/handin" {
             let outcome = crate::page::take_upload(reader, &text, &peer_ip, root)?;
             crate::page::redirect_done(&mut out, outcome.tag)?;
@@ -652,7 +711,7 @@ fn serve_one(
         }
         mark_page_seen(&peer_ip);
         let done = query.strip_prefix("done=");
-        let page = crate::page::class_page(root, done);
+        let page = crate::page::class_page(root, done, &peer_ip, query.contains("rename=1"));
         return respond(&mut out, 200, "text/html; charset=utf-8", page.as_bytes()).map(|_| keep);
     }
     if path_only == "/files" {
@@ -721,7 +780,13 @@ fn redirect_base(sock: &TcpStream) -> String {
 
 fn send_file(out: &mut BufWriter<TcpStream>, path: &Path, range: Option<&str>, peer: &str, force_download: bool) -> std::io::Result<()> {
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let ctype = if force_download { "application/octet-stream" } else { crate::page::content_type(&name) };
+    // The REAL type, even on a forced download. This was octet-stream to
+    // "force" saving, and Android's Downloads app believed it: tapping the
+    // finished download said "We can't open this file", because we had said
+    // the file was nothing in particular. The attachment header alone forces
+    // the save; the type is how the phone knows what opens it. Found on a
+    // real Xiaomi, 2026-08-25.
+    let ctype = crate::page::content_type(&name);
     let disposition = if force_download {
         format!("Content-Disposition: attachment; filename=\"{name}\"\r\n")
     } else {
