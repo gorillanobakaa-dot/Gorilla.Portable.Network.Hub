@@ -94,14 +94,22 @@ headers-only packet capture, not from the tool's own opinion of itself.
 
 Every suspect was checked and exonerated by name: the air is clean, the
 receiver never said stop, Defender was switched off mid-run with no change,
-and the 2012 laptop was loafing. What remains is the honest finding:
+and the 2012 laptop was loafing.
 
-**A browser's single TCP connection pays about a 30% tax on this radio.**
-4.65 MB/s against the 6.57 this tool's own four-connection client gets from
-the same air. One stream at 20 ms of queue simply keeps less data in flight
-than four streams do, and no setting on either side changes that. The tool
-exists for exactly this reason; the button exists for the person who cannot
-install it.
+**This run was browser-only by design, end to end.** Nothing was installed
+on the receiving laptop, because the children this is built for install
+nothing. Judged on those terms: one tap on one button moved 7.56 GB and
+68,153 files through a 2012 access point in 27 minutes of transfer time,
+flat and stall-free, while the serving laptop idled. A normal lesson's
+worth of worksheets moves in seconds.
+
+The single stream settled at ~93 KB in flight over a 20 ms queue, which is
+4.65 MB/s by arithmetic: the natural equilibrium of one TCP connection on
+this radio, not a fault in either machine. **[inference]** The tool's
+four-connection client would likely sit higher, as it did in the 2026-08-24
+sweep (6.57 MB/s), but that sweep used a different receiver, so the
+browser-versus-tool gap on this pairing is NOT yet a measured fact and is
+not claimed as one.
 
 Also on the record: the Windows laptop spent the entire lesson trying to
 reach Microsoft, Akamai and Facebook through the classroom hotspot, dozens
