@@ -50,7 +50,8 @@ python3 "$ROOT/packaging/make-icons.py" \
 cp "$ROOT/packaging/gorilla-portable-network-hub.desktop" \
    "$STAGE/usr/share/applications/"
 cp "$ROOT/packaging/copyright" "$DOC/copyright"
-cp "$ROOT/README.md" "$ROOT/docs/WHY-THIS-EXISTS.md" "$ROOT/docs/DEVELOPER.md" "$DOC/"
+cp "$ROOT/README.md" "$ROOT/docs/HOW-TO.md" "$ROOT/docs/WHY-THIS-EXISTS.md" \
+   "$ROOT/docs/DEVELOPER.md" "$ROOT/docs/SCREENSHOTS.md" "$DOC/"
 gzip -9n -c "$ROOT/packaging/hub.1" > "$STAGE/usr/share/man/man1/hub.1.gz"
 
 # The version has no Debian revision, so this is a native package and the

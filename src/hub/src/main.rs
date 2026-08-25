@@ -136,3 +136,47 @@ fn doctor() {
         "yes"
     });
 }
+
+#[cfg(test)]
+mod packaging_tests {
+    /// The version in every packaging recipe has to match the crate's.
+    ///
+    /// A stale version in a packaging file is not a loud failure. `makepkg`
+    /// succeeds, `dpkg-deb` succeeds, the package installs, and the only sign
+    /// is a version string nobody reads. The sibling project let its PKGBUILD
+    /// drift twenty-six releases behind while its README pointed Arch users
+    /// straight at it, so following the project's own instructions built
+    /// something from the previous month.
+    ///
+    /// This test is the only reason those numbers can be trusted.
+    #[test]
+    fn every_packaging_recipe_names_this_version() {
+        let version = env!("CARGO_PKG_VERSION");
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+
+        let pkgbuild = std::fs::read_to_string(format!("{root}/packaging/PKGBUILD"))
+            .expect("packaging/PKGBUILD must exist");
+        let pkgver = pkgbuild
+            .lines()
+            .find_map(|l| l.strip_prefix("pkgver="))
+            .expect("PKGBUILD must set pkgver");
+        assert_eq!(pkgver, version, "packaging/PKGBUILD pkgver has drifted");
+
+        let deb = std::fs::read_to_string(format!("{root}/packaging/build-deb.sh"))
+            .expect("packaging/build-deb.sh must exist");
+        assert!(
+            deb.contains(&format!("VERSION=${{VERSION:-{version}}}")),
+            "packaging/build-deb.sh default version has drifted from {version}"
+        );
+
+        // The guide tells people which file to download by name. A version in
+        // prose drifts exactly as quietly as one in a recipe, and it is the
+        // line a person types.
+        let howto = std::fs::read_to_string(format!("{root}/docs/HOW-TO.md"))
+            .expect("docs/HOW-TO.md must exist");
+        assert!(
+            howto.contains(&format!("hub {version}")),
+            "docs/HOW-TO.md does not tell people to expect version {version}"
+        );
+    }
+}

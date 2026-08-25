@@ -37,8 +37,10 @@ anybody who is not the person who wrote it.
 
 | | |
 |---|---|
+| [docs/HOW-TO.md](docs/HOW-TO.md) | **start here if you want to use it.** Step by step with pictures, written for somebody who has never opened a terminal |
 | [docs/WHY-THIS-EXISTS.md](docs/WHY-THIS-EXISTS.md) | the layman track. What the problem is and what was proved, in plain language |
 | [docs/DEVELOPER.md](docs/DEVELOPER.md) | the developer track. Architecture, wire format, every measurement with its method |
+| [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) | every screen, photographed on real hardware |
 | [bench/](bench/) | the raw research: source reading, measurements, corrections, open questions |
 
 Both tracks are complete. The layman one is a different language, not a
@@ -81,12 +83,38 @@ than part of the product.
 
 ## Installing
 
-A Debian package is built from the repository, icons and man page included:
+Built packages for all three are on the
+[releases page](https://github.com/gorillanobakaa-dot/Gorilla.Portable.Network.Hub/releases).
+[docs/HOW-TO.md](docs/HOW-TO.md) walks through each one with pictures.
+
+**Debian, Ubuntu, Mint:**
+
+```
+sudo dpkg -i gorilla-portable-network-hub_0.7.1_amd64.deb
+```
+
+**Arch, CachyOS, Manjaro:**
+
+```
+sudo pacman -U gorilla-portable-network-hub-0.7.1-1-x86_64.pkg.tar.zst
+```
+
+Or from source with `makepkg -si` in `packaging/`. The Arch package is
+assembled to spec and structurally verified on a Debian machine; it has not yet
+been installed on an Arch one, and that is exactly the kind of thing worth
+telling us about.
+
+**Windows:** unzip `hub-0.7.1-windows-x86_64.zip` and read
+`READ-THIS-FIRST.txt`. Windows will not let a normal program create a wifi
+network, so you switch the hotspot on in Settings first. Everything else works
+the same.
+
+**From this repository:**
 
 ```
 cd src/hub && cargo build --release && cd ../..
-./packaging/build-deb.sh
-sudo dpkg -i packaging/build/gorilla-portable-network-hub_0.1.0_amd64.deb
+./packaging/build-deb.sh          # or ./packaging/build-arch.sh
+sudo dpkg -i packaging/build/gorilla-portable-network-hub_0.7.1_amd64.deb
 ```
 
 It installs `hub`, a menu entry called **Portable Network Hub**, a man page, and
@@ -163,6 +191,16 @@ hub serve ~/lessons --name Classroom --password chalkdust --notice "Test on Frid
 hub get http://10.42.0.1/lessons.zip
 hub doctor
 ```
+
+## Tell us how it went
+
+This has been used in one room, on one morning, by one person. A report from a
+second room is worth more than anything that can be worked out from here.
+
+[Open an issue](https://github.com/gorillanobakaa-dot/Gorilla.Portable.Network.Hub/issues).
+There are two forms, one for when it went wrong and one for when it worked, and
+neither needs you to be technical. The most useful box on either is the one
+asking what was awkward even though it worked.
 
 ## A network that comes back
 

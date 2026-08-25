@@ -1,0 +1,112 @@
+# Maintainer: gorillanobakaa <gorillanobakaa@gmail.com>
+#
+# Builds the hub from source with cargo. It produces the same binary the Debian
+# package ships: release profile, no dependencies of any kind beyond the C
+# library.
+#
+# Two ways to install on Arch, CachyOS, Manjaro and EndeavourOS:
+#
+#   1. FROM SOURCE (this file), needs the rust toolchain:
+#        git clone https://github.com/gorillanobakaa-dot/Gorilla.Portable.Network.Hub
+#        cd Gorilla.Portable.Network.Hub/packaging
+#        makepkg -si
+#
+#   2. PRE-BUILT package, needs nothing but pacman. Download
+#      gorilla-portable-network-hub-${pkgver}-1-x86_64.pkg.tar.zst from the
+#      GitHub release page, then:
+#        sudo pacman -U gorilla-portable-network-hub-*-x86_64.pkg.tar.zst
+
+pkgname=gorilla-portable-network-hub
+# KEEP THIS IN STEP WITH src/hub/Cargo.toml.
+#
+# A stale version here is not a loud failure: makepkg succeeds, pacman installs,
+# and the only sign is a version string nobody reads. The sibling project let
+# this drift twenty-six releases behind while the README pointed Arch users at
+# it, so following the project's own instructions built something from the
+# previous month. `cargo test` now fails if the two disagree, which is the only
+# reason this line can be trusted.
+pkgver=0.7.1
+pkgrel=1
+pkgdesc="Turn a laptop into the network and hand a folder to the room"
+arch=('x86_64')
+url="https://github.com/gorillanobakaa-dot/Gorilla.Portable.Network.Hub"
+license=('MIT')
+# The program itself has no dependencies. Everything below is about what it
+# TALKS TO, and each is optional in the strict sense: without any of them the
+# tool still hands files out over a network that already exists.
+depends=('glibc')
+optdepends=(
+    'networkmanager: to create a wifi network where there is none, which is the
+     whole point on a school site with no router'
+    'libcap: to answer on port 80, which is what makes a joining phone pop its
+     own sign-in screen instead of saying there is no internet'
+)
+makedepends=('rust' 'python')
+install="${pkgname}.install"
+# The captive-portal answers. Listed as a backup file so a teacher who edits it
+# (a different hotspot address, a probe domain their phones use) keeps that edit
+# through an upgrade.
+backup=('etc/NetworkManager/dnsmasq-shared.d/hub-captive.conf')
+source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
+# A real checksum, never SKIP. SKIP turns off integrity checking altogether, so
+# makepkg accepts whatever arrives over the network.
+#
+# ORDERING, and why this value always lands in the commit AFTER the tag: the sum
+# covers the tarball of the tag, and the tarball of the tag contains this file.
+# Writing the correct sum into the file changes the file, changes the tarball
+# and changes the sum. There is no value that satisfies it.
+#
+# It works anyway because of WHICH copy Arch users run. Install route 1 above is
+# `git clone` then `makepkg`, and a clone checks out the default branch, not a
+# tag. So the recipe people actually use is the one on main, and updating this
+# line on main straight after pushing the tag is both correct and the only thing
+# that can work.
+#
+# Every release: tag, push the tag, download the tarball, sha256sum it, paste it
+# here, commit to main, then download again and verify. Never carry the previous
+# release's value forward.
+sha256sums=('SKIP')
+
+build() {
+    cd "Gorilla.Portable.Network.Hub-${pkgver}/src/hub"
+    cargo build --release --locked
+}
+
+check() {
+    cd "Gorilla.Portable.Network.Hub-${pkgver}/src/hub"
+    # Includes the test that this file's pkgver matches Cargo.toml, so a drifted
+    # recipe fails here rather than shipping quietly.
+    cargo test --release --locked
+}
+
+package() {
+    cd "Gorilla.Portable.Network.Hub-${pkgver}"
+
+    install -Dm755 "src/hub/target/release/hub" "${pkgdir}/usr/bin/hub"
+
+    # The captive-portal answers, which is what turns "this network has no
+    # internet" into a class page opening by itself. NetworkManager reads this
+    # directory only in shared (hotspot) mode, so it does nothing to the wifi a
+    # person normally uses.
+    install -Dm644 "packaging/etc/hub-captive.conf" \
+        "${pkgdir}/etc/NetworkManager/dnsmasq-shared.d/hub-captive.conf"
+
+    # Every icon size rendered from the master, never one file copied nine
+    # times: a 512px image in the 32px slot is what makes a menu icon look
+    # smeared.
+    python3 packaging/make-icons.py \
+        packaging/icon/mascot-master.jpg \
+        "${pkgdir}/usr/share/icons/hicolor" --crop-head
+
+    install -Dm644 "packaging/gorilla-portable-network-hub.desktop" \
+        "${pkgdir}/usr/share/applications/${pkgname}.desktop"
+    install -Dm644 "packaging/hub.1" "${pkgdir}/usr/share/man/man1/hub.1"
+    install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+
+    # The documentation is the deliverable here, not an extra. A teacher who
+    # cannot get a phone to connect needs the guide more than the binary.
+    for d in README.md docs/HOW-TO.md docs/WHY-THIS-EXISTS.md docs/DEVELOPER.md \
+             docs/SCREENSHOTS.md; do
+        install -Dm644 "$d" "${pkgdir}/usr/share/doc/${pkgname}/$(basename "$d")"
+    done
+}

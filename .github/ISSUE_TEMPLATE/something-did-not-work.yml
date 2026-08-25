@@ -1,0 +1,50 @@
+name: Something did not work
+description: You tried it in a real room and something went wrong. You do not need to know why.
+title: "[did not work] "
+labels: ["from a real room"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        You do not need to be technical to file a useful report.
+
+        "Nine phones connected and three did not, all three were the same cheap
+        Android" tells us more than most bug reports do.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What did you expect, and what happened instead?
+      placeholder: |
+        I read out the wifi name and password. Twenty-two phones joined and the
+        page opened by itself. Six joined but the page never appeared, and
+        typing classroom/ did nothing on those six.
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: The output of `hub doctor`
+      description: >
+        Open a terminal and type `hub doctor`, then paste what it prints. It
+        covers most of what we would otherwise have to ask you. Skip this if you
+        cannot get to a terminal.
+      render: text
+
+  - type: input
+    id: phones
+    attributes:
+      label: What phones or laptops did the children have?
+      description: >
+        The old ones matter most, and the ones that failed matter most of all.
+      placeholder: mostly Xiaomi and Tecno, a few Samsung, two old iPhones
+
+  - type: input
+    id: where
+    attributes:
+      label: What kind of place was this?
+      description: >
+        A school, a training room, a field site, a kitchen table. It changes
+        what we should build next.
+      placeholder: a secondary school with no internet in the building

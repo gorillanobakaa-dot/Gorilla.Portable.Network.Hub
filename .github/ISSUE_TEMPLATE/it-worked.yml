@@ -1,0 +1,35 @@
+name: It worked
+description: Tell us it worked. For a tool this new that is as useful as a bug report.
+title: "[worked] "
+labels: ["from a real room"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This has been used in one room, on one morning, by one person. Every
+        report that it worked somewhere else tells us something we cannot find
+        out any other way.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What did you do with it?
+      placeholder: |
+        Handed out four worksheets to a class of 31 on a laptop with no internet.
+        Everything arrived. Collected homework back from 28 of them.
+    validations:
+      required: true
+
+  - type: input
+    id: devices
+    attributes:
+      label: How many devices, and what kind?
+      placeholder: 31 phones, mostly Android, two laptops
+
+  - type: textarea
+    id: awkward
+    attributes:
+      label: What was awkward, even though it worked?
+      description: >
+        The thing you had to explain twice. The step you got wrong the first
+        time. This is the most useful box on the form.

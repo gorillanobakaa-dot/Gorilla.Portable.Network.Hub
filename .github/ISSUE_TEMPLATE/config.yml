@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: How to use it, with pictures
+    url: https://github.com/gorillanobakaa-dot/Gorilla.Portable.Network.Hub/blob/main/docs/HOW-TO.md
+    about: Step by step, written for somebody who has never opened a terminal.
+  - name: Why it exists, and what it deliberately does not do
+    url: https://github.com/gorillanobakaa-dot/Gorilla.Portable.Network.Hub/blob/main/docs/WHY-THIS-EXISTS.md
+    about: The honest version, including the failures.

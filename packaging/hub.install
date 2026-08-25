@@ -1,0 +1,52 @@
+# What pacman runs after the files land.
+#
+# The Debian package does the same three things from its postinst. Both lists
+# have to stay the same, and the way they drift is that somebody edits one.
+
+_after_install() {
+    # Port 80 is where a joining phone's own connectivity check arrives, so it
+    # is what makes the sign-in screen pop up and open the class page by
+    # itself. Ports below 1024 need this one capability. Granting it here means
+    # a teacher never types sudo, and never has to be told about ports at all.
+    #
+    # If it fails, everything still works on 8080; the class types the address
+    # with :8080 on the end instead. That is a worse day, not a broken one, so
+    # this must not fail the install.
+    if command -v setcap >/dev/null 2>&1; then
+        setcap 'cap_net_bind_service=+ep' /usr/bin/hub 2>/dev/null || true
+    fi
+    # A new icon is invisible until the cache is rebuilt, and a new menu entry
+    # is invisible until the desktop database is. Both are silent when skipped,
+    # which is how a correctly installed package looks like it did nothing.
+    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+        gtk-update-icon-cache -q -f /usr/share/icons/hicolor 2>/dev/null || true
+    fi
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database -q /usr/share/applications 2>/dev/null || true
+    fi
+}
+
+post_install() {
+    _after_install
+    cat <<'MSG'
+
+  Start it by typing:  hub
+
+  Or find "Gorilla Portable Network Hub" in your applications menu.
+
+  To create a wifi network you need NetworkManager running:
+      sudo pacman -S networkmanager
+
+  The guide, with pictures, is at:
+      /usr/share/doc/gorilla-portable-network-hub/HOW-TO.md
+
+MSG
+}
+
+post_upgrade() {
+    # setcap is lost on every upgrade: the file is replaced, and capabilities
+    # belong to the file rather than to the path. An upgrade that skipped this
+    # would silently drop the sign-in screen, and the symptom lands on the
+    # teacher a week later as "it used to work".
+    _after_install
+}
