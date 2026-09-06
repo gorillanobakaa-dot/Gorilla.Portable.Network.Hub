@@ -1002,18 +1002,42 @@ impl App {
     }
 
     fn draw_sending(&mut self, f: &mut Frame) {
-        self.title(f, "Handing out files");
+        self.title(
+            f,
+            if self.cable { "Sending down the cable" } else { "Handing out files" },
+        );
         if let Some(h) = &self.hotspot {
             f.push(&format!("  Wifi network      {}", h.ssid));
             f.push(&format!("  Password          {}", self.password));
         }
         let port80 = serve::on_port_80();
-        for a in &self.addresses {
+        // On a cable, the cable's address is the one that matters and any
+        // other is a distraction. This screen listed the wifi address first,
+        // on a cable transfer, which is the address the other laptop cannot
+        // reach: the one thing on the screen a person is meant to read out,
+        // and it was the wrong one.
+        let show: Vec<std::net::Ipv4Addr> = if self.cable {
+            let ll: Vec<_> = self.addresses.iter().copied().filter(|a| a.is_link_local()).collect();
+            if ll.is_empty() { self.addresses.clone() } else { ll }
+        } else {
+            self.addresses.clone()
+        };
+        for a in &show {
             if port80 {
                 f.push(&format!("  Address to type   http://{a}"));
             } else {
                 f.push(&format!("  Address to type   http://{a}:{}", port()));
             }
+        }
+        if self.cable {
+            // Whether the two things that let the other end find this without
+            // being told anything are actually running. Said here because this
+            // is the screen a person is looking at while wondering why nothing
+            // has appeared on the other laptop.
+            if self.naming {
+                f.push("  Or they can type   gorilla/");
+            }
+            f.push_dim(&format!("  addresses         {}", self.cable_note));
         }
         if self.hotspot.is_some() && port80 {
             // The dnsmasq drop-in answers these names on OUR hotspot only.
@@ -1110,9 +1134,17 @@ impl App {
         f.blank();
 
         if rows.is_empty() {
-            f.push_dim("  On a phone or any computer: join the wifi and the sign-in");
-            f.push_dim("  screen brings them here by itself. Or open a browser at the");
-            f.push_dim("  address above.");
+            if self.cable {
+                f.push_dim("  On the other computer: its own screen should offer to open");
+                f.push_dim("  this page. If it does not, open any browser there and type");
+                f.push_dim("  the address above.");
+                f.push_dim("  Give it half a minute after the cable goes in. Nothing can");
+                f.push_dim("  happen until both ends have settled on an address.");
+            } else {
+                f.push_dim("  On a phone or any computer: join the wifi and the sign-in");
+                f.push_dim("  screen brings them here by itself. Or open a browser at the");
+                f.push_dim("  address above.");
+            }
         }
         let waiting = serve::pending_count();
         if waiting > 0 {
