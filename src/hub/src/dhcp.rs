@@ -423,6 +423,8 @@ pub fn start(
         .set_read_timeout(Some(Duration::from_millis(500)))
         .map_err(Refused::Other)?;
 
+    // Our own cards, so we do not lease to the computer we are running on.
+    let ours = crate::net::local_macs();
     let to_client = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::BROADCAST, CLIENT_PORT));
     let mut leases = Leases::new(server);
     let mask = leases.mask;
@@ -442,6 +444,20 @@ pub fn start(
             };
             let Some(req) = parse(&buf[..n]) else { continue };
             let mac = req.mac();
+            // Never answer this machine's own request.
+            //
+            // Windows and macOS ask for a lease on every interface, including
+            // the one with the cable in it, during the 30 to 60 seconds before
+            // they give up and self-assign. We answer in half a second, so the
+            // sending computer takes a lease from itself: its own pool address,
+            // and a DNS server pointing at our own process. Stop the program
+            // and that machine is left pointing at a name server that no longer
+            // exists, which is a laptop that has lost the internet and no
+            // obvious reason why. Seen exactly once, on the machine this was
+            // being written on.
+            if ours.contains(&mac) {
+                continue;
+            }
             match req.kind {
                 DISCOVER => {
                     if let Some(ip) = leases.offer(mac, server) {
@@ -516,6 +532,18 @@ mod tests {
         l.release(discover(1).mac());
         let b = l.offer(discover(2).mac(), server).unwrap();
         assert_eq!(a, b, "the freed address is the next one available");
+    }
+
+    /// Six hex pairs, and nothing else.
+    #[test]
+    fn a_mac_is_read_only_when_it_is_one() {
+        use crate::net::parse_mac_for_test as parse_mac;
+        assert_eq!(parse_mac("f4:a8:0d:54:cd:82"), Some([0xf4, 0xa8, 0x0d, 0x54, 0xcd, 0x82]));
+        assert_eq!(parse_mac("F4-A8-0D-54-CD-82"), Some([0xf4, 0xa8, 0x0d, 0x54, 0xcd, 0x82]));
+        assert_eq!(parse_mac("f4:a8:0d:54:cd"), None, "five pairs is not a mac");
+        assert_eq!(parse_mac("169.254.87.61"), None, "an address is not a mac");
+        assert_eq!(parse_mac(""), None);
+        assert_eq!(parse_mac("zz:zz:zz:zz:zz:zz"), None);
     }
 
     /// The guard that keeps this off a school network.

@@ -40,6 +40,86 @@ pub fn source_address_for(target: Ipv4Addr) -> Option<Ipv4Addr> {
     }
 }
 
+/// The hardware addresses of this machine's own network cards.
+///
+/// Needed so the address server does not answer the computer it is running on.
+/// A Windows or Mac laptop asks for a DHCP lease on every interface, including
+/// the one with the cable in it, for the 30 to 60 seconds before it gives up
+/// and assigns itself a link-local address. Ours answers within half a second,
+/// so it wins that race against nothing, and the machine takes a lease from
+/// itself: its own address out of its own pool, and a DNS server pointing at
+/// its own DHCP process. When that process stops, the machine is left with a
+/// name server that no longer exists.
+///
+/// Empty on failure, which means "answer everything" and is the behaviour
+/// before this existed. A missed self-lease is a bad afternoon; refusing every
+/// client because a command's output could not be parsed is a broken feature.
+pub fn local_macs() -> Vec<[u8; 6]> {
+    let mut out: Vec<[u8; 6]> = Vec::new();
+    let mut add = |m: [u8; 6]| {
+        if m != [0; 6] && !out.contains(&m) {
+            out.push(m);
+        }
+    };
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(dir) = std::fs::read_dir("/sys/class/net") {
+            for e in dir.flatten() {
+                if let Ok(text) = std::fs::read_to_string(e.path().join("address")) {
+                    if let Some(m) = parse_mac(text.trim()) {
+                        add(m);
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        use std::process::Command;
+        // getmac on Windows, ifconfig elsewhere. Both are present on a stock
+        // system, and both are read for MAC-shaped text rather than parsed as
+        // a format, so a layout change degrades to finding nothing.
+        let out_text = if cfg!(target_os = "windows") {
+            Command::new("getmac").args(["/fo", "csv", "/nh"]).output().ok()
+        } else {
+            Command::new("ifconfig").output().ok()
+        };
+        if let Some(o) = out_text {
+            let text = String::from_utf8_lossy(&o.stdout);
+            for tok in text.split(|c: char| !(c.is_ascii_hexdigit() || c == ':' || c == '-')) {
+                if let Some(m) = parse_mac(tok) {
+                    add(m);
+                }
+            }
+        }
+    }
+
+    out
+}
+
+#[cfg(test)]
+pub fn parse_mac_for_test(s: &str) -> Option<[u8; 6]> {
+    parse_mac(s)
+}
+
+/// Six hex pairs separated by ':' or '-'. Anything else is not a MAC.
+fn parse_mac(s: &str) -> Option<[u8; 6]> {
+    let parts: Vec<&str> = s.split(|c| c == ':' || c == '-').collect();
+    if parts.len() != 6 {
+        return None;
+    }
+    let mut m = [0u8; 6];
+    for (i, p) in parts.iter().enumerate() {
+        if p.len() != 2 {
+            return None;
+        }
+        m[i] = u8::from_str_radix(p, 16).ok()?;
+    }
+    Some(m)
+}
+
 /// Every address this machine appears to hold, deduplicated.
 pub fn local_addresses() -> Vec<Ipv4Addr> {
     let mut probes: Vec<Ipv4Addr> = Vec::new();
