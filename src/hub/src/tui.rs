@@ -98,6 +98,8 @@ enum Screen {
     Receive,
     ReceiveFiles,
     Receiving,
+    /// Choosing a folder by looking, not by typing a path.
+    Pick,
     /// What this computer can and cannot do, and the one button that fixes the
     /// commonest cause of "it does not work": a firewall quietly dropping
     /// every incoming connection while everything else looks healthy.
@@ -157,6 +159,16 @@ struct App {
     /// What the address server decided, in words, for the screen to show. A
     /// refusal here is normal and correct on a network that has a router.
     cable_note: String,
+    /// The folder the picker is looking inside.
+    pick_dir: PathBuf,
+    /// Its subfolders, sorted, hidden ones left out.
+    pick_kids: Vec<String>,
+    /// First subfolder shown, so a folder with two hundred children scrolls
+    /// instead of drawing off the bottom of the window.
+    pick_top: usize,
+    /// The folder could not be read. A different thing from having no
+    /// subfolders, and it has to say so differently.
+    pick_unreadable: bool,
     /// Whether we are answering names as well as handing out addresses. When
     /// true the other end can type a word instead of an address, and its own
     /// operating system should offer to open the page. When false, port 53 was
@@ -267,6 +279,10 @@ impl App {
             cable: false,
             cable_stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             cable_note: String::new(),
+            pick_dir: PathBuf::from("."),
+            pick_kids: Vec::new(),
+            pick_top: 0,
+            pick_unreadable: false,
             naming: false,
             started: None,
             addresses: Vec::new(),
@@ -332,6 +348,7 @@ impl App {
             Screen::Receive => self.draw_receive(&mut f),
             Screen::ReceiveFiles => self.draw_files(&mut f),
             Screen::Receiving => self.draw_receiving(&mut f),
+            Screen::Pick => self.draw_pick(&mut f),
             Screen::Checkup => self.draw_checkup(&mut f),
             Screen::Note(_) => self.draw_note(&mut f),
         }
@@ -1244,6 +1261,7 @@ impl App {
         }
         match self.screen {
             Screen::Home => self.home_key(k),
+            Screen::Pick => self.pick_key(k),
             Screen::Checkup => self.checkup_key(k),
             Screen::Send => self.send_key(k),
             Screen::Tick { pre } => self.tick_key(k, pre),
@@ -1392,6 +1410,190 @@ impl App {
         false
     }
 
+    /// Choosing a folder by looking at folders, instead of typing a path.
+    ///
+    /// WHY THIS EXISTS. The folder row was a text field, and a text field asks
+    /// a person to type `C:\Users\someone\Desktop\Year 7`. Backslashes and
+    /// colons are not punctuation most people can produce on demand: plenty of
+    /// adults who use a computer every day have never needed to know what a
+    /// forward slash is called, let alone which of the two leans which way.
+    /// Tab completion helps somebody who already knows the path exists, which
+    /// is not this audience.
+    ///
+    /// So: up, down, enter. The same three keys as everything else here.
+    fn open_picker(&mut self) {
+        let start = PathBuf::from(shellexpand(&self.folder));
+        // Start somewhere real. A path typed earlier and since deleted, or a
+        // drive that is no longer plugged in, must not open an empty screen
+        // with no way out.
+        let start = if start.is_dir() {
+            start
+        } else {
+            start
+                .ancestors()
+                .find(|a| a.is_dir())
+                .map(|a| a.to_path_buf())
+                .unwrap_or_else(starting_folder)
+        };
+        self.pick_at(start);
+        self.screen = Screen::Pick;
+    }
+
+    /// Read one folder's subfolders. Files are not listed: the thing being
+    /// chosen is a folder, and listing 68,000 files that cannot be picked is
+    /// noise a person has to scroll past.
+    fn pick_at(&mut self, dir: PathBuf) {
+        let mut names: Vec<String> = Vec::new();
+        let mut unreadable = false;
+        match std::fs::read_dir(&dir) {
+            Ok(entries) => {
+                for e in entries.flatten() {
+                    if !e.path().is_dir() {
+                        continue;
+                    }
+                    let n = e.file_name().to_string_lossy().to_string();
+                    // Hidden and system folders are noise here. .hub_holding
+                    // is ours and handing it out would hand back the work the
+                    // class just handed in.
+                    if n.starts_with('.') || n.starts_with('$') {
+                        continue;
+                    }
+                    names.push(n);
+                }
+            }
+            Err(_) => unreadable = true,
+        }
+        names.sort_by_key(|n| n.to_lowercase());
+        self.pick_dir = dir;
+        self.pick_kids = names;
+        self.pick_unreadable = unreadable;
+        self.pick_top = 0;
+        self.row = 0;
+    }
+
+    /// How many folder rows fit, given the fixed furniture above and below.
+    fn pick_page(&self, rows: usize) -> usize {
+        rows.saturating_sub(10).max(3)
+    }
+
+    fn draw_pick(&self, f: &mut Frame) {
+        self.title(f, "Which folder?");
+        // The path is shown but never typed. A person recognises where they
+        // are from it even when they could not have written it down.
+        f.push(&format!("  {}", self.pick_dir.display()));
+        f.blank();
+
+        let mut items: Vec<String> = Vec::new();
+        items.push("  USE THIS FOLDER".to_string());
+        if self.pick_dir.parent().is_some() {
+            items.push("  ..  go up one".to_string());
+        }
+        for n in &self.pick_kids {
+            items.push(format!("  {n}"));
+        }
+        let w = term::group_width(&items);
+
+        let (rows, _) = term::size();
+        let page = self.pick_page(rows);
+        let fixed = if self.pick_dir.parent().is_some() { 2 } else { 1 };
+
+        for (i, it) in items.iter().enumerate() {
+            // The two fixed rows are always on screen; the folder list below
+            // them scrolls.
+            if i >= fixed && (i - fixed) < self.pick_top {
+                continue;
+            }
+            if i >= fixed && (i - fixed) >= self.pick_top + page {
+                continue;
+            }
+            if i == self.row {
+                f.push_selected_within(it, w);
+            } else {
+                f.push(it);
+            }
+        }
+
+        if self.pick_unreadable {
+            f.blank();
+            f.push_dim("  This folder cannot be read on this computer. Go up one and");
+            f.push_dim("  choose another, or ask whoever set the machine up.");
+        } else if self.pick_kids.is_empty() {
+            f.blank();
+            f.push_dim("  No folders inside this one. USE THIS FOLDER sends what is");
+            f.push_dim("  in it, or go up one and look somewhere else.");
+        }
+        let hidden = self.pick_kids.len().saturating_sub(self.pick_top + page);
+        if hidden > 0 {
+            f.blank();
+            f.push_dim(&format!("  {hidden} more below. Keep pressing down."));
+        }
+        f.blank();
+        self.hints(f, "  up and down to look    enter to open or choose    esc to go back");
+    }
+
+    fn pick_key(&mut self, k: Key) -> bool {
+        let has_parent = self.pick_dir.parent().is_some();
+        let fixed = if has_parent { 2 } else { 1 };
+        let n = fixed + self.pick_kids.len();
+        self.move_row(k, n);
+
+        // Keep the selected folder on screen as the selection moves past the
+        // bottom of the window.
+        let (rows, _) = term::size();
+        let page = self.pick_page(rows);
+        if self.row >= fixed {
+            let idx = self.row - fixed;
+            if idx < self.pick_top {
+                self.pick_top = idx;
+            } else if idx >= self.pick_top + page {
+                self.pick_top = idx + 1 - page;
+            }
+        }
+
+        match k {
+            Key::Enter => {
+                if self.row == 0 {
+                    self.folder = self.pick_dir.to_string_lossy().into_owned();
+                    self.screen = Screen::Send;
+                    self.row = 0;
+                } else if has_parent && self.row == 1 {
+                    if let Some(p) = self.pick_dir.parent().map(|p| p.to_path_buf()) {
+                        self.pick_at(p);
+                    }
+                } else {
+                    let i = self.row - fixed;
+                    if let Some(name) = self.pick_kids.get(i).cloned() {
+                        let next = self.pick_dir.join(name);
+                        self.pick_at(next);
+                    }
+                }
+            }
+            Key::Left => {
+                // Left is up a level, because a file manager has taught
+                // everybody that arrow and it costs nothing to honour it.
+                if let Some(p) = self.pick_dir.parent().map(|p| p.to_path_buf()) {
+                    self.pick_at(p);
+                }
+            }
+            Key::Right => {
+                if self.row >= fixed {
+                    let i = self.row - fixed;
+                    if let Some(name) = self.pick_kids.get(i).cloned() {
+                        let next = self.pick_dir.join(name);
+                        self.pick_at(next);
+                    }
+                }
+            }
+            Key::Esc => {
+                self.screen = Screen::Send;
+                self.row = 0;
+            }
+            Key::Char('q') | Key::Quit => return true,
+            _ => {}
+        }
+        false
+    }
+
     fn send_key(&mut self, k: Key) -> bool {
         let n = self.send_fields().len() + 1;
         self.move_row(k, n);
@@ -1404,6 +1606,12 @@ impl App {
                     // Editing starts from the real value, not from the
                     // explanatory text shown when a field is empty. Otherwise
                     // the first keystroke would append to a sentence.
+                    // The folder row opens the picker instead of a text
+                    // field. Typing a path is the thing this replaces.
+                    if self.row == 0 {
+                        self.open_picker();
+                        return false;
+                    }
                     self.editing = Some(if self.cable {
                         // Cable mode has two rows, not five, so the row
                         // numbers mean different fields. Reading them off the
@@ -1923,6 +2131,8 @@ impl App {
             let me = std::env::var("COMPUTERNAME")
                 .or_else(|_| std::env::var("HOSTNAME"))
                 .unwrap_or_else(|_| "this computer".into());
+            // Switches the served page from the class page to the accept page.
+            crate::page::set_sender(&me);
             let _ = cable::start_beacon(port(), me, short, Arc::clone(&self.cable_stop));
 
             let ours = self

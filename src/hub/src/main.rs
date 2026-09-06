@@ -225,6 +225,11 @@ hub cable  -  hand a folder down a cable to one other computer
     });
     let port: u16 = flag(&args, "--port").and_then(|v| v.parse().ok()).unwrap_or(8080);
 
+    // Naming the sender switches the served page from the class page to the
+    // accept page. Set before serving starts so the first request already
+    // gets it.
+    crate::page::set_sender(&name);
+
     let stop = Arc::new(AtomicBool::new(false));
     let short = std::path::Path::new(&folder)
         .file_name()

@@ -1264,7 +1264,17 @@ fn serve_one(
             .local_addr()
             .map(|a| if a.port() == 80 { a.ip().to_string() } else { format!("{}:{}", a.ip(), a.port()) })
             .unwrap_or_else(|_| "10.42.0.1".to_string());
-        let page = crate::page::class_page(root, done, &peer_ip, query.contains("rename=1"), &here);
+        // A cable transfer gets the accept page instead of the class page.
+        // The class page opens by asking for a name, which is the right first
+        // question for thirty phones in a room and the wrong one for the two
+        // laptops either end of a cable: it is a thing to type before anything
+        // happens, and removing those is the point of the whole cable path.
+        let from = crate::page::sender();
+        let page = if from.is_empty() {
+            crate::page::class_page(root, done, &peer_ip, query.contains("rename=1"), &here)
+        } else {
+            crate::page::accept_page(root, &from)
+        };
         return respond_fresh(&mut out, "text/html; charset=utf-8", page.as_bytes()).map(|_| keep);
     }
     // The whole folder as one download, for browsers, which can take exactly

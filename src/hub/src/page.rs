@@ -1039,6 +1039,131 @@ pub fn redirect_done(out: &mut BufWriter<TcpStream>, tag: &str) -> std::io::Resu
     out.flush()
 }
 
+// ---------------------------------------------------------------- the cable
+
+/// Who is sending, when this is a cable transfer rather than a class. Empty
+/// means the ordinary class page.
+static SENDER: Mutex<String> = Mutex::new(String::new());
+
+/// Turn on the accept page and say who is offering.
+pub fn set_sender(name: &str) {
+    *SENDER.lock().unwrap_or_else(|e| e.into_inner()) = name.trim().to_string();
+}
+
+pub fn sender() -> String {
+    SENDER.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// The page the other laptop sees on a cable.
+///
+/// WHY IT IS NOT THE CLASS PAGE. The class page opens by asking for a name,
+/// because thirty identical phones in a room are useless to a teacher until
+/// they say who they are. On a cable there are two computers and no class, so
+/// that question is both pointless and the second thing this whole feature
+/// exists to remove: something a person has to type before anything happens.
+///
+/// What is left is one sentence and one button. The sentence says who wants to
+/// send what, so a person who arrived here by clicking a notification they did
+/// not fully understand can tell whether they meant to. The button takes all
+/// of it in one download, because "accept" is the thing they came to do, and
+/// picking files one at a time is the rare case, not the normal one.
+pub fn accept_page(root: &Path, from: &str) -> String {
+    let files = serve::visible_files(root);
+    let total: u64 = files.iter().map(|(_, b)| b).sum();
+    let mut s = String::with_capacity(4096);
+    s.push_str(
+        "<!doctype html><html><head><meta charset=\"utf-8\">\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+         <title>Files for you</title><style>\
+         body{font-family:sans-serif;margin:0;padding:16px;background:#fff;color:#111;max-width:620px}\
+         h1{font-size:1.4em;margin:0 0 4px}\
+         .who{font-size:1.15em;margin:0 0 16px;color:#333}\
+         .accept{display:block;background:#1a6b1a;color:#fff;border:0;border-radius:8px;\
+         padding:20px;font-size:1.35em;text-align:center;text-decoration:none;margin:18px 0}\
+         .size{color:#666;font-size:.9em;margin-left:6px}\
+         .file{margin:12px 0;border-top:1px solid #eee;padding-top:10px}\
+         .name{font-size:1.05em;word-break:break-all}\
+         a.btn{display:inline-block;background:#28527a;color:#fff;border-radius:6px;\
+         padding:10px 16px;text-decoration:none;margin:6px 8px 0 0}\
+         .note{color:#666;font-size:.95em;margin-top:20px}\
+         </style></head><body>\n",
+    );
+
+    let who = if from.is_empty() { "The other computer".to_string() } else { html_escape(from) };
+    s.push_str("<h1>Files for you</h1>\n");
+
+    if files.is_empty() {
+        // A page that says nothing is a page that looks broken. Say which
+        // state this is and what would change it.
+        s.push_str(&format!(
+            "<p class=who><b>{who}</b> is connected, but is not offering any files yet.</p>\
+             <p class=note>Nothing is wrong. Whoever is sending has not picked a folder \
+             yet, or the folder is empty. This page will show the files once they do: \
+             wait a moment and reload it.</p>\n"
+        ));
+        s.push_str("</body></html>\n");
+        return s;
+    }
+
+    s.push_str(&format!(
+        "<p class=who><b>{who}</b> wants to send you {} file{} ({}).</p>\n",
+        files.len(),
+        if files.len() == 1 { "" } else { "s" },
+        human(total)
+    ));
+
+    // One file is its own "everything", and a zip of one file is a worse
+    // version of that file.
+    if files.len() == 1 {
+        let (name, size) = &files[0];
+        s.push_str(&format!(
+            "<a class=accept href=\"/{}?dl=1\">ACCEPT AND SAVE IT<br><span style=\"font-size:.75em\">{} &middot; {}</span></a>\n",
+            urlencode(name),
+            html_escape(name),
+            human(*size)
+        ));
+    } else {
+        s.push_str(&format!(
+            "<a class=accept href=\"/everything.zip\">ACCEPT ALL {} FILES<br>\
+             <span style=\"font-size:.75em\">{} &middot; one download</span></a>\n",
+            files.len(),
+            human(total)
+        ));
+        s.push_str(
+            "<p class=note>It arrives as one file your computer opens like a folder. \
+             Do not switch the machine off while it is running.</p>\n",
+        );
+    }
+
+    // The individual files, below the button rather than instead of it. Some
+    // people want one thing out of thirty, and the list is also how a person
+    // checks that what is coming is what they expected.
+    if files.len() > 1 {
+        s.push_str("<h2 style=\"font-size:1.05em;margin-top:26px\">Or take them one at a time</h2>\n");
+        const ON_PAGE: usize = 300;
+        let total_n = files.len();
+        for (name, size) in files.iter().take(ON_PAGE) {
+            s.push_str(&format!(
+                "<div class=file><span class=name>{}</span><span class=size>{}</span><br>\
+                 <a class=btn href=\"/{}?dl=1\">SAVE IT</a></div>\n",
+                html_escape(name),
+                human(*size),
+                urlencode(name)
+            ));
+        }
+        if total_n > ON_PAGE {
+            s.push_str(&format!(
+                "<p><b>{} more are being sent than fit on this page.</b><br>\
+                 The button at the top has all of them.</p>\n",
+                total_n - ON_PAGE
+            ));
+        }
+    }
+
+    s.push_str("</body></html>\n");
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
