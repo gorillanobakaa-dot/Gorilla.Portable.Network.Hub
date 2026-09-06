@@ -188,6 +188,8 @@ struct App {
     /// Exactly what may be handed out, when the picker was used to choose
     /// rather than to point at a folder. None means the whole folder.
     chosen: Option<std::collections::HashSet<String>>,
+    /// Whether .local is being announced. Independent of the guard.
+    mdns: bool,
     /// Whether we are answering names as well as handing out addresses. When
     /// true the other end can type a word instead of an address, and its own
     /// operating system should offer to open the page. When false, port 53 was
@@ -369,6 +371,7 @@ impl App {
             pick_unreadable: false,
             anyway: false,
             chosen: None,
+            mdns: false,
             naming: false,
             started: None,
             addresses: Vec::new(),
@@ -1034,8 +1037,11 @@ impl App {
             // being told anything are actually running. Said here because this
             // is the screen a person is looking at while wondering why nothing
             // has appeared on the other laptop.
+            if self.mdns {
+                f.push("  Or they can type   gorilla.local");
+            }
             if self.naming {
-                f.push("  Or they can type   gorilla/");
+                f.push("  Or just            gorilla/");
             }
             f.push_dim(&format!("  addresses         {}", self.cable_note));
         }
@@ -2488,6 +2494,10 @@ impl App {
             // Behind the same guard as the address server: this resolver
             // answers every name with our address, which is correct on a bare
             // cable and is claiming to be the whole internet anywhere else.
+            // .local is announced whatever the guard decides: it is
+            // link-scoped and needs nothing configured on the far end, so it
+            // is the naming that still works when the guard refuses.
+            self.mdns = crate::dns::start_mdns(ours, Arc::clone(&self.cable_stop)).is_ok();
             let bare_cable =
                 self.anyway || dhcp::safe_to_offer(&self.addresses, net::default_gateway());
             self.naming =

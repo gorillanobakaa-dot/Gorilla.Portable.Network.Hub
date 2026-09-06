@@ -1402,6 +1402,19 @@ fn our_names(sock: &TcpStream) -> Vec<String> {
     }
     names.push("localhost".to_string());
     names.push("127.0.0.1".to_string());
+    // The names we answer for ourselves.
+    //
+    // Without these, a person who typed the easy name got a redirect to the
+    // numeric address, because the captive-portal rule treats any host that is
+    // not one of our addresses as somebody else's site. The page still opened,
+    // and the address bar went straight back to 169.254.87.61, which is the
+    // thing the name existed to spare them.
+    for n in crate::dns::LOCAL_NAMES {
+        names.push(n.to_string());
+    }
+    for n in crate::dns::OUR_NAMES {
+        names.push(n.to_string());
+    }
     names
 }
 

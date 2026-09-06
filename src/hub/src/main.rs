@@ -276,16 +276,28 @@ hub cable  -  hand a folder down a cable to one other computer
         println!("  !! network has a router, this can take it down for everyone on it.");
         println!();
     }
+    // .local goes out whatever the guard decides.
+    //
+    // Multicast DNS needs nobody to be told anything: it is link-scoped, and
+    // announcing one name is what every printer already does, so it is safe on
+    // a network with a router. That makes it the only naming that survives the
+    // guard, and the guard is on precisely when somebody is testing from a
+    // laptop that is also on wifi.
+    let mdns = dns::start_mdns(ours, stop.clone()).is_ok();
+
     let bare_cable = anyway || dhcp::safe_to_offer(&addresses, gateway);
     let naming = bare_cable && dns::start(ours, stop.clone()).is_ok();
     match dhcp::start(ours, &addresses, gateway, naming, anyway, stop.clone()) {
         Ok(_) => println!("  addresses      giving the other computer an address if it asks"),
         Err(e) => println!("  addresses      {e}"),
     }
+    if mdns {
+        println!("  name           they can type  gorilla.local  instead of an address");
+    }
     if naming {
-        println!("  names          they can type  gorilla/  instead of an address");
+        println!("  names          they can also type  gorilla/");
         println!("                 and their computer should offer to open this page itself");
-    } else {
+    } else if !mdns {
         // Not a warning. On Windows this is nearly always available; on Linux
         // and macOS port 53 needs root, and the transfer works without it.
         println!("  names          not answering names, so the address has to be typed");

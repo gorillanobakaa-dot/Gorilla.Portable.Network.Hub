@@ -437,6 +437,389 @@ mod server_tests {
     }
 }
 
+// ---------------------------------------------------------------- .local
+//
+// Answering "gorilla.local" without being anybody's DNS server.
+//
+// WHY THIS EXISTS, AFTER THE OTHER TWO ALREADY DID.
+//
+// The plain resolver above only reaches a machine that has been TOLD to ask
+// us, and the only way to tell it is DHCP option 6. That is fine on a bare
+// cable and refused everywhere else, because handing out addresses on a
+// network that has a router is an outage. So on the machine somebody is
+// actually testing with, which is on wifi because that is how they talk to
+// anyone, the whole naming path switches off and the person on the far end is
+// back to copying 169.254.87.61 off one screen onto another. Which is what
+// happened, and was reported: "I had to type the whole 169.254.87.61. not
+// exactly easy and convenient".
+//
+// Multicast DNS has none of that. It is link-scoped by design: a query for a
+// name ending .local goes to 224.0.0.251 and whoever owns the name answers.
+// Nothing has to be configured, no lease has to be accepted, and it is safe on
+// a network that has a router because announcing one name is what every
+// printer on earth already does. It works with the guard refusing, which is
+// the entire point.
+//
+// Debian resolves .local through avahi or systemd-resolved, macOS through
+// Bonjour, Windows 10 and later natively. All three are on by default.
+
+/// The mDNS port and group, fixed by RFC 6762.
+pub const MDNS_PORT: u16 = 5353;
+const MDNS_GROUP: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 251);
+
+/// The names we answer for. Short, because somebody has to say them out loud
+/// across a room and then somebody else has to type them.
+pub const LOCAL_NAMES: [&str; 2] = ["gorilla.local", "hub.local"];
+
+/// Build the response to an mDNS query, or decide it was not for us.
+///
+/// Split from the socket so it can be tested without a network.
+pub fn mdns_answer(query: &[u8], us: Ipv4Addr) -> Option<Vec<u8>> {
+    if query.len() < 13 {
+        return None;
+    }
+    let flags = u16::from_be_bytes([query[2], query[3]]);
+    if flags & 0x8000 != 0 {
+        return None; // a response, not a question
+    }
+    let qdcount = u16::from_be_bytes([query[4], query[5]]);
+    if qdcount == 0 {
+        return None;
+    }
+
+    // Walk the questions and answer the first one that is ours. A resolver
+    // may pack several into one packet.
+    let mut pos = 12;
+    for _ in 0..qdcount {
+        let (name, next) = read_query_name(query, pos)?;
+        if next + 4 > query.len() {
+            return None;
+        }
+        let qtype = u16::from_be_bytes([query[next], query[next + 1]]);
+        // The top bit of the class is the "please answer me directly" flag,
+        // not part of the class. Masking it off is not optional: without it
+        // every query from a modern resolver looks like class 32769 and gets
+        // ignored.
+        let qclass = u16::from_be_bytes([query[next + 2], query[next + 3]]) & 0x7fff;
+        pos = next + 4;
+
+        let ours = LOCAL_NAMES.iter().any(|n| n.eq_ignore_ascii_case(&name));
+        if !ours || qclass != 1 || !(qtype == 1 || qtype == 255) {
+            continue;
+        }
+
+        let mut out = Vec::with_capacity(64);
+        // mDNS responses carry id 0: there is no transaction to match, the
+        // name in the answer is what identifies it.
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&0x8400u16.to_be_bytes()); // response, authoritative
+        out.extend_from_slice(&0u16.to_be_bytes()); // no questions echoed
+        out.extend_from_slice(&1u16.to_be_bytes()); // one answer
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&0u16.to_be_bytes());
+
+        // The name, written out in full. No compression pointer: there is no
+        // question section above to point back into.
+        for label in name.split('.') {
+            out.push(label.len() as u8);
+            out.extend_from_slice(label.as_bytes());
+        }
+        out.push(0);
+        out.extend_from_slice(&1u16.to_be_bytes()); // A
+        // Cache-flush bit set with class IN: this is the current answer and
+        // replaces anything remembered for this name.
+        out.extend_from_slice(&0x8001u16.to_be_bytes());
+        // Two minutes. Long enough to be useful across a page of images,
+        // short enough that a laptop carried away from this cable is not
+        // still holding the answer.
+        out.extend_from_slice(&120u32.to_be_bytes());
+        out.extend_from_slice(&4u16.to_be_bytes());
+        out.extend_from_slice(&us.octets());
+        return Some(out);
+    }
+    None
+}
+
+/// Read a QNAME as dotted text. mDNS queries do not use compression pointers
+/// in the question, so this refuses one rather than following it.
+fn read_query_name(msg: &[u8], mut pos: usize) -> Option<(String, usize)> {
+    let mut parts: Vec<String> = Vec::new();
+    loop {
+        let len = *msg.get(pos)? as usize;
+        if len & 0xc0 == 0xc0 {
+            return None;
+        }
+        pos += 1;
+        if len == 0 {
+            return Some((parts.join("."), pos));
+        }
+        let end = pos.checked_add(len)?;
+        if end > msg.len() || parts.len() > 8 {
+            return None;
+        }
+        parts.push(String::from_utf8_lossy(&msg[pos..end]).into_owned());
+        pos = end;
+    }
+}
+
+/// A UDP socket on a port somebody else is already using.
+///
+/// WHY THIS IS NOT `UdpSocket::bind`. Multicast DNS lives on port 5353 and is
+/// designed to be shared: every responder on a machine binds the same port
+/// with SO_REUSEADDR and they all receive the group traffic. The standard
+/// library has no way to set that option before binding, so `bind` loses the
+/// port to whoever took it first.
+///
+/// On a real machine that is a browser. Edge and Chrome both hold 5353 for
+/// Chromecast discovery, from startup, on a laptop nobody has configured. So
+/// the naming that was supposed to save a person from typing 169.254.87.61
+/// silently did not start, on the exact machines it was written for. "Close
+/// your browser first" is not an instruction this tool is allowed to give.
+///
+/// So the socket is made by hand, the option is set, the bind happens, and the
+/// result is handed to the standard library to own from then on. This is the
+/// same shape as the console handling in term.rs: a few lines of the platform's
+/// own API where the portable wrapper cannot express what is needed.
+#[cfg(windows)]
+fn shared_udp(port: u16) -> std::io::Result<UdpSocket> {
+    use std::os::windows::io::FromRawSocket;
+
+    // Winsock has to be started before socket() will work, and the standard
+    // library does that the first time it makes a socket of its own. Making
+    // and dropping one is the documented way to be sure without linking to
+    // WSAStartup ourselves.
+    drop(UdpSocket::bind(("0.0.0.0", 0))?);
+
+    #[link(name = "ws2_32")]
+    extern "system" {
+        fn socket(af: i32, ty: i32, protocol: i32) -> usize;
+        fn setsockopt(s: usize, level: i32, name: i32, val: *const u8, len: i32) -> i32;
+        fn bind(s: usize, addr: *const u8, len: i32) -> i32;
+        fn closesocket(s: usize) -> i32;
+    }
+
+    const AF_INET: i32 = 2;
+    const SOCK_DGRAM: i32 = 2;
+    const SOL_SOCKET: i32 = 0xffff;
+    const SO_REUSEADDR: i32 = 0x0004;
+    const INVALID_SOCKET: usize = usize::MAX;
+
+    unsafe {
+        let s = socket(AF_INET, SOCK_DGRAM, 0);
+        if s == INVALID_SOCKET {
+            return Err(std::io::Error::last_os_error());
+        }
+        let yes: i32 = 1;
+        if setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (&yes as *const i32).cast(), 4) != 0 {
+            closesocket(s);
+            return Err(std::io::Error::last_os_error());
+        }
+        // struct sockaddr_in: family, port (network order), address, padding.
+        let mut sa = [0u8; 16];
+        sa[0..2].copy_from_slice(&(AF_INET as u16).to_ne_bytes());
+        sa[2..4].copy_from_slice(&port.to_be_bytes());
+        // INADDR_ANY, which is the four zero bytes already there.
+        if bind(s, sa.as_ptr(), 16) != 0 {
+            let e = std::io::Error::last_os_error();
+            closesocket(s);
+            return Err(e);
+        }
+        Ok(UdpSocket::from_raw_socket(s as std::os::windows::io::RawSocket))
+    }
+}
+
+#[cfg(unix)]
+fn shared_udp(port: u16) -> std::io::Result<UdpSocket> {
+    use std::os::unix::io::FromRawFd;
+
+    extern "C" {
+        fn socket(domain: i32, ty: i32, protocol: i32) -> i32;
+        fn setsockopt(fd: i32, level: i32, name: i32, val: *const u8, len: u32) -> i32;
+        fn bind(fd: i32, addr: *const u8, len: u32) -> i32;
+        fn close(fd: i32) -> i32;
+    }
+
+    const AF_INET: i32 = 2;
+    const SOCK_DGRAM: i32 = 2;
+    const SOL_SOCKET: i32 = 1;
+    // Linux numbers. The BSDs and macOS use 0x0004 / 0x0200, which is why the
+    // return value is checked and a failure is not fatal: the bind is then
+    // tried anyway and only that failing is reported.
+    #[cfg(target_os = "linux")]
+    const SO_REUSEADDR: i32 = 2;
+    #[cfg(target_os = "linux")]
+    const SO_REUSEPORT: i32 = 15;
+    #[cfg(not(target_os = "linux"))]
+    const SO_REUSEADDR: i32 = 0x0004;
+    #[cfg(not(target_os = "linux"))]
+    const SO_REUSEPORT: i32 = 0x0200;
+
+    unsafe {
+        let fd = socket(AF_INET, SOCK_DGRAM, 0);
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let yes: i32 = 1;
+        let p: *const u8 = (&yes as *const i32).cast();
+        // Both, because avahi holds 5353 with both on Linux and a socket
+        // without SO_REUSEPORT cannot join it there.
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, p, 4);
+        setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, p, 4);
+
+        let mut sa = [0u8; 16];
+        sa[0] = 16; // sin_len on the BSDs, ignored on Linux
+        sa[1] = AF_INET as u8;
+        sa[2..4].copy_from_slice(&port.to_be_bytes());
+        #[cfg(target_os = "linux")]
+        {
+            // Linux has no sin_len: the family occupies both bytes.
+            sa[0..2].copy_from_slice(&(AF_INET as u16).to_ne_bytes());
+        }
+        if bind(fd, sa.as_ptr(), 16) != 0 {
+            let e = std::io::Error::last_os_error();
+            close(fd);
+            return Err(e);
+        }
+        Ok(UdpSocket::from_raw_fd(fd))
+    }
+}
+
+#[cfg(not(any(windows, unix)))]
+fn shared_udp(port: u16) -> std::io::Result<UdpSocket> {
+    UdpSocket::bind(("0.0.0.0", port))
+}
+
+/// Answer .local for this machine until told to stop.
+///
+/// Unlike the plain resolver this needs no guard. It answers for two names it
+/// owns, on the local link only, which is what mDNS is for.
+pub fn start_mdns(
+    us: Ipv4Addr,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> std::io::Result<std::thread::JoinHandle<()>> {
+    // Shared, not exclusive: a browser is very likely already here.
+    let socket = shared_udp(MDNS_PORT)?;
+    // Joining on OUR interface rather than letting the system choose, so the
+    // answer goes out of the cable and not out of the wifi.
+    socket.join_multicast_v4(&MDNS_GROUP, &us)?;
+    // Loopback ON. It costs nothing in normal use, where the querier is
+    // another machine, and it is the difference between being testable and
+    // not: with it off, a query sent from this same computer never reaches
+    // this responder and the whole path looks dead when it is fine.
+    let _ = socket.set_multicast_loop_v4(true);
+    socket.set_read_timeout(Some(Duration::from_millis(500)))?;
+
+    let to_group = SocketAddr::from((MDNS_GROUP, MDNS_PORT));
+    Ok(std::thread::spawn(move || {
+        let mut buf = [0u8; 1500];
+        while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+            let (n, from) = match socket.recv_from(&mut buf) {
+                Ok(v) => v,
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    continue
+                }
+                Err(_) => continue,
+            };
+            if let Some(reply) = mdns_answer(&buf[..n], us) {
+                // Both ways. The group is what RFC 6762 asks for; the direct
+                // reply is what gets through when a resolver has asked for one
+                // and is not listening to the group at that moment.
+                let _ = socket.send_to(&reply, to_group);
+                let _ = socket.send_to(&reply, from);
+            }
+        }
+    }))
+}
+
+#[cfg(test)]
+mod mdns_tests {
+    use super::*;
+
+    fn query(name: &str, qtype: u16, unicast_bit: bool) -> Vec<u8> {
+        let mut q = vec![0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0];
+        for label in name.split('.') {
+            q.push(label.len() as u8);
+            q.extend_from_slice(label.as_bytes());
+        }
+        q.push(0);
+        q.extend_from_slice(&qtype.to_be_bytes());
+        let class: u16 = if unicast_bit { 0x8001 } else { 1 };
+        q.extend_from_slice(&class.to_be_bytes());
+        q
+    }
+
+    const US: Ipv4Addr = Ipv4Addr::new(169, 254, 87, 61);
+
+    fn answered_ip(r: &[u8]) -> Ipv4Addr {
+        let n = r.len();
+        Ipv4Addr::new(r[n - 4], r[n - 3], r[n - 2], r[n - 1])
+    }
+
+    #[test]
+    fn the_name_a_person_types_is_answered() {
+        for n in LOCAL_NAMES {
+            let r = mdns_answer(&query(n, 1, false), US).expect("must answer");
+            assert_eq!(answered_ip(&r), US, "{n}");
+            assert_eq!(r[2] & 0x84, 0x84, "response and authoritative");
+        }
+    }
+
+    /// The bit that breaks every naive implementation: a resolver asking for a
+    /// direct reply sets the top bit of the class, so the class reads 32769
+    /// instead of 1 and a strict comparison ignores the whole query.
+    #[test]
+    fn the_unicast_request_bit_does_not_hide_the_class() {
+        let r = mdns_answer(&query("gorilla.local", 1, true), US);
+        assert!(r.is_some(), "a query asking for a direct reply is still a query");
+    }
+
+    #[test]
+    fn somebody_elses_name_is_left_alone() {
+        assert!(mdns_answer(&query("printer.local", 1, false), US).is_none());
+        assert!(mdns_answer(&query("gorilla.example.com", 1, false), US).is_none());
+    }
+
+    #[test]
+    fn case_does_not_matter() {
+        assert!(mdns_answer(&query("GORILLA.local", 1, false), US).is_some());
+    }
+
+    #[test]
+    fn a_response_is_never_answered() {
+        let mut r = query("gorilla.local", 1, false);
+        r[2] |= 0x80;
+        assert!(mdns_answer(&r, US).is_none(), "answering a response is a packet storm");
+    }
+
+    #[test]
+    fn rubbish_is_ignored() {
+        assert!(mdns_answer(&[], US).is_none());
+        assert!(mdns_answer(&[0u8; 12], US).is_none());
+        let mut bad = query("gorilla.local", 1, false);
+        bad[12] = 200; // a label longer than the packet
+        assert!(mdns_answer(&bad, US).is_none());
+    }
+
+    /// Several questions in one packet, ours not first.
+    #[test]
+    fn ours_is_found_among_other_questions() {
+        let mut q = vec![0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0];
+        for name in ["printer.local", "gorilla.local"] {
+            for label in name.split('.') {
+                q.push(label.len() as u8);
+                q.extend_from_slice(label.as_bytes());
+            }
+            q.push(0);
+            q.extend_from_slice(&1u16.to_be_bytes());
+            q.extend_from_slice(&1u16.to_be_bytes());
+        }
+        assert!(mdns_answer(&q, US).is_some());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
