@@ -516,11 +516,15 @@ impl App {
             return vec![
                 ("What to send".into(), self.what_to_send()),
                 (
-                    "Give out addresses".into(),
+                    // Named for what it does for the person, not for the
+                    // protocol it does it with. "Give out addresses" is a
+                    // true description of the mechanism and tells somebody
+                    // nothing about whether they want it.
+                    "Set up the other computer".into(),
                     if self.anyway {
                         "yes, even on this network. CAN BREAK IT.".into()
                     } else {
-                        "only when nothing else is connected".into()
+                        "yes, when this computer is on nothing else".into()
                     },
                 ),
                 ("Connections to serve at once".into(), self.helpers.to_string()),
@@ -625,6 +629,21 @@ impl App {
             f.push(start);
         }
         f.blank();
+        // What the middle row is for, while somebody is standing on it.
+        //
+        // The screen used to state the danger and never the purpose, so the
+        // row read as a warning with no reason to exist. Asked directly:
+        // "what's this supposed to do... the giveout adrrsses".
+        if self.cable && self.row == 1 && self.editing.is_none() {
+            f.push_dim("  Before two computers can talk, each needs an address. Windows and");
+            f.push_dim("  Mac give themselves one after about half a minute. Most Linux");
+            f.push_dim("  computers wait for one forever and never come up at all.");
+            f.blank();
+            f.push_dim("  Left on, this hands the other computer an address so nobody has to");
+            f.push_dim("  touch its network settings. That is the normal setting and it only");
+            f.push_dim("  acts when this computer is on nothing but the cable.");
+            f.blank();
+        }
         if self.row == fields.len() - 1 && self.editing.is_none() {
             // Only while the teacher is on that row, so the screen is not
             // carrying an explanation nobody is reading.
@@ -657,7 +676,7 @@ impl App {
                 f.push_dim("  computer is connected to, not only the cable. On a network");
                 f.push_dim("  that has a router this can take it down for everyone on it.");
                 f.push_dim("  Turn this back off unless you know why you turned it on.");
-            } else {
+            } else if self.row != 1 {
                 f.push_dim("  Plug a network cable between the two computers, then wait");
                 f.push_dim("  half a minute before starting. No wifi and no router needed.");
             }
