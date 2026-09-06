@@ -24,8 +24,11 @@
 //   EVERY ERROR SAYS WHAT TO DO NEXT. A message that only says what failed
 //   leaves somebody stuck in a room with no internet and nobody to ask.
 
+use crate::cable;
+use crate::dhcp;
 use crate::net;
 use crate::serve;
+use crate::tune;
 use crate::term::{self, Frame, Key, Keys};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -95,6 +98,10 @@ enum Screen {
     Receive,
     ReceiveFiles,
     Receiving,
+    /// What this computer can and cannot do, and the one button that fixes the
+    /// commonest cause of "it does not work": a firewall quietly dropping
+    /// every incoming connection while everything else looks healthy.
+    Checkup,
     Note(String),
 }
 
@@ -138,6 +145,18 @@ struct App {
     channel: String,
     helpers: usize,
     hotspot: Option<net::Hotspot>,
+    /// Cable mode rather than wifi mode.
+    ///
+    /// The same form and the same serving machinery, with the wifi rows hidden
+    /// (there is no network to name) and two extra things running beside it:
+    /// the beacon that says where this computer is, and the address server the
+    /// far end needs if it runs Linux.
+    cable: bool,
+    /// Stops the beacon and the address server when serving stops.
+    cable_stop: Arc<std::sync::atomic::AtomicBool>,
+    /// What the address server decided, in words, for the screen to show. A
+    /// refusal here is normal and correct on a network that has a router.
+    cable_note: String,
     started: Option<Instant>,
     addresses: Vec<std::net::Ipv4Addr>,
     joined: Vec<net::Joined>,
@@ -203,6 +222,9 @@ impl App {
             password: net::suggest_password(),
             helpers: serve::default_helpers(),
             hotspot: None,
+            cable: false,
+            cable_stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            cable_note: String::new(),
             started: None,
             addresses: Vec::new(),
             joined: Vec::new(),
@@ -267,6 +289,7 @@ impl App {
             Screen::Receive => self.draw_receive(&mut f),
             Screen::ReceiveFiles => self.draw_files(&mut f),
             Screen::Receiving => self.draw_receiving(&mut f),
+            Screen::Checkup => self.draw_checkup(&mut f),
             Screen::Note(_) => self.draw_note(&mut f),
         }
         f.draw();
@@ -289,10 +312,15 @@ impl App {
 
     fn draw_home(&self, f: &mut Frame) {
         self.title(f, "Gorilla Portable Network Hub");
-        let items: Vec<String> = ["Hand out files to the class", "Get files from another computer"]
-            .iter()
-            .map(|it| format!("  {it}"))
-            .collect();
+        let items: Vec<String> = [
+            "Hand out files to the class over wifi",
+            "Send files down a cable to one other computer",
+            "Get files from another computer",
+            "Check this computer",
+        ]
+        .iter()
+        .map(|it| format!("  {it}"))
+        .collect();
         let w = term::group_width(&items);
         for (i, it) in items.iter().enumerate() {
             if i == self.row {
@@ -303,10 +331,21 @@ impl App {
         }
         f.blank();
         f.push_dim("  This works with no internet and no router.");
+        f.push_dim("  A cable is the fastest way to move a lot at once.");
         self.hints(f, "  up and down to choose    enter to open    q to quit");
     }
 
     fn send_fields(&self) -> Vec<(String, String)> {
+        // Down a cable there is no network to name, no password to set and no
+        // channel to pick: the cable IS the network. Showing those three rows
+        // greyed out would be three more things to read and understand before
+        // getting to the one row that matters.
+        if self.cable {
+            return vec![
+                ("Folder to send".into(), self.folder.clone()),
+                ("Connections to serve at once".into(), self.helpers.to_string()),
+            ];
+        }
         vec![
             ("Folder to hand out".into(), self.folder.clone()),
             (
@@ -1145,6 +1184,7 @@ impl App {
         }
         match self.screen {
             Screen::Home => self.home_key(k),
+            Screen::Checkup => self.checkup_key(k),
             Screen::Send => self.send_key(k),
             Screen::Tick { pre } => self.tick_key(k, pre),
             Screen::Waiting => self.waiting_key(k),
@@ -1212,6 +1252,13 @@ impl App {
             return;
         }
         match self.screen {
+            // Cable mode's form has two rows where wifi's has five, so the row
+            // number means a different field and has to be read separately.
+            Screen::Send if self.cable => match self.row {
+                0 => self.folder = buf,
+                1 => self.helpers = buf.trim().parse().unwrap_or(self.helpers).clamp(1, 512),
+                _ => {}
+            },
             Screen::Send => match self.row {
                 0 => self.folder = buf,
                 1 => self.ssid = buf.trim().to_string(),
@@ -1252,14 +1299,30 @@ impl App {
     }
 
     fn home_key(&mut self, k: Key) -> bool {
-        self.move_row(k, 2);
+        self.move_row(k, 4);
         match k {
             Key::Enter => {
-                if self.row == 0 {
-                    self.screen = Screen::Send;
-                } else {
-                    self.start_looking();
-                    self.screen = Screen::Receive;
+                match self.row {
+                    0 => {
+                        self.cable = false;
+                        self.screen = Screen::Send;
+                    }
+                    1 => {
+                        // Cable mode clears the wifi rows rather than hiding
+                        // them with values still set. A password left over
+                        // from an earlier wifi session would otherwise be
+                        // carried into a hotspot nobody asked for.
+                        self.cable = true;
+                        self.ssid.clear();
+                        self.password.clear();
+                        self.channel.clear();
+                        self.screen = Screen::Send;
+                    }
+                    2 => {
+                        self.start_looking();
+                        self.screen = Screen::Receive;
+                    }
+                    _ => self.screen = Screen::Checkup,
                 }
                 self.row = 0;
             }
@@ -1281,12 +1344,23 @@ impl App {
                     // Editing starts from the real value, not from the
                     // explanatory text shown when a field is empty. Otherwise
                     // the first keystroke would append to a sentence.
-                    self.editing = Some(match self.row {
-                        0 => self.folder.clone(),
-                        1 => self.ssid.clone(),
-                        2 => self.password.clone(),
-                        3 => self.helpers.to_string(),
-                        _ => fields[self.row].1.clone(),
+                    self.editing = Some(if self.cable {
+                        // Cable mode has two rows, not five, so the row
+                        // numbers mean different fields. Reading them off the
+                        // wifi list here would file a folder name as a
+                        // password.
+                        match self.row {
+                            0 => self.folder.clone(),
+                            _ => self.helpers.to_string(),
+                        }
+                    } else {
+                        match self.row {
+                            0 => self.folder.clone(),
+                            1 => self.ssid.clone(),
+                            2 => self.password.clone(),
+                            3 => self.helpers.to_string(),
+                            _ => fields[self.row].1.clone(),
+                        }
                     });
                 }
             }
@@ -1775,9 +1849,121 @@ impl App {
             return;
         }
         self.addresses = net::local_addresses();
+
+        // A cable needs two things a wifi network gets from its router: a way
+        // for the other end to find this computer, and an address for it to
+        // use. Both are started only in cable mode, and both stop when the
+        // serving stops.
+        if self.cable {
+            self.cable_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let short = PathBuf::from(shellexpand(&self.folder))
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_else(|| "files".into());
+            let me = std::env::var("COMPUTERNAME")
+                .or_else(|_| std::env::var("HOSTNAME"))
+                .unwrap_or_else(|_| "this computer".into());
+            let _ = cable::start_beacon(port(), me, short, Arc::clone(&self.cable_stop));
+
+            let ours = self
+                .addresses
+                .iter()
+                .copied()
+                .find(|a| a.is_link_local())
+                .unwrap_or(std::net::Ipv4Addr::new(169, 254, 1, 1));
+            self.cable_note = match dhcp::start(
+                ours,
+                &self.addresses,
+                net::default_gateway(),
+                Arc::clone(&self.cable_stop),
+            ) {
+                Ok(_) => "Giving the other computer an address if it asks.".into(),
+                Err(e) => e.to_string(),
+            };
+        }
+
         self.started = Some(Instant::now());
         self.screen = Screen::Sending;
         self.row = 0;
+    }
+
+    /// What this computer can and cannot do.
+    ///
+    /// Everything on this screen is something that has actually gone wrong in
+    /// a room with nobody to ask. The firewall line is the important one: when
+    /// it is blocking, every other line still reads perfectly and no phone in
+    /// the room can reach the address on the board.
+    fn draw_checkup(&self, f: &mut Frame) {
+        self.title(f, "Check this computer");
+
+        let w = tune::wire();
+        if w.measured {
+            f.push(&format!("  cable          {} at {} Mbps", w.adapter, w.megabits));
+            f.push(&format!("  which is       {}", w.cable));
+        } else {
+            f.push("  cable          nothing plugged in, or the speed cannot be read");
+        }
+        f.push(&format!("  sending in     pieces of {} KB", w.chunk / 1024));
+        f.blank();
+
+        match tune::reachable() {
+            Some(true) => f.push("  reachable      yes, other devices can get in"),
+            Some(false) => f.push("  reachable      NO. Nothing can reach this computer."),
+            None => f.push("  reachable      cannot tell on this system; try it and see"),
+        }
+        if dhcp::safe_to_offer(&net::local_addresses(), net::default_gateway()) {
+            f.push("  cable          ready: this looks like a bare cable");
+        } else {
+            f.push("  cable          nothing plugged in, or this network has a router");
+        }
+        f.blank();
+
+        let addrs = net::local_addresses();
+        if addrs.is_empty() {
+            f.push("  address        none, so nobody can reach this computer");
+        }
+        for a in &addrs {
+            let what = if a.is_link_local() { "  (a cable)" } else { "" };
+            f.push(&format!("  address        {a}{what}"));
+        }
+        f.blank();
+
+        let items = ["Let other devices reach this computer"];
+        let gw = term::group_width(&items.iter().map(|i| format!("  {i}")).collect::<Vec<_>>());
+        let line = format!("  {}", items[0]);
+        if self.row == 0 {
+            f.push_selected_within(&line, gw);
+        } else {
+            f.push(&line);
+        }
+        f.blank();
+        f.push_dim("  Only needed once, and only if nothing can reach this computer.");
+        f.push_dim("  On Windows it will ask for permission. That is expected.");
+        self.hints(f, "  enter to do it    esc to go back");
+    }
+
+    fn checkup_key(&mut self, k: Key) -> bool {
+        self.move_row(k, 1);
+        match k {
+            Key::Enter => {
+                // The answer goes in a box on this screen. It must not be
+                // printed: this program owns the whole terminal, so anything
+                // written straight to stdout is drawn over by the next frame
+                // a quarter of a second later.
+                let msg = match tune::open_ports() {
+                    Ok(m) => m,
+                    Err(m) => m,
+                };
+                self.note(&msg);
+                self.back = Screen::Home;
+            }
+            Key::Esc | Key::Char('q') => {
+                self.screen = Screen::Home;
+                self.row = 0;
+            }
+            _ => {}
+        }
+        false
     }
 
     fn start_looking(&mut self) {

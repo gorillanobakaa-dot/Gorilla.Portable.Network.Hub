@@ -6,7 +6,7 @@
 # history.
 set -euo pipefail
 
-VERSION=${VERSION:-0.8.0}
+VERSION=${VERSION:-0.9.0}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUT=$ROOT/packaging/build
 STAGE=$OUT/gorilla-portable-network-hub_${VERSION}_amd64

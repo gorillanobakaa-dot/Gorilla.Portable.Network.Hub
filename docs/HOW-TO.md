@@ -46,12 +46,12 @@ back to about 2009. That is the whole requirement on their side.
 
 ### On Debian, Ubuntu or Mint
 
-1. Download `gorilla-portable-network-hub_0.8.0_amd64.deb` from the releases
+1. Download `gorilla-portable-network-hub_0.9.0_amd64.deb` from the releases
    page.
 2. Open a terminal in the folder you downloaded it to, and type:
 
 ```bash
-sudo dpkg -i gorilla-portable-network-hub_0.8.0_amd64.deb
+sudo dpkg -i gorilla-portable-network-hub_0.9.0_amd64.deb
 ```
 
 - **Pass:** the last line says `Setting up gorilla-portable-network-hub`.
@@ -64,14 +64,14 @@ sudo dpkg -i gorilla-portable-network-hub_0.8.0_amd64.deb
 hub --version
 ```
 
-- **Pass:** it prints `hub 0.8.0`.
+- **Pass:** it prints `hub 0.9.0`.
 
 ### On Arch, CachyOS or Manjaro
 
 Download the `.pkg.tar.zst` from the releases page and install it:
 
 ```bash
-sudo pacman -U gorilla-portable-network-hub-0.8.0-1-x86_64.pkg.tar.zst
+sudo pacman -U gorilla-portable-network-hub-0.9.0-1-x86_64.pkg.tar.zst
 ```
 
 Or build it yourself, which needs the `rust` package:
@@ -82,11 +82,11 @@ cd Gorilla.Portable.Network.Hub/packaging
 makepkg -si
 ```
 
-- **Pass:** `hub --version` prints `hub 0.8.0`.
+- **Pass:** `hub --version` prints `hub 0.9.0`.
 
 ### On Windows
 
-1. Download `hub-0.8.0-windows-x86_64.zip` and unzip it anywhere.
+1. Download `hub-0.9.0-windows-x86_64.zip` and unzip it anywhere.
 2. Switch the hotspot on yourself: **Settings**, then **Network and internet**,
    then **Mobile hotspot**. Write down the network name and password Windows
    shows you.
@@ -214,6 +214,104 @@ Then they get **READ** to look at a file without downloading it, and **GET IT**
 to keep a copy.
 
 ---
+
+## Send a folder down a cable
+
+Wifi is not always the answer. A staffroom at four o'clock has thirty phones
+and a microwave on the same slice of radio. Some laptops have a wifi card that
+died years ago. Thirty gigabytes of video over old wifi takes an afternoon.
+
+An ordinary network cable between two laptops has none of those problems. It is
+the rectangular-plug cable that normally goes into a wall socket, it costs about
+two pounds, and on most laptops made since about 2005 you do not need a special
+"crossover" one. No router, no wifi and no internet are involved at all.
+
+### What to do
+
+1. Plug the cable into both laptops. A small light next to the socket comes on
+   at each end. If neither light comes on, the cable or a socket is faulty.
+
+2. **Wait about thirty seconds before doing anything else.** Both computers
+   have to give up waiting for a router that is not there and settle on an
+   address of their own. This is the step people skip, and skipping it is the
+   commonest reason the next step says it found nothing.
+
+3. On the computer that has the files, either open the screen and choose
+   **Send files down a cable to one other computer**, or type:
+
+   ```
+   hub cable ~/lessons
+   ```
+
+4. It prints what it is doing and an address beginning `http://169.254.`
+
+5. On the other computer, either open the screen and choose **Get files from
+   another computer**, or type:
+
+   ```
+   hub cable-get
+   ```
+
+   Nothing needs typing. The sending computer says where it is once a second,
+   and this listens for it.
+
+That is the whole procedure. If you would rather not run anything on the second
+computer, open the `http://169.254...` address the sender printed in any web
+browser instead. The page is the same one the class sees over wifi.
+
+### If the other computer runs Linux
+
+This is the case that used to fail completely, and it is worth knowing why so
+you can recognise it.
+
+When there is no router, Windows and Mac wait 30 to 60 seconds, give up, and
+give themselves an address. Most Linux systems are set to "Automatic (DHCP)",
+which means they wait for a router to give them one. On a bare cable no router
+ever answers, so they wait forever. The network connection never comes up and
+nothing you do at the other end can help.
+
+From this version the sending computer answers that question itself. The Linux
+laptop gets an address in about half a second and the cable starts working. You
+do not have to do anything, and you do not have to set a static IP address by
+hand.
+
+One limitation, stated plainly: if the computer **sending** is itself running
+Linux or macOS, giving out addresses needs administrator rights, because the
+part of the network it uses is reserved. Run it with `sudo` if the far end is
+also Linux. Sending from Windows is not affected. The program tells you which
+situation you are in rather than failing quietly.
+
+### What it will not do
+
+It will not hand out addresses on a network that already has a router. That is
+deliberate, and it is the most important safety rule in this feature. Two
+things handing out addresses on one school network fight each other and can
+take every computer in the building off the network, not just yours. The
+program checks before it does anything and refuses if it sees a router.
+
+If you ever see it say it is giving out addresses while you are plugged into a
+school or office network rather than a bare cable between two laptops, stop it
+and tell us. That would mean the check was wrong, and we would want to know
+that day.
+
+### How fast it should be
+
+The program reads the speed the two network cards agreed on and sizes its work
+to match. You can see what it decided:
+
+```
+hub doctor
+```
+
+The `cable` line names your adapter and its speed. Roughly what to expect:
+
+| What the cable and sockets support | Realistic speed | 10 GB takes about |
+| :--- | :--- | :--- |
+| 100 Mbps (older laptops, CAT 5) | 11 MB/s | 15 minutes |
+| 1 Gbps (most laptops since 2010) | 110 MB/s | 90 seconds |
+
+Both ends have to support the higher speed. One old laptop in the pair sets the
+speed for both.
 
 ## Get a whole folder onto another computer
 

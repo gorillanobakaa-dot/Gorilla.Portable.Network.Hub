@@ -1330,3 +1330,181 @@ packaging-version drift guard extended to the new files. The walk tests
 serialise on a shared mutex because ALLOWED is process-wide state and cargo
 runs tests in parallel threads: the third instance of that trap in one day,
 each time the test wrong and the code right.
+
+## 13. The cable path (0.9.0)
+
+Three modules, ~800 lines, all pure `std`. They exist because wifi is the wrong
+medium often enough to need a second one, and because a cable has no router.
+
+A router does two things this tool depended on: it gives each host an address,
+and it lets one host find another. On a bare cable both have to be done here.
+
+### 13.1 Addressing: who has an address and who does not
+
+| System | With no DHCP server on the wire |
+| :--- | :--- |
+| Windows, macOS, BSD | Self-assigns RFC 3927 link-local `169.254.x.y` after 30-60 s |
+| Most Linux | Waits on DHCP indefinitely. The interface never comes up |
+
+That asymmetry is the whole reason `dhcp.rs` exists. A Windows-to-Debian cable
+transfer failed with a connection timeout and no diagnostic, because the Debian
+end never had an address to be reached at.
+
+The advice normally given is "set a static IP". That is nine steps and a subnet
+mask, aimed at a person who is a teacher or a fifteen-year-old. Answering the
+question the Linux box will not stop asking takes about half a second and needs
+nothing typed at either end.
+
+### 13.2 `cable.rs` — the discovery beacon
+
+- UDP 42424. Payload is tab-delimited: `GORILLA_CABLE_HUB_V1 \t port \t name \t folder`.
+- Sent once a second to **both** `255.255.255.255` and `169.254.255.255`. Which
+  one arrives depends on how far through address negotiation the far end is, so
+  both go out and the receiver takes whichever it sees.
+- The peer's address is taken from the UDP header, never from the payload. A
+  sender cannot claim an address it does not hold, and there is no reason to
+  trust the body about something the network already knows.
+- The version number is in the magic so that a future v2 beacon is *ignored* by
+  a v1 receiver instead of being parsed wrongly.
+
+**Tabs, not spaces.** The version this was ported from replaced spaces with
+underscores on send and underscores with spaces on receive, so a folder
+genuinely named `Year_7_Maths` arrived as `Year 7 Maths`. Names belonging to
+other people are not ours to rewrite. Tabs cannot occur in a practical folder
+name, and any that appears is turned into a space before sending so it cannot
+forge a field boundary. Covered by
+`cable::tests::underscores_in_a_folder_name_are_left_alone` and
+`a_tab_in_a_name_cannot_forge_a_field`.
+
+### 13.3 `dhcp.rs` — a deliberately small DHCP server
+
+RFC 2131/2132, UDP 67, replying to the broadcast address on 68. It handles
+DISCOVER, REQUEST, DECLINE and RELEASE and nothing else: no relaying, no boot
+images, no reservations, no persistence.
+
+**The broadcast flag matters.** `p[10] = 0x80`. The client has no address yet,
+so a unicast reply to the address being offered cannot be delivered: that would
+need an ARP entry for an address nobody holds.
+
+**No DNS option is sent.** There is no name server on a cable. Handing out one
+that never answers makes every lookup on the client wait for a timeout, which
+is indistinguishable from the machine having hung.
+
+**A real lease table, keyed on MAC.** The ported version computed the client
+address as a pure function of the *server's* address, with no state at all, so
+every client that ever asked got the identical IP. With one laptop on a cable
+that is invisible. With two it is an address conflict, and the symptom is not
+"the second one failed" but both machines dropping off the link intermittently
+for as long as they stay plugged in. See
+`dhcp::tests::two_machines_get_two_different_addresses`.
+
+**Leases are one hour, not twenty-four.** A lease outlives the process that
+granted it. A day-long lease handed out over a cable at 09:00 is still held at
+16:00, in a different room, plugged into the real school network, where the
+address is wrong and nothing works.
+
+**The guard: `safe_to_offer()`.** A DHCP server on a network that already has a
+router is an outage, not a feature. It races the real router and can take a
+building offline. Using only `std` there is no reliable way to know which
+interface a broadcast arrived on, so the guard is at the other end:
+
+```rust
+let real_router = matches!(gateway, Some(g) if !g.is_link_local());
+if real_router { return false; }
+addresses.iter().any(|a| a.is_link_local())
+```
+
+Two conditions. We must hold a link-local address, which is itself proof that
+DHCP already failed on this segment and nothing else is serving it. And there
+must be no real router.
+
+The `!g.is_link_local()` is not decoration, and it was a regression before it
+was a fix. `net::default_gateway()` does not read the routing table on Windows
+or macOS: it answers ".1 of whatever subnet we are on", and `hub doctor` says so
+out loud ("a guess, not read from the system"). On a bare cable that guess comes
+back as `169.254.x.1`. Reading it as a real router switched the whole feature
+off on exactly the machines it was written for. RFC 3927 forbids forwarding
+link-local traffic, so nothing on `169.254/16` can be a router by definition.
+Pinned by an assertion in `dhcp::tests::we_refuse_to_answer_where_a_router_exists`.
+
+Refusals are a typed enum whose `Display` says what to do, not what failed:
+port 67 is privileged on Unix, so `PermissionDenied` becomes
+`Refused::NeedsAdministrator` and names `sudo`.
+
+### 13.4 `tune.rs` — link speed, read once
+
+| Negotiated speed | Cable | File chunk |
+| :--- | :--- | :--- |
+| <= 100 Mbps | CAT 5 or wifi | 128 KB |
+| 1 Gbps | CAT 5e / 6 | 512 KB |
+| 2.5 - 5 Gbps | CAT 6a / 8 | 2 MB |
+| >= 10 Gbps | CAT 7 / 8 | 4 MB |
+
+- Windows: `Get-NetAdapter` via PowerShell.
+- Linux: `/sys/class/net/<if>/speed`, no process started. `-1` means no
+  carrier, which is how an unplugged socket is told from a plugged one.
+- macOS: `ifconfig` media type, matched longest-name-first because
+  `1000baseT` contains `100baseT` as a substring.
+- Everything else: a 1 Gbps guess. Without that arm the crate does not compile
+  on BSD at all, which is worse than a guess.
+
+**`OnceLock`, and why it is the point.** The ported version called the detector
+from inside the file-sending loop. On Windows that starts a PowerShell process:
+every download by every device paid a cold start of roughly half a second to
+save a few milliseconds of copying, thirty times over in a classroom. The
+negotiated speed cannot change while the process runs without somebody
+physically unplugging the cable, so it is read once and cached. Pinned by
+`tune::tests::the_wire_is_measured_once_and_reused`, which asserts pointer
+identity across two calls.
+
+**Sorting is done in PowerShell, numerically.** `LinkSpeed` is formatted text.
+Sorting it as text ranked `"173.3 Mbps"` above `"1 Gbps"`, because `'7'` sorts
+after `' '`, so a laptop with gigabit ethernet and wifi served the cable at CAT
+5 buffer sizes. Units are parsed to a number before anything is compared, and
+physical ethernet carries a 10x priority weight so a plugged cable wins even
+when the wifi is genuinely faster.
+
+**What scales and what does not.** `file_buf()` in `serve.rs` scales with the
+wire. `BUF`, the per-connection response writer, stays at a fixed 256 KB. There
+is one writer per open connection and a classroom holds roughly 180 at once;
+scaling that with wire speed would mean hundreds of megabytes of buffers on a
+gigabit link.
+
+### 13.5 What the screen does with it
+
+`tui.rs` gained a fourth home entry and a `cable` flag rather than a parallel
+interface. In cable mode `send_fields()` returns two rows instead of five: on a
+cable there is no network to name, no password to set and no channel to pick.
+
+`commit()` needs its own arm for cable mode, because the row index means a
+different field when the form has two rows instead of five. Without it, editing
+row 1 files a helper count as an SSID.
+
+`Screen::Checkup` exists because the commonest way this tool "does not work" is
+a firewall silently dropping every incoming connection while every other
+diagnostic line reads perfectly healthy. Its action calls `tune::open_ports()`,
+which returns `Result<String, String>` and does **not** print: this program owns
+the whole terminal, and anything written to stdout is drawn over by the next
+frame 250 ms later. The CLI wrapper `fix_firewall()` prints; the screen routes
+the same string into `note()`.
+
+There is no self-elevation anywhere. An earlier version tested for admin rights
+with `net session` and relaunched itself elevated on failure. On a machine with
+the Server service disabled, `net session` fails *even when already elevated*,
+so the elevated copy spawned another elevated copy, without end, filling the
+desktop with UAC dialogs faster than they could be dismissed.
+
+### 13.6 What is not proven
+
+Stated here because section 6 exists for exactly this reason.
+
+- The end-to-end cable transfer has **not** been run with the 0.9.0 binaries.
+  The parts are unit-tested and the design is unchanged from the version that
+  demonstrably moved a real application between two laptops, but no folder has
+  been moved down a real cable using *this* build.
+- The Linux binary has been built and structurally verified (64-bit LSB
+  executable, x86-64, statically linked, no interpreter) but **not executed**,
+  because the build host is Windows.
+- `detect_linux()` and the `Refused::NeedsAdministrator` path have never run.
+- `tune::reachable()` returns `None` on everything except Windows. `doctor`
+  reports that honestly as "cannot tell on this system".

@@ -152,6 +152,8 @@ machine.
 | [docs/WHY-THIS-EXISTS.md](docs/WHY-THIS-EXISTS.md) | the layman track. What the problem is and what was proved, in plain language |
 | [docs/DEVELOPER.md](docs/DEVELOPER.md) | the developer track. Architecture, wire format, every measurement with its method |
 | [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) | every screen, photographed on real hardware |
+| [docs/0.9.0-WHAT-CHANGED.md](docs/0.9.0-WHAT-CHANGED.md) | what 0.9.0 added, in plain language, including what is not yet proven |
+| [docs/0.9.0-DEVELOPER-NOTES.md](docs/0.9.0-DEVELOPER-NOTES.md) | the same release as an audit trail: every decision, what was abandoned, and why |
 | [bench/](bench/) | the raw research: source reading, measurements, corrections, open questions |
 
 Both tracks are complete. The layman one is a different language, not a
@@ -159,7 +161,9 @@ simplification.
 
 ## What is here
 
-One binary, `hub`, with a screen and four commands inside it.
+One binary, `hub`, with a screen and six commands inside it. Wifi for a room
+full of devices, a cable for one other laptop, and the two do not replace each
+other: whichever the room allows is the one you use.
 
 ```
 src/hub/src/tui.rs      the screen a teacher uses: hand out, or go and get
@@ -175,6 +179,11 @@ src/hub/src/qr.rs       the join-by-camera code, drawn without a library
 src/hub/src/fetch.rs    parallel, resumable, verifying client
 src/hub/src/sums.rs     per-piece SHA-256 across every core
 src/hub/src/sha256.rs   142 lines, no dependencies
+src/hub/src/cable.rs    saying where this computer is, down a bare cable
+src/hub/src/dhcp.rs     giving the other laptop an address, because Linux
+                        waits for one forever and no router is coming
+src/hub/src/tune.rs     reading the wire speed once, and sizing the work
+                        to match it
 bench/                  measurements, design notes, corrections
 ```
 
@@ -190,6 +199,9 @@ it.
 | with the whole screen added | 596,960 |
 | **0.8.0, with folders, the streamed archive, the QR code and the channel picker** | **761,224** |
 | the same 0.8.0 built for Windows | 653,824 |
+| **0.9.0, adding the cable, the address server and the wire tuning** | **not measured on Linux yet** |
+| the same 0.9.0 built for Windows | 700,416 |
+| 0.9.0 built for Linux, static, runs on any distribution | 858,160 |
 
 On the connections this is for, the whole program is about a minute of
 somebody's life. Everything it gained since the first release cost 246,744
@@ -208,13 +220,13 @@ Built packages for all three are on the
 **Debian, Ubuntu, Mint:**
 
 ```
-sudo dpkg -i gorilla-portable-network-hub_0.8.0_amd64.deb
+sudo dpkg -i gorilla-portable-network-hub_0.9.0_amd64.deb
 ```
 
 **Arch, CachyOS, Manjaro:**
 
 ```
-sudo pacman -U gorilla-portable-network-hub-0.8.0-1-x86_64.pkg.tar.zst
+sudo pacman -U gorilla-portable-network-hub-0.9.0-1-x86_64.pkg.tar.zst
 ```
 
 Or from source with `makepkg -si` in `packaging/`. The Arch package is
@@ -222,7 +234,7 @@ assembled to spec and structurally verified on a Debian machine; it has not yet
 been installed on an Arch one, and that is exactly the kind of thing worth
 telling us about.
 
-**Windows:** unzip `hub-0.8.0-windows-x86_64.zip` and read
+**Windows:** unzip `hub-0.9.0-windows-x86_64.zip` and read
 `READ-THIS-FIRST.txt`. Windows will not let a normal program create a wifi
 network, so you switch the hotspot on in Settings first. Everything else works
 the same.
@@ -232,7 +244,7 @@ the same.
 ```
 cd src/hub && cargo build --release && cd ../..
 ./packaging/build-deb.sh          # or ./packaging/build-arch.sh
-sudo dpkg -i packaging/build/gorilla-portable-network-hub_0.8.0_amd64.deb
+sudo dpkg -i packaging/build/gorilla-portable-network-hub_0.9.0_amd64.deb
 ```
 
 It installs `hub`, a menu entry called **Portable Network Hub**, a man page, and

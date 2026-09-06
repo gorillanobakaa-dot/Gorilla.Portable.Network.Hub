@@ -1204,6 +1204,11 @@ mod tests {
     /// the one dnsmasq wrote when a phone joined the test hotspot on
     /// 2026-08-24, with the hardware address replaced: it is a permanent
     /// identifier for somebody else's device and has no business in a repo.
+    // parse_leases and parse_arp read /var/lib/misc/dnsmasq.leases and
+    // /proc/net/arp, so they only exist on Linux. Without this gate the test
+    // build failed to compile on Windows and Mac, which meant `cargo test`
+    // could not be run at all on either: not one test, the whole suite.
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_phone_on_the_hotspot_is_seen_with_its_own_name() {
         let ours: Ipv4Addr = "10.42.0.1".parse().unwrap();
@@ -1219,6 +1224,11 @@ mod tests {
         assert_eq!(got[1].name, None);
     }
 
+    // parse_leases and parse_arp read /var/lib/misc/dnsmasq.leases and
+    // /proc/net/arp, so they only exist on Linux. Without this gate the test
+    // build failed to compile on Windows and Mac, which meant `cargo test`
+    // could not be run at all on either: not one test, the whole suite.
+    #[cfg(target_os = "linux")]
     #[test]
     fn arp_counts_only_complete_entries_on_our_subnet() {
         let ours: Ipv4Addr = "10.42.0.1".parse().unwrap();
