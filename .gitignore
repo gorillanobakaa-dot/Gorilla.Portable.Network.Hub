@@ -31,3 +31,8 @@ packaging/build/
 !bench/results/*.csv
 # The packet captures stay out. Those really do carry MACs and addresses.
 bench/results/capture-*/
+
+# release archives: built artefacts, uploaded to the releases page
+# rather than committed, so a clone is source and not binaries
+dist/
+packaging/build/
