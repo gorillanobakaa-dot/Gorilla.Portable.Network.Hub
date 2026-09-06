@@ -26,8 +26,24 @@
 # musl CRT alongside zig's and the link fails on duplicate _start and
 # _start_c.
 #
+# A HOST TOOLCHAIN THAT CAN COMPILE A BUILD SCRIPT
+#
+# build.rs is compiled for the HOST, not the target, whatever is being
+# cross-compiled to. On Windows the rustup default host is MSVC, which needs
+# link.exe from Visual C++ Build Tools, which is not installed here. So adding
+# build.rs for the Windows icon broke this script with "linker link.exe not
+# found", while the Windows build itself was fine, and the error named a
+# Microsoft linker during a build for Linux: an error message pointing at
+# nothing to do with the problem.
+#
+# The GNU host toolchain links with the gcc that is already here for zig:
+#
+#   rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal
+#   rustup target add x86_64-unknown-linux-musl --toolchain stable-x86_64-pc-windows-gnu
+#
 # REQUIREMENTS
 #   rustup, with the x86_64-unknown-linux-musl target installed
+#   on Windows: the stable-x86_64-pc-windows-gnu toolchain, as above
 #   zig on PATH
 #
 #   rustup target add x86_64-unknown-linux-musl
@@ -58,9 +74,16 @@ case "$(uname -s 2>/dev/null || echo Windows)" in
 esac
 
 cd "$ROOT/src/hub"
+
+# On Windows, build with the GNU host so build.rs compiles without MSVC.
+TOOLCHAIN=""
+case "$(uname -s 2>/dev/null || echo Windows)" in
+    MINGW*|MSYS*|CYGWIN*|Windows) TOOLCHAIN="+stable-x86_64-pc-windows-gnu" ;;
+esac
+
 CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="$LINKER" \
 CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C target-feature=+crt-static -C link-self-contained=no" \
-    cargo build --release --target "$TARGET"
+    cargo $TOOLCHAIN build --release --target "$TARGET"
 
 # Verify rather than assume. A dynamically linked artifact here would work on
 # the build machine and fail on the machines this exists for, which is the
