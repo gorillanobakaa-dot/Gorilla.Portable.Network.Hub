@@ -25,7 +25,25 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{env, thread};
 
+/// The response-writer buffer. Fixed, because there is one of these per open
+/// connection and a classroom holds about 180 of them at once: scaling this
+/// with the wire speed would mean 700 MB of buffers on a gigabit link.
 const BUF: usize = 256 * 1024;
+
+/// How much of a file to move per read, which DOES scale with the wire.
+///
+/// This is the number that decides whether a cable runs at its rated speed.
+/// At 64 KB a gigabyte takes sixteen thousand read/write pairs and the
+/// syscalls cost more than the copying; at 512 KB it takes two thousand. It is
+/// only allocated while a file is actually being sent, and it is small on a
+/// slow link precisely because a slow link is the one attached to the old
+/// laptop with little memory.
+///
+/// tune::wire() reads the adapter once for the life of the process and returns
+/// a cached answer, so this is safe to call per request.
+fn file_buf() -> usize {
+    crate::tune::wire().chunk
+}
 
 static LIVE: AtomicU64 = AtomicU64::new(0);
 static SERVED: AtomicU64 = AtomicU64::new(0);
@@ -823,7 +841,10 @@ fn accept_loop(listeners: Vec<TcpListener>, root: PathBuf, helpers: usize) {
         let tx = tx.clone();
         threads.push(thread::spawn(move || {
             for s in l.incoming().flatten() {
-                let _ = s.set_nodelay(true);
+                // Nagle off: it and the far end delayed ACK together add ~40 ms
+                // to every exchange, which is invisible on a download and very
+                // visible on a page of buttons.
+                crate::tune::tune_socket(&s);
                 let _ = tx.send(s);
             }
         }));
@@ -1403,7 +1424,7 @@ fn send_file(out: &mut BufWriter<TcpStream>, path: &Path, range: Option<&str>, p
     let mut f = fs::File::open(path)?;
     f.seek(SeekFrom::Start(start))?;
     let mut left = len;
-    let mut buf = vec![0u8; BUF];
+    let mut buf = vec![0u8; file_buf()];
     let t0 = Instant::now();
     // Progress is reported against the WHOLE file, not against this range.
     // A client asking for 2 MB pieces would otherwise show thirty separate
