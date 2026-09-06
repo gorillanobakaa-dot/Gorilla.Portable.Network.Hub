@@ -481,6 +481,29 @@ impl App {
         self.hints(f, "  up and down to choose    enter to open    q to quit");
     }
 
+    /// The folder, and how much of it, in one line.
+    ///
+    /// Choosing four files out of a folder used to leave this row reading
+    /// exactly as it read before: the same path, no count, nothing changed.
+    /// Pressing the button and being returned to an identical screen is
+    /// indistinguishable from pressing a button that does not work, and was
+    /// reported as exactly that. The screen has to show what was decided or
+    /// the deciding did not happen as far as anybody can tell.
+    fn what_to_send(&self) -> String {
+        match &self.chosen {
+            Some(only) if only.len() == 1 => {
+                // One file: name it. A count of one tells a person nothing
+                // they did not already know, and the name confirms they
+                // ticked the thing they meant to.
+                let name = only.iter().next().map(String::as_str).unwrap_or("");
+                let short = name.rsplit('/').next().unwrap_or(name);
+                format!("{short}   (1 file, from {})", self.folder)
+            }
+            Some(only) => format!("{} files chosen from {}", only.len(), self.folder),
+            None => self.folder.clone(),
+        }
+    }
+
     fn send_fields(&self) -> Vec<(String, String)> {
         // Down a cable there is no network to name, no password to set and no
         // channel to pick: the cable IS the network. Showing those three rows
@@ -488,7 +511,7 @@ impl App {
         // getting to the one row that matters.
         if self.cable {
             return vec![
-                ("Folder to send".into(), self.folder.clone()),
+                ("What to send".into(), self.what_to_send()),
                 (
                     "Give out addresses".into(),
                     if self.anyway {
@@ -501,7 +524,7 @@ impl App {
             ];
         }
         vec![
-            ("Folder to hand out".into(), self.folder.clone()),
+            ("Folder to hand out".into(), self.what_to_send()),
             (
                 "Wifi network to make".into(),
                 if self.ssid.is_empty() {
@@ -1809,7 +1832,7 @@ impl App {
             self.picked.clear();
             self.chosen = None;
             self.screen = Screen::Send;
-            self.row = 0;
+            self.row = self.send_fields().len();
             return;
         }
 
@@ -1834,7 +1857,11 @@ impl App {
         self.folder = root.to_string_lossy().into_owned();
         self.chosen = Some(allow);
         self.screen = Screen::Send;
-        self.row = 0;
+        // Land on the button that starts it, not back on the row that was just
+        // answered. The next thing a person wants after choosing what to send
+        // is to send it, and leaving the cursor on "What to send" invites
+        // pressing enter again and reopening the picker they just left.
+        self.row = self.send_fields().len();
     }
 
     fn send_key(&mut self, k: Key) -> bool {
@@ -1855,6 +1882,8 @@ impl App {
                         self.open_picker();
                         return false;
                     }
+                    // Row 1 in cable mode is the addresses toggle, handled
+                    // below; nothing else here may read the wifi row numbers.
                     // Cable mode's middle row is a yes/no, not text, so
                     // enter flips it instead of opening an editor.
                     if self.cable && self.row == 1 {
