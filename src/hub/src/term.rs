@@ -134,11 +134,28 @@ fn enter_raw() -> Option<(u32, u32)> {
         let _ = SAVED_WIN.set((i, o));
         // Line input and echo off, so keys arrive one at a time.
         let raw_in = i & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT);
+        // And VIRTUAL_TERMINAL_INPUT, or the arrow keys do not exist.
+        //
+        // This is an INPUT flag and is a different thing from the output flag
+        // below, despite the similar name. Without it the console does not
+        // translate an arrow key into the escape sequence this file already
+        // knows how to read: ReadFile simply returns nothing for that
+        // keypress. Letters and Enter still arrive, so the screen looks alive
+        // while the selector cannot be moved off the first row, which is what
+        // a person reports as "it is broken".
+        //
+        // Set separately and with a fallback because it needs Windows 10
+        // 1511. On anything older SetConsoleMode fails outright, and failing
+        // means no raw mode at all rather than no arrow keys, so the older
+        // machine gets the mode it can have.
+        let want_in = raw_in | ENABLE_VIRTUAL_TERMINAL_INPUT;
         // Without ENABLE_VIRTUAL_TERMINAL_PROCESSING, Windows prints the escape
         // sequences as literal text instead of acting on them, and the screen
         // fills with garbage. Present since Windows 10 1511.
         let raw_out = o | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
-        SetConsoleMode(hin, raw_in);
+        if SetConsoleMode(hin, want_in) == 0 {
+            SetConsoleMode(hin, raw_in);
+        }
         SetConsoleMode(hout, raw_out);
         Some((i, o))
     }
@@ -214,6 +231,10 @@ const ENABLE_LINE_INPUT: u32 = 0x0002;
 const ENABLE_ECHO_INPUT: u32 = 0x0004;
 #[cfg(windows)]
 const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x0004;
+/// Input flag. Makes the console emit VT escape sequences for the arrow keys,
+/// which is the only way they reach a ReadFile on stdin.
+#[cfg(windows)]
+const ENABLE_VIRTUAL_TERMINAL_INPUT: u32 = 0x0200;
 
 #[cfg(windows)]
 #[link(name = "kernel32")]
