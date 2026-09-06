@@ -152,6 +152,8 @@ machine.
 | [docs/WHY-THIS-EXISTS.md](docs/WHY-THIS-EXISTS.md) | the layman track. What the problem is and what was proved, in plain language |
 | [docs/DEVELOPER.md](docs/DEVELOPER.md) | the developer track. Architecture, wire format, every measurement with its method |
 | [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) | every screen, photographed on real hardware |
+| [docs/0.9.0-WHAT-CHANGED.md](docs/0.9.0-WHAT-CHANGED.md) | what 0.9.0 added, in plain language, including what is not yet proven |
+| [docs/0.9.0-DEVELOPER-NOTES.md](docs/0.9.0-DEVELOPER-NOTES.md) | the same release as an audit trail: every decision, what was abandoned, and why |
 | [bench/](bench/) | the raw research: source reading, measurements, corrections, open questions |
 
 Both tracks are complete. The layman one is a different language, not a
@@ -159,7 +161,9 @@ simplification.
 
 ## What is here
 
-One binary, `hub`, with a screen and four commands inside it.
+One binary, `hub`, with a screen and six commands inside it. Wifi for a room
+full of devices, a cable for one other laptop, and the two do not replace each
+other: whichever the room allows is the one you use.
 
 ```
 src/hub/src/tui.rs      the screen a teacher uses: hand out, or go and get
@@ -175,6 +179,11 @@ src/hub/src/qr.rs       the join-by-camera code, drawn without a library
 src/hub/src/fetch.rs    parallel, resumable, verifying client
 src/hub/src/sums.rs     per-piece SHA-256 across every core
 src/hub/src/sha256.rs   142 lines, no dependencies
+src/hub/src/cable.rs    saying where this computer is, down a bare cable
+src/hub/src/dhcp.rs     giving the other laptop an address, because Linux
+                        waits for one forever and no router is coming
+src/hub/src/tune.rs     reading the wire speed once, and sizing the work
+                        to match it
 bench/                  measurements, design notes, corrections
 ```
 
@@ -190,6 +199,9 @@ it.
 | with the whole screen added | 596,960 |
 | **0.8.0, with folders, the streamed archive, the QR code and the channel picker** | **761,224** |
 | the same 0.8.0 built for Windows | 653,824 |
+| **0.9.0, adding the cable, the address server and the wire tuning** | **not measured on Linux yet** |
+| the same 0.9.0 built for Windows | 700,416 |
+| 0.9.0 built for Linux, static, runs on any distribution | 858,160 |
 
 On the connections this is for, the whole program is about a minute of
 somebody's life. Everything it gained since the first release cost 246,744
