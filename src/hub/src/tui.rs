@@ -30,7 +30,7 @@ use crate::net;
 use crate::serve;
 use crate::tune;
 use crate::term::{self, Frame, Key, Keys};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -163,12 +163,23 @@ struct App {
     pick_dir: PathBuf,
     /// Its subfolders, sorted, hidden ones left out.
     pick_kids: Vec<String>,
+    /// Its files, sorted, with their sizes. Listed after the folders because
+    /// the usual reason to be in a folder is to go deeper, and ten thousand
+    /// files should not bury the one subfolder somebody is looking for.
+    pick_files: Vec<(String, u64)>,
+    /// What has been ticked, as absolute paths, so a tick survives moving to
+    /// another folder. A person can take two files from here and a whole
+    /// folder from three levels down in one pass.
+    picked: Vec<PathBuf>,
     /// First subfolder shown, so a folder with two hundred children scrolls
     /// instead of drawing off the bottom of the window.
     pick_top: usize,
     /// The folder could not be read. A different thing from having no
     /// subfolders, and it has to say so differently.
     pick_unreadable: bool,
+    /// Exactly what may be handed out, when the picker was used to choose
+    /// rather than to point at a folder. None means the whole folder.
+    chosen: Option<std::collections::HashSet<String>>,
     /// Whether we are answering names as well as handing out addresses. When
     /// true the other end can type a word instead of an address, and its own
     /// operating system should offer to open the page. When false, port 53 was
@@ -233,6 +244,69 @@ struct App {
 ///
 /// So: the working directory when it looks like a place a person chose, and
 /// the desktop when it looks like the program was double-clicked.
+/// The deepest folder that contains every one of these paths.
+///
+/// The served root has to contain everything ticked. Tick two files in one
+/// folder and that folder is the root; tick one here and one three levels
+/// down and the root rises far enough to cover both.
+fn common_ancestor(paths: &[PathBuf]) -> Option<PathBuf> {
+    let mut it = paths.iter();
+    let first = it.next()?;
+    // A file contributes its folder, not itself: a file cannot be the root.
+    let mut acc: Vec<std::ffi::OsString> = dir_of(first)
+        .components()
+        .map(|c| c.as_os_str().to_os_string())
+        .collect();
+    for p in it {
+        let parts: Vec<std::ffi::OsString> = dir_of(p)
+            .components()
+            .map(|c| c.as_os_str().to_os_string())
+            .collect();
+        let keep = acc
+            .iter()
+            .zip(parts.iter())
+            .take_while(|(a, b)| a == b)
+            .count();
+        acc.truncate(keep);
+        if acc.is_empty() {
+            // Different drives on Windows. There is no folder above both, so
+            // there is nothing sensible to serve.
+            return None;
+        }
+    }
+    let mut out = PathBuf::new();
+    for c in acc {
+        out.push(c);
+    }
+    Some(out)
+}
+
+fn dir_of(p: &Path) -> PathBuf {
+    if p.is_dir() {
+        p.to_path_buf()
+    } else {
+        p.parent().map(|q| q.to_path_buf()).unwrap_or_else(|| p.to_path_buf())
+    }
+}
+
+/// `full` written as a path relative to `root`, using forward slashes.
+///
+/// Forward slashes because that is what the server matches against and what a
+/// URL carries. A backslash here would mean a file ticked on Windows is
+/// invisible to the very page offering it.
+fn relative_to(root: &Path, full: &Path) -> Option<String> {
+    let rel = full.strip_prefix(root).ok()?;
+    let s: Vec<String> = rel
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s.join("/"))
+    }
+}
+
 fn starting_folder() -> PathBuf {
     let here = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let launched_from_install = std::env::current_exe()
@@ -281,8 +355,11 @@ impl App {
             cable_note: String::new(),
             pick_dir: PathBuf::from("."),
             pick_kids: Vec::new(),
+            pick_files: Vec::new(),
+            picked: Vec::new(),
             pick_top: 0,
             pick_unreadable: false,
+            chosen: None,
             naming: false,
             started: None,
             addresses: Vec::new(),
@@ -1410,22 +1487,30 @@ impl App {
         false
     }
 
-    /// Choosing a folder by looking at folders, instead of typing a path.
+    /// Choosing what to send by looking at it, instead of typing a path.
     ///
-    /// WHY THIS EXISTS. The folder row was a text field, and a text field asks
-    /// a person to type `C:\Users\someone\Desktop\Year 7`. Backslashes and
-    /// colons are not punctuation most people can produce on demand: plenty of
-    /// adults who use a computer every day have never needed to know what a
-    /// forward slash is called, let alone which of the two leans which way.
-    /// Tab completion helps somebody who already knows the path exists, which
-    /// is not this audience.
+    /// WHY THIS EXISTS, AND WHY IT TICKS.
     ///
-    /// So: up, down, enter. The same three keys as everything else here.
+    /// The folder row was a text field, so choosing what to send meant
+    /// producing `C:\Users\someone\Desktop\Year 7` from memory. Backslashes and
+    /// colons are not punctuation most people can generate on demand.
+    ///
+    /// Picking a whole folder was the first version of this and was not enough.
+    /// A folder can hold a terabyte, and the review screen that follows lists
+    /// every file in it flat, to a hundred thousand of them, all ticked. To
+    /// send three files out of that a person unticks ninety-nine thousand nine
+    /// hundred and ninety-seven. The default was exactly backwards for the case
+    /// where somebody wants a few things.
+    ///
+    /// So this walks the tree at any depth and space ticks whatever is under
+    /// the cursor: a file, or a folder meaning everything inside it. Ticks are
+    /// held as absolute paths and survive moving between folders, so a person
+    /// can take two files from here and a folder from three levels down.
     fn open_picker(&mut self) {
         let start = PathBuf::from(shellexpand(&self.folder));
         // Start somewhere real. A path typed earlier and since deleted, or a
-        // drive that is no longer plugged in, must not open an empty screen
-        // with no way out.
+        // drive no longer plugged in, must not open an empty screen with no
+        // way out.
         let start = if start.is_dir() {
             start
         } else {
@@ -1435,76 +1520,116 @@ impl App {
                 .map(|a| a.to_path_buf())
                 .unwrap_or_else(starting_folder)
         };
+        self.picked.clear();
         self.pick_at(start);
         self.screen = Screen::Pick;
     }
 
-    /// Read one folder's subfolders. Files are not listed: the thing being
-    /// chosen is a folder, and listing 68,000 files that cannot be picked is
-    /// noise a person has to scroll past.
+    /// Read one folder: subfolders first, then files, each sorted.
+    ///
+    /// Folders first because the reason to be here is usually to go deeper,
+    /// and a folder of ten thousand files should not bury the one subfolder
+    /// somebody is looking for.
     fn pick_at(&mut self, dir: PathBuf) {
-        let mut names: Vec<String> = Vec::new();
+        let mut dirs: Vec<String> = Vec::new();
+        let mut files: Vec<(String, u64)> = Vec::new();
         let mut unreadable = false;
         match std::fs::read_dir(&dir) {
             Ok(entries) => {
                 for e in entries.flatten() {
-                    if !e.path().is_dir() {
-                        continue;
-                    }
                     let n = e.file_name().to_string_lossy().to_string();
-                    // Hidden and system folders are noise here. .hub_holding
-                    // is ours and handing it out would hand back the work the
-                    // class just handed in.
+                    // Hidden and system entries are noise here. .hub_holding
+                    // is ours, and handing it out would hand the class back
+                    // the work it just handed in.
                     if n.starts_with('.') || n.starts_with('$') {
                         continue;
                     }
-                    names.push(n);
+                    match e.file_type() {
+                        Ok(t) if t.is_dir() => dirs.push(n),
+                        Ok(t) if t.is_file() => {
+                            let size = e.metadata().map(|m| m.len()).unwrap_or(0);
+                            files.push((n, size));
+                        }
+                        _ => {}
+                    }
                 }
             }
             Err(_) => unreadable = true,
         }
-        names.sort_by_key(|n| n.to_lowercase());
+        dirs.sort_by_key(|n| n.to_lowercase());
+        files.sort_by_key(|(n, _)| n.to_lowercase());
         self.pick_dir = dir;
-        self.pick_kids = names;
+        self.pick_kids = dirs;
+        self.pick_files = files;
         self.pick_unreadable = unreadable;
         self.pick_top = 0;
         self.row = 0;
     }
 
-    /// How many folder rows fit, given the fixed furniture above and below.
+    /// How many list rows fit, given the fixed furniture above and below.
     fn pick_page(&self, rows: usize) -> usize {
-        rows.saturating_sub(10).max(3)
+        rows.saturating_sub(11).max(3)
+    }
+
+    /// The rows above the scrolling list: the action, and ".. go up one".
+    fn pick_fixed(&self) -> usize {
+        if self.pick_dir.parent().is_some() {
+            2
+        } else {
+            1
+        }
+    }
+
+    fn pick_is_ticked(&self, p: &Path) -> bool {
+        self.picked.iter().any(|q| q == p)
+    }
+
+    fn pick_toggle(&mut self, p: PathBuf) {
+        match self.picked.iter().position(|q| *q == p) {
+            Some(i) => {
+                self.picked.remove(i);
+            }
+            None => self.picked.push(p),
+        }
     }
 
     fn draw_pick(&self, f: &mut Frame) {
-        self.title(f, "Which folder?");
+        self.title(f, "What do you want to send?");
         // The path is shown but never typed. A person recognises where they
         // are from it even when they could not have written it down.
         f.push(&format!("  {}", self.pick_dir.display()));
         f.blank();
 
-        let mut items: Vec<String> = Vec::new();
-        items.push("  USE THIS FOLDER".to_string());
-        if self.pick_dir.parent().is_some() {
+        let has_parent = self.pick_dir.parent().is_some();
+        let action = if self.picked.is_empty() {
+            "  SEND EVERYTHING IN THIS FOLDER".to_string()
+        } else {
+            format!("  SEND THE {} TICKED", self.picked.len())
+        };
+        let mut items: Vec<String> = vec![action];
+        if has_parent {
             items.push("  ..  go up one".to_string());
         }
         for n in &self.pick_kids {
-            items.push(format!("  {n}"));
+            let t = if self.pick_is_ticked(&self.pick_dir.join(n)) { "[x]" } else { "[ ]" };
+            items.push(format!("  {t} {n}/"));
+        }
+        for (n, size) in &self.pick_files {
+            let t = if self.pick_is_ticked(&self.pick_dir.join(n)) { "[x]" } else { "[ ]" };
+            items.push(format!("  {t} {n}    {}", human(*size)));
         }
         let w = term::group_width(&items);
 
         let (rows, _) = term::size();
         let page = self.pick_page(rows);
-        let fixed = if self.pick_dir.parent().is_some() { 2 } else { 1 };
+        let fixed = self.pick_fixed();
 
         for (i, it) in items.iter().enumerate() {
-            // The two fixed rows are always on screen; the folder list below
-            // them scrolls.
-            if i >= fixed && (i - fixed) < self.pick_top {
-                continue;
-            }
-            if i >= fixed && (i - fixed) >= self.pick_top + page {
-                continue;
+            if i >= fixed {
+                let idx = i - fixed;
+                if idx < self.pick_top || idx >= self.pick_top + page {
+                    continue;
+                }
             }
             if i == self.row {
                 f.push_selected_within(it, w);
@@ -1513,31 +1638,38 @@ impl App {
             }
         }
 
+        f.blank();
         if self.pick_unreadable {
-            f.blank();
             f.push_dim("  This folder cannot be read on this computer. Go up one and");
             f.push_dim("  choose another, or ask whoever set the machine up.");
-        } else if self.pick_kids.is_empty() {
-            f.blank();
-            f.push_dim("  No folders inside this one. USE THIS FOLDER sends what is");
-            f.push_dim("  in it, or go up one and look somewhere else.");
+        } else if self.pick_kids.is_empty() && self.pick_files.is_empty() {
+            f.push_dim("  This folder is empty.");
         }
-        let hidden = self.pick_kids.len().saturating_sub(self.pick_top + page);
+        let listed = self.pick_kids.len() + self.pick_files.len();
+        let hidden = listed.saturating_sub(self.pick_top + page);
         if hidden > 0 {
-            f.blank();
             f.push_dim(&format!("  {hidden} more below. Keep pressing down."));
         }
-        f.blank();
-        self.hints(f, "  up and down to look    enter to open or choose    esc to go back");
+        if self.picked.is_empty() {
+            f.push_dim("  Tick things with space to send only those. Tick nothing and");
+            f.push_dim("  the whole folder goes.");
+        } else {
+            f.push_dim("  Ticks are kept while you move around, so you can take a file");
+            f.push_dim("  from here and a folder from somewhere else.");
+        }
+        self.hints(
+            f,
+            "  up and down    space to tick    enter to open    esc to go back",
+        );
     }
 
     fn pick_key(&mut self, k: Key) -> bool {
         let has_parent = self.pick_dir.parent().is_some();
-        let fixed = if has_parent { 2 } else { 1 };
-        let n = fixed + self.pick_kids.len();
+        let fixed = self.pick_fixed();
+        let n = fixed + self.pick_kids.len() + self.pick_files.len();
         self.move_row(k, n);
 
-        // Keep the selected folder on screen as the selection moves past the
+        // Keep the selected row on screen as the selection moves past the
         // bottom of the window.
         let (rows, _) = term::size();
         let page = self.pick_page(rows);
@@ -1550,37 +1682,53 @@ impl App {
             }
         }
 
+        // What is under the cursor, if it is not one of the fixed rows.
+        let under: Option<PathBuf> = if self.row < fixed {
+            None
+        } else {
+            let i = self.row - fixed;
+            if i < self.pick_kids.len() {
+                Some(self.pick_dir.join(&self.pick_kids[i]))
+            } else {
+                self.pick_files
+                    .get(i - self.pick_kids.len())
+                    .map(|(n, _)| self.pick_dir.join(n))
+            }
+        };
+
         match k {
+            Key::Char(' ') => {
+                if let Some(p) = under {
+                    self.pick_toggle(p);
+                }
+            }
             Key::Enter => {
                 if self.row == 0 {
-                    self.folder = self.pick_dir.to_string_lossy().into_owned();
-                    self.screen = Screen::Send;
-                    self.row = 0;
+                    self.finish_picking();
                 } else if has_parent && self.row == 1 {
                     if let Some(p) = self.pick_dir.parent().map(|p| p.to_path_buf()) {
                         self.pick_at(p);
                     }
-                } else {
-                    let i = self.row - fixed;
-                    if let Some(name) = self.pick_kids.get(i).cloned() {
-                        let next = self.pick_dir.join(name);
-                        self.pick_at(next);
+                } else if let Some(p) = under {
+                    if p.is_dir() {
+                        self.pick_at(p);
+                    } else {
+                        // Enter on a file ticks it. Nothing else it could
+                        // usefully mean, and a person who has not read the
+                        // hint will press enter before they press space.
+                        self.pick_toggle(p);
                     }
                 }
             }
             Key::Left => {
-                // Left is up a level, because a file manager has taught
-                // everybody that arrow and it costs nothing to honour it.
                 if let Some(p) = self.pick_dir.parent().map(|p| p.to_path_buf()) {
                     self.pick_at(p);
                 }
             }
             Key::Right => {
-                if self.row >= fixed {
-                    let i = self.row - fixed;
-                    if let Some(name) = self.pick_kids.get(i).cloned() {
-                        let next = self.pick_dir.join(name);
-                        self.pick_at(next);
+                if let Some(p) = under {
+                    if p.is_dir() {
+                        self.pick_at(p);
                     }
                 }
             }
@@ -1592,6 +1740,46 @@ impl App {
             _ => {}
         }
         false
+    }
+
+    /// Turn the ticks into a folder to serve and a list of what may be seen.
+    ///
+    /// The served root has to contain everything ticked, so it is the deepest
+    /// folder that is an ancestor of all of them. Tick two files in the same
+    /// folder and the root is that folder; tick one here and one three levels
+    /// down and the root rises to cover both. Nothing ticked means the folder
+    /// being looked at, whole.
+    fn finish_picking(&mut self) {
+        if self.picked.is_empty() {
+            self.folder = self.pick_dir.to_string_lossy().into_owned();
+            self.chosen = None;
+            self.screen = Screen::Send;
+            self.row = 0;
+            return;
+        }
+
+        let root = common_ancestor(&self.picked).unwrap_or_else(|| self.pick_dir.clone());
+
+        // Expand ticked folders into the files under them, so the allow list
+        // is files and only files: that is what the server checks against.
+        let mut allow: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for p in &self.picked {
+            if p.is_dir() {
+                for (rel, _) in serve::all_files(p) {
+                    let full = p.join(&rel);
+                    if let Some(r) = relative_to(&root, &full) {
+                        allow.insert(r);
+                    }
+                }
+            } else if let Some(r) = relative_to(&root, p) {
+                allow.insert(r);
+            }
+        }
+
+        self.folder = root.to_string_lossy().into_owned();
+        self.chosen = Some(allow);
+        self.screen = Screen::Send;
+        self.row = 0;
     }
 
     fn send_key(&mut self, k: Key) -> bool {
@@ -2030,6 +2218,32 @@ impl App {
             return;
         }
         let mut fresh: Vec<(String, u64, bool)> = Vec::new();
+
+        // An explicit choice is listed as itself, without walking the tree.
+        //
+        // The root of a ticked set is the deepest folder containing all of it,
+        // which can be very high up: tick one file on the desktop and one in
+        // Documents and the root is the whole user profile. Walking that to
+        // show four files would read a hundred thousand paths off the disk to
+        // throw almost all of them away, and on the machines this is for that
+        // is a long freeze in front of a class.
+        if pre {
+            if let Some(only) = self.chosen.clone() {
+                let mut rows: Vec<(String, u64, bool)> = only
+                    .iter()
+                    .map(|rel| {
+                        let size = folder.join(rel).metadata().map(|m| m.len()).unwrap_or(0);
+                        (rel.clone(), size, true)
+                    })
+                    .collect();
+                rows.sort_by(|a, b| a.0.cmp(&b.0));
+                self.tick = rows;
+                self.screen = Screen::Tick { pre };
+                self.row = 0;
+                return;
+            }
+        }
+
         // The same walk the network uses, so the tick list and the class page
         // can never disagree about what exists. Reading the folder separately
         // here is what let the two drift: this screen listed the top level
@@ -2040,7 +2254,14 @@ impl App {
         // class can reach just by being opened.
         for (rel, size) in serve::all_files(&folder) {
             let ticked = if pre {
-                true // the review starts from "everything", the teacher unticks
+                // "Everything" is the right default when a folder was pointed
+                // at, and the wrong one when a person has just ticked four
+                // files out of a terabyte: re-ticking all of them here would
+                // throw that away silently and hand out the lot.
+                match &self.chosen {
+                    Some(only) => only.contains(&rel),
+                    None => true,
+                }
             } else {
                 self.tick.iter().find(|(n, _, _)| *n == rel).map(|(_, _, t)| *t).unwrap_or(false)
             };
@@ -2627,5 +2848,71 @@ mod tests {
         let d = scaffold();
         let (done, _) = complete_path(&format!("{}/Pictures/Scr", d.display()));
         assert_eq!(done, format!("{}/Pictures/Screenshots/", d.display()));
+    }
+
+    // ---------------------------------------------------------- the picker
+    //
+    // These decide what a tick actually means, which is the difference between
+    // sending four files and sending somebody's whole home folder.
+
+    /// Two files in the same folder: that folder is the root.
+    #[test]
+    fn ticks_in_one_folder_serve_that_folder() {
+        let ps = vec![
+            PathBuf::from("/home/t/lessons/a.pdf"),
+            PathBuf::from("/home/t/lessons/b.pdf"),
+        ];
+        assert_eq!(common_ancestor(&ps), Some(PathBuf::from("/home/t/lessons")));
+    }
+
+    /// Ticks in different branches raise the root far enough to cover both,
+    /// and no further.
+    #[test]
+    fn ticks_in_two_branches_rise_to_the_fork_and_stop() {
+        let ps = vec![
+            PathBuf::from("/home/t/lessons/maths/a.pdf"),
+            PathBuf::from("/home/t/lessons/science/deep/b.pdf"),
+        ];
+        assert_eq!(common_ancestor(&ps), Some(PathBuf::from("/home/t/lessons")));
+    }
+
+    /// Depth is not a limit. A file fifteen levels down is reachable and
+    /// contributes its whole chain.
+    #[test]
+    fn depth_does_not_matter() {
+        let deep = PathBuf::from("/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/file.txt");
+        let ps = vec![deep.clone(), PathBuf::from("/a/b/other.txt")];
+        assert_eq!(common_ancestor(&ps), Some(PathBuf::from("/a/b")));
+    }
+
+    /// One file alone serves its folder, never the file's own path: a root has
+    /// to be a folder or there is nothing to walk.
+    #[test]
+    fn a_single_file_serves_the_folder_it_is_in() {
+        let ps = vec![PathBuf::from("/home/t/lessons/only.pdf")];
+        assert_eq!(common_ancestor(&ps), Some(PathBuf::from("/home/t/lessons")));
+    }
+
+    #[test]
+    fn nothing_ticked_has_no_root() {
+        assert_eq!(common_ancestor(&[]), None);
+    }
+
+    /// Relative paths use forward slashes whatever the platform, because that
+    /// is what the server matches and what a URL carries. A backslash here
+    /// means a file ticked on Windows is invisible on the page offering it.
+    #[test]
+    fn relative_paths_use_forward_slashes() {
+        let root = PathBuf::from("/home/t/lessons");
+        let full = PathBuf::from("/home/t/lessons/maths/week1/a.pdf");
+        assert_eq!(relative_to(&root, &full), Some("maths/week1/a.pdf".to_string()));
+    }
+
+    #[test]
+    fn a_path_outside_the_root_is_not_relative_to_it() {
+        let root = PathBuf::from("/home/t/lessons");
+        assert_eq!(relative_to(&root, &PathBuf::from("/etc/passwd")), None);
+        // The root itself is not a file under the root.
+        assert_eq!(relative_to(&root, &root), None);
     }
 }
