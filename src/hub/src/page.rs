@@ -1045,6 +1045,20 @@ pub fn redirect_done(out: &mut BufWriter<TcpStream>, tag: &str) -> std::io::Resu
 /// means the ordinary class page.
 static SENDER: Mutex<String> = Mutex::new(String::new());
 
+/// Clear what the page remembered about the people who used it.
+///
+/// Names, notes, the sender, the anti-double-submit tokens. A child's name and
+/// a message they sent their teacher are not things to keep sitting in memory
+/// after the lesson they belong to has ended.
+pub fn forget_session() {
+    set_sender("");
+    set_notice("");
+    NOTES.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    TOKENS_SEEN.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    NOTE_TIMES.lock().unwrap_or_else(|e| e.into_inner()).clear();
+}
+
+
 /// Turn on the accept page and say who is offering.
 pub fn set_sender(name: &str) {
     *SENDER.lock().unwrap_or_else(|e| e.into_inner()) = name.trim().to_string();

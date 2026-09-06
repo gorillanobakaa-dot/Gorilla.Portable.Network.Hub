@@ -397,6 +397,24 @@ impl App {
         }
     }
 
+    /// Forget the choice, so the next transfer cannot inherit it.
+    ///
+    /// A tick that survived from an earlier transfer became the whole of a
+    /// later one, and sent a photograph of a driving licence to a laptop that
+    /// was meant to be getting a folder of lessons. Ticks surviving while a
+    /// person walks around the picker is the behaviour that was asked for;
+    /// surviving a completed transfer is not, and the difference is the whole
+    /// bug.
+    fn forget_session(&mut self) {
+        self.picked.clear();
+        self.chosen = None;
+        self.tick.clear();
+        self.cable_note.clear();
+        self.naming = false;
+        self.mdns = false;
+        serve::forget_session();
+    }
+
     fn shutdown(&mut self) {
         if let Some(h) = self.hotspot.take() {
             h.down();
@@ -404,6 +422,9 @@ impl App {
             println!("The wifi has been put back the way it was.");
         }
         crate::fetch::cancel();
+        // On the way out too: names, notes and choices should not outlive the
+        // program in a crash dump or a core file.
+        self.forget_session();
     }
 }
 
@@ -2011,7 +2032,8 @@ impl App {
                 // listener in std without tearing the process down, and going
                 // back to the menu and starting again on the same port is the
                 // one case that would fail. Said plainly rather than hidden.
-                self.note("Stopped handing out.\n\nThe network has been put back the way it was.\n\nTo hand out a different folder, close this and start it again.");
+                self.forget_session();
+                self.note("Stopped handing out.\n\nThe network has been put back the way it was.\n\nWhat you chose to send has been forgotten, so the next one starts from nothing.\n\nTo hand out a different folder, close this and start it again.");
                 self.back = Screen::Home;
             }
             Key::Quit => return true,

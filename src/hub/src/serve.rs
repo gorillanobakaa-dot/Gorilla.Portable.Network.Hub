@@ -92,6 +92,65 @@ pub enum Direction {
 /// concerned: not listed, not fetchable, not even by guessing the name.
 static ALLOWED: Mutex<Option<std::collections::HashSet<String>>> = Mutex::new(None);
 
+/// Forget everything this transfer knew, so the next one starts from nothing.
+///
+/// WHY THIS EXISTS. A tick left over from a previous transfer silently became
+/// the whole of the next one. Somebody ticked a file, sent a different folder
+/// twenty minutes later, and what actually went down the cable was the file
+/// from before: in this case a photograph of a driving licence, to a laptop
+/// that was supposed to be receiving a folder of lessons. Nothing on any screen
+/// was wrong. The wrong answer looked exactly like the right one.
+///
+/// Everything below outlives the thread that serves, so everything below has
+/// to be cleared deliberately. The list is long on purpose: each of these is a
+/// thing somebody's page, name, note or choice could reappear from, and a
+/// half-cleared session is worse than an uncleared one because it looks clean.
+/// Remove the hand-in folder if nothing was ever handed in.
+///
+/// probe_handin makes it at the start to find out whether homework CAN be
+/// accepted, which is worth knowing before a class starts rather than when the
+/// first child tries. The cost is an empty folder left in somebody's Desktop
+/// after a transfer that never used it.
+///
+/// remove_dir and not remove_dir_all, deliberately: it refuses on a folder with
+/// anything in it, so a child's work can never be deleted by this even if the
+/// logic above is wrong. The failure is ignored for the same reason.
+fn tidy_empty_handin() {
+    let root = LAST_ROOT.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if let Some(root) = root {
+        let dir = crate::page::handed_in_dir(&root);
+        let _ = fs::remove_dir(crate::page::waiting_dir(&root));
+        let _ = fs::remove_dir(dir.join("refused"));
+        let _ = fs::remove_dir(dir);
+    }
+}
+
+/// The folder most recently served, so the session can tidy after itself.
+static LAST_ROOT: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+pub fn forget_session() {
+    tidy_empty_handin();
+    // What may be seen. The one that caused the trouble.
+    set_allowed(None);
+    // The listing cache, or the next serve shows the previous folder's files
+    // for up to three seconds and a fast reader downloads one.
+    *FILE_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+
+    TRANSFERS.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    CLAIMED.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    BLOCKED.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    PENDING.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    AGENTS.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    NAMES.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    PAGE_SEEN.lock().unwrap_or_else(|e| e.into_inner()).clear();
+
+    SERVED.store(0, Ordering::Relaxed);
+    HANDIN_OK.store(false, Ordering::Relaxed);
+
+    crate::page::forget_session();
+}
+
+
 pub fn set_allowed(list: Option<std::collections::HashSet<String>>) {
     *ALLOWED.lock().unwrap_or_else(|e| e.into_inner()) = list;
 }
@@ -505,6 +564,15 @@ pub fn device_label(ip: &str) -> String {
 static HANDIN_OK: AtomicBool = AtomicBool::new(false);
 
 pub fn probe_handin(root: &Path) -> bool {
+    // Not on a cable. There is no class to hand work in, only one laptop being
+    // sent something, so making the folder is litter in somebody else's
+    // Desktop: an empty 'handed-in' appeared there simply because the folder
+    // had been served once.
+    if !crate::page::sender().is_empty() {
+        HANDIN_OK.store(false, Ordering::Relaxed);
+        return false;
+    }
+    *LAST_ROOT.lock().unwrap_or_else(|e| e.into_inner()) = Some(root.to_path_buf());
     let dir = crate::page::handed_in_dir(root);
     let ok = (|| {
         fs::create_dir_all(&dir).ok()?;
@@ -1889,6 +1957,36 @@ mod walk_tests {
     /// once on a note's text, once on a global counter, and now on the ticked
     /// set. Each time the test was wrong and the code was right.
     static TICKS: Mutex<()> = Mutex::new(());
+
+    /// The leak this exists to stop.
+    ///
+    /// A tick from an earlier transfer survived into a later one and became the
+    /// whole of it: a photograph of a driving licence went to a laptop that was
+    /// meant to be receiving a folder of lessons. Nothing on any screen was
+    /// wrong, which is what made it dangerous.
+    #[test]
+    fn a_finished_transfer_leaves_nothing_behind() {
+        let _hold = TICKS.lock().unwrap_or_else(|e| e.into_inner());
+        let d = tree("forget");
+
+        let all = all_files(&d).len();
+        let mut only = std::collections::HashSet::new();
+        only.insert("notes.txt".to_string());
+        set_allowed(Some(only));
+        set_device_name("169.254.87.1", "somebody");
+        crate::page::set_sender("a laptop");
+        assert_eq!(visible_files(&d).len(), 1, "the earlier choice is in force");
+
+        forget_session();
+
+        assert_eq!(
+            visible_files(&d).len(),
+            all,
+            "after a transfer ends nothing may still be filtered by the last one"
+        );
+        assert!(claimed_name("169.254.87.1").is_none(), "names must not survive");
+        assert!(crate::page::sender().is_empty(), "the sender must not survive");
+    }
 
     fn tree(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("hub-walk-{}-{tag}", std::process::id()));
