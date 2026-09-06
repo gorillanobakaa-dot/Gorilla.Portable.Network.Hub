@@ -291,14 +291,14 @@ hub cable  -  hand a folder down a cable to one other computer
         println!("  names          not answering names, so the address has to be typed");
     }
 
-    let mut told = false;
-    for a in &addresses {
-        if a.is_link_local() {
-            println!("  open this      http://{a}:{port}");
-            told = true;
-        }
-    }
-    if !told {
+    // The address is NOT printed here.
+    //
+    // It cannot be known yet: whether the page ends up on port 80 or on 8080
+    // depends on a bind that has not happened, and serve() prints the right
+    // one a moment later. Printing a guess here produced two addresses one
+    // above the other, differing by a port, one of them wrong, on the single
+    // line a person is meant to read out to somebody else.
+    if !addresses.iter().any(|a| a.is_link_local()) {
         println!("  open this      no cable address yet. Wait half a minute and look again.");
     }
     println!();

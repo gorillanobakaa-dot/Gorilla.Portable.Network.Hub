@@ -803,6 +803,19 @@ fn bind_all(addr: &str) -> std::io::Result<Vec<TcpListener>> {
     if listeners.is_empty() {
         return Err(first_err.unwrap_or_else(|| std::io::Error::other("no address to bind")));
     }
+    // Record port 80 HERE, where it is bound, not later in the accept loop.
+    //
+    // The flag was set inside accept_loop, which starts after run() has already
+    // printed the address to tell people. So the address was chosen from a flag
+    // that was still false, and a serve which HAD taken port 80 told everybody
+    // to type the port anyway and then warned that the sign-in screen would not
+    // work. Both wrong, and the second one wrongly: the whole captive-portal
+    // path depends on port 80 and it was working.
+    for l in &listeners {
+        if l.local_addr().map(|a| a.port()).unwrap_or(0) == 80 {
+            PORT80.store(true, Ordering::Relaxed);
+        }
+    }
     Ok(listeners)
 }
 
@@ -831,11 +844,8 @@ fn accept_loop(listeners: Vec<TcpListener>, root: PathBuf, helpers: usize) {
             }
         });
     }
-    for l in &listeners {
-        if l.local_addr().map(|a| a.port()).unwrap_or(0) == 80 {
-            PORT80.store(true, Ordering::Relaxed);
-        }
-    }
+    // PORT80 is set when the listeners are bound, not here: this runs after
+    // run() has already printed the address for people to type.
     let mut threads = Vec::new();
     for l in listeners {
         let tx = tx.clone();
@@ -972,11 +982,19 @@ hub serve  -  hand out the files in a folder to every device in the room
     if let Some(h) = &hotspot {
         println!("network \"{}\" is up on {}", h.ssid, h.iface);
     }
+    // Down a cable there is no class, and only one address is reachable from
+    // the other end. Listing the wifi one first, labelled for a classroom, is
+    // the wrong line to read out and the wrong words to read it in.
+    let cable = !crate::page::sender().is_empty();
+    let who = if cable { "tell the other computer" } else { "tell the class to open  " };
     for ip in crate::net::local_addresses() {
+        if cable && !ip.is_link_local() {
+            continue;
+        }
         if on_port_80() {
-            println!("  tell the class to open   http://{ip}");
+            println!("  {who} http://{ip}");
         } else {
-            println!("  tell the class to open   http://{ip}:{port}");
+            println!("  {who} http://{ip}:{port}");
         }
     }
     if !on_port_80() {
