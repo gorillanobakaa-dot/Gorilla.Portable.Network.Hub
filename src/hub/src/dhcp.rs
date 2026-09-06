@@ -60,6 +60,8 @@ const RELEASE: u8 = 7;
 
 const OPT_SUBNET_MASK: u8 = 1;
 const OPT_ROUTER: u8 = 3;
+const OPT_DNS: u8 = 6;
+const OPT_DOMAIN: u8 = 15;
 const OPT_LEASE_TIME: u8 = 51;
 const OPT_MSG_TYPE: u8 = 53;
 const OPT_SERVER_ID: u8 = 54;
@@ -151,7 +153,14 @@ pub fn parse(buf: &[u8]) -> Option<Request> {
 }
 
 /// Build an OFFER or an ACK.
-pub fn reply(req: &Request, kind: u8, client: Ipv4Addr, server: Ipv4Addr, mask: Ipv4Addr) -> Vec<u8> {
+pub fn reply(
+    req: &Request,
+    kind: u8,
+    client: Ipv4Addr,
+    server: Ipv4Addr,
+    mask: Ipv4Addr,
+    naming: bool,
+) -> Vec<u8> {
     let mut p = vec![0u8; 300];
     p[0] = OP_REPLY;
     p[1] = 1; // ethernet
@@ -188,9 +197,29 @@ pub fn reply(req: &Request, kind: u8, client: Ipv4Addr, server: Ipv4Addr, mask: 
     put(&server.octets(), &mut o);
     put(&[OPT_LEASE_TIME, 4], &mut o);
     put(&LEASE_SECONDS.to_be_bytes(), &mut o);
-    // No DNS option. There is no name server on a cable, and handing out one
-    // that does not answer makes every lookup on the client wait for a
-    // timeout, which looks exactly like the machine having hung.
+    // The name server, but ONLY when one is really running.
+    //
+    // The first version of this sent no DNS option at all, reasoning that
+    // advertising a resolver that never answers makes every lookup on the
+    // client wait for a timeout, which is indistinguishable from the machine
+    // having hung. That reasoning was right, and it is exactly why this is
+    // conditional rather than removed: `naming` is false when dns.rs could not
+    // take port 53, which on Linux and macOS means it was run without root.
+    //
+    // When it IS running, this one option is what turns a cable into something
+    // a person can use without being told an IP address. The client's own
+    // connectivity check resolves through us, reaches our web server, gets a
+    // redirect, and the operating system offers "Sign in to this network".
+    if naming {
+        put(&[OPT_DNS, 4], &mut o);
+        put(&server.octets(), &mut o);
+        // A search domain, so a browser given the bare word "gorilla" has
+        // something to append and can resolve it as a host instead of deciding
+        // it must have been a search.
+        let domain = b"hub";
+        put(&[OPT_DOMAIN, domain.len() as u8], &mut o);
+        put(domain, &mut o);
+    }
     put(&[OPT_END], &mut o);
     p
 }
@@ -272,6 +301,29 @@ impl Leases {
 /// The cost of being wrong in that direction is somebody's whole network, so
 /// the check is deliberately conservative and refuses when unsure.
 pub fn safe_to_offer(addresses: &[Ipv4Addr], gateway: Option<Ipv4Addr>) -> bool {
+    // ANY routable address means a real network is in play. That is the whole
+    // guard, and it is the first test rather than the last.
+    //
+    // This was found on a live machine, not reasoned about. The laptop had the
+    // cable on 169.254.87.61 with no gateway, and its wifi came up partway
+    // through testing on 10.29.136.94 behind a real router at 10.29.128.1.
+    // The earlier version of this function looked only at the gateway, saw the
+    // link-local guess for the cable, and said yes. The program then answered
+    // DHCP and DNS on 0.0.0.0, which includes the wifi: a second address
+    // server and a resolver claiming to be every host on the internet, on
+    // somebody's actual network. That is the outage this guard exists to
+    // prevent, and the guard was letting it through.
+    //
+    // A machine on a bare cable has ONLY a link-local address. If it holds a
+    // 10.x, 192.168.x or any other routable one, something real is connected
+    // and this must stay quiet, whatever the gateway lookup says.
+    let has_routable = addresses
+        .iter()
+        .any(|a| !a.is_link_local() && !a.is_loopback() && !a.is_unspecified() && !a.is_multicast());
+    if has_routable {
+        return false;
+    }
+
     // A link-local gateway is not a gateway.
     //
     // On Windows and Mac net::default_gateway() does not read the routing
@@ -304,9 +356,10 @@ impl std::fmt::Display for Refused {
         match self {
             Refused::NetworkHasARouter => write!(
                 f,
-                "not handing out addresses: this network already has a router, \
-                 and two things handing out addresses breaks it for everyone. \
-                 Unplug from the wall network first, or use the cable on its own."
+                "not handing out addresses: this computer is on another network \
+                 as well as the cable, and handing out addresses there would \
+                 break it for everyone on it. Turn the wifi off, or unplug from \
+                 the wall socket, and the cable will still work on its own."
             ),
             Refused::NotABareCable => write!(
                 f,
@@ -331,13 +384,22 @@ pub fn start(
     server: Ipv4Addr,
     addresses: &[Ipv4Addr],
     gateway: Option<Ipv4Addr>,
+    naming: bool,
     stop: Arc<AtomicBool>,
 ) -> Result<thread::JoinHandle<()>, Refused> {
-    if matches!(gateway, Some(g) if !g.is_link_local()) {
-        return Err(Refused::NetworkHasARouter);
-    }
+    // One rule, asked once. This used to repeat a weaker version of the check
+    // inline and then call safe_to_offer, so the two could disagree, and the
+    // inline one was the one that ran first.
     if !safe_to_offer(addresses, gateway) {
-        return Err(Refused::NotABareCable);
+        let other_network = addresses
+            .iter()
+            .any(|a| !a.is_link_local() && !a.is_loopback() && !a.is_unspecified())
+            || matches!(gateway, Some(g) if !g.is_link_local());
+        return Err(if other_network {
+            Refused::NetworkHasARouter
+        } else {
+            Refused::NotABareCable
+        });
     }
     let socket = UdpSocket::bind(("0.0.0.0", SERVER_PORT)).map_err(|e| {
         // Port 67 is below 1024, so on Unix it needs root. Windows does not
@@ -376,12 +438,14 @@ pub fn start(
             match req.kind {
                 DISCOVER => {
                     if let Some(ip) = leases.offer(mac, server) {
-                        let _ = socket.send_to(&reply(&req, OFFER, ip, server, mask), to_client);
+                        let _ = socket
+                            .send_to(&reply(&req, OFFER, ip, server, mask, naming), to_client);
                     }
                 }
                 REQUEST => {
                     if let Some(ip) = leases.offer(mac, server) {
-                        let _ = socket.send_to(&reply(&req, ACK, ip, server, mask), to_client);
+                        let _ =
+                            socket.send_to(&reply(&req, ACK, ip, server, mask, naming), to_client);
                     }
                 }
                 // A client that refuses an address has found it already in
@@ -465,10 +529,39 @@ mod tests {
         assert!(!safe_to_offer(&[], None));
     }
 
+    /// The live failure this rule was written for.
+    ///
+    /// A laptop with the cable AND wifi up passed the old guard, because the
+    /// guard only looked at a gateway that Windows was guessing anyway. The
+    /// program then served DHCP and DNS onto somebody's real network.
+    #[test]
+    fn wifi_and_a_cable_at_the_same_time_is_not_a_bare_cable() {
+        let both = [Ipv4Addr::new(169, 254, 87, 61), Ipv4Addr::new(10, 29, 136, 94)];
+        assert!(
+            !safe_to_offer(&both, Some(Ipv4Addr::new(169, 254, 87, 1))),
+            "a routable address anywhere on the machine must stop this, whatever \
+             the gateway guess says"
+        );
+        assert!(!safe_to_offer(&both, None));
+        assert!(!safe_to_offer(&both, Some(Ipv4Addr::new(10, 29, 128, 1))));
+
+        // And the cable on its own is still allowed, or the feature is dead.
+        let cable_only = [Ipv4Addr::new(169, 254, 87, 61)];
+        assert!(safe_to_offer(&cable_only, None));
+        assert!(safe_to_offer(&cable_only, Some(Ipv4Addr::new(169, 254, 87, 1))));
+    }
+
+    /// Loopback is always there and is not another network.
+    #[test]
+    fn loopback_does_not_count_as_another_network() {
+        let with_lo = [Ipv4Addr::new(127, 0, 0, 1), Ipv4Addr::new(169, 254, 3, 4)];
+        assert!(safe_to_offer(&with_lo, None));
+    }
+
     #[test]
     fn a_reply_is_a_dhcp_packet_the_client_can_read() {
         let req = discover(1);
-        let p = reply(&req, OFFER, Ipv4Addr::new(169, 254, 0, 2), Ipv4Addr::new(169, 254, 0, 1), Ipv4Addr::new(255, 255, 0, 0));
+        let p = reply(&req, OFFER, Ipv4Addr::new(169, 254, 0, 2), Ipv4Addr::new(169, 254, 0, 1), Ipv4Addr::new(255, 255, 0, 0), true);
         assert_eq!(p[0], OP_REPLY);
         assert_eq!(p[236..240], COOKIE);
         assert_eq!(&p[4..8], &req.xid, "the transaction id must come back");
@@ -497,6 +590,47 @@ mod tests {
         q[243] = 50;
         q[244] = 200; // claims 200 bytes that are not there
         assert!(parse(&q).is_some());
+    }
+
+    /// The option that makes a name typeable, and the reason it is optional.
+    ///
+    /// Advertising a resolver that is not running makes every lookup on the
+    /// client hang until it times out, which looks exactly like the machine
+    /// having frozen. So it must appear when one is running and be absent when
+    /// one is not.
+    #[test]
+    fn a_name_server_is_offered_only_when_one_is_running() {
+        let req = discover(1);
+        let us = Ipv4Addr::new(169, 254, 0, 1);
+        let mask = Ipv4Addr::new(255, 255, 0, 0);
+        let with = reply(&req, OFFER, Ipv4Addr::new(169, 254, 0, 2), us, mask, true);
+        let without = reply(&req, OFFER, Ipv4Addr::new(169, 254, 0, 2), us, mask, false);
+
+        fn has_option(p: &[u8], want: u8) -> bool {
+            let mut i = 240;
+            while i < p.len() && p[i] != OPT_END {
+                if p[i] == 0 {
+                    i += 1;
+                    continue;
+                }
+                if i + 1 >= p.len() {
+                    return false;
+                }
+                if p[i] == want {
+                    return true;
+                }
+                i += 2 + p[i + 1] as usize;
+            }
+            false
+        }
+
+        assert!(has_option(&with, OPT_DNS), "a running resolver must be advertised");
+        assert!(has_option(&with, OPT_DOMAIN), "and a search domain with it");
+        assert!(!has_option(&without, OPT_DNS), "a resolver that is not running must NOT be");
+        assert!(!has_option(&without, OPT_DOMAIN));
+        // The rest of the lease is unaffected either way.
+        assert!(has_option(&without, OPT_SUBNET_MASK));
+        assert!(has_option(&without, OPT_ROUTER));
     }
 
     #[test]

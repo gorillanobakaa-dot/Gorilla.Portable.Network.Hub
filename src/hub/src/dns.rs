@@ -194,6 +194,249 @@ pub fn short_name(fqdn: &str) -> String {
     fqdn.split('.').next().unwrap_or(fqdn).to_string()
 }
 
+// ---------------------------------------------------------------- answering
+//
+// The other half: being a name server, not asking one.
+//
+// WHY. Two problems, one cause. On a bare cable the other computer has no name
+// server, so:
+//
+//   - Nobody can type a name. The address is 169.254.87.61, and a person who
+//     has never been told what a full stop means in that context has to copy
+//     twelve digits off one screen onto another, correctly, before anything
+//     happens. Adults who use computers every day do not know what a forward
+//     slash is called. This is the single biggest thing standing between the
+//     tool and the person it is for.
+//
+//   - The "Sign in to this network" prompt never appears. Every operating
+//     system quietly fetches a known URL to decide whether it has internet:
+//     www.msftconnecttest.com on Windows, captive.apple.com on a Mac,
+//     connectivitycheck.gstatic.com on Android. Those are NAMES. With no
+//     resolver the lookup fails, the system concludes it has no network at
+//     all, and shows nothing worth clicking. With a resolver that points them
+//     here, the probe reaches our HTTP server, gets a redirect instead of the
+//     answer it wanted, and the system pops the prompt that opens a browser on
+//     our page. Nothing typed at either end.
+//
+// So this answers every A query with our own address. Every one, deliberately:
+// that is what a captive portal is, and on a cable with two machines and no
+// internet there is no name it could be wrong about.
+//
+// WHAT IT MUST NEVER DO is the same rule dhcp.rs has, for the same reason. A
+// server that claims to be every host on the internet is fine on a cable and a
+// catastrophe on a school network, so it starts only under the same
+// `dhcp::safe_to_offer` guard, and is never started unless a person asked for a
+// cable transfer.
+
+/// The port. Privileged on Unix, like 67, and for the same reason.
+pub const SERVER_PORT: u16 = 53;
+
+/// Names we answer for even when a query is not a captive-portal probe.
+///
+/// A person is told "type gorilla". Browsers treat a single bare word as a
+/// search term rather than a host, so `gorilla/` with the slash, or
+/// `gorilla.hub`, is what actually navigates. All three resolve here; which
+/// one a given browser honours is the browser's business, and the sign-in
+/// prompt means most people never type anything at all.
+pub const OUR_NAMES: [&str; 3] = ["gorilla", "gorilla.hub", "hub"];
+
+/// Answer one query. Returns the bytes to send back, or None if the packet is
+/// not a question we can answer.
+///
+/// Split out from the socket loop so it can be tested without a network.
+pub fn answer(query: &[u8], us: Ipv4Addr) -> Option<Vec<u8>> {
+    // 12 bytes of header, then at least one question.
+    if query.len() < 13 {
+        return None;
+    }
+    let flags = u16::from_be_bytes([query[2], query[3]]);
+    if flags & 0x8000 != 0 {
+        return None; // this is a response, not a question
+    }
+    // OPCODE must be QUERY (0). An UPDATE or NOTIFY is not ours to answer.
+    if (flags >> 11) & 0x0f != 0 {
+        return None;
+    }
+    let qdcount = u16::from_be_bytes([query[4], query[5]]);
+    if qdcount != 1 {
+        return None; // exactly one question, which is what every client sends
+    }
+
+    let name_end = skip_name(query, 12)?;
+    if name_end + 4 > query.len() {
+        return None;
+    }
+    let qtype = u16::from_be_bytes([query[name_end], query[name_end + 1]]);
+    let qclass = u16::from_be_bytes([query[name_end + 2], query[name_end + 3]]);
+    if qclass != 1 {
+        return None; // IN only
+    }
+
+    let mut out = Vec::with_capacity(query.len() + 16);
+    out.extend_from_slice(&query[0..2]); // the transaction id, echoed
+    // QR=1 response, AA=1 authoritative, RD copied from the question, RA=1.
+    // Authoritative matters: a resolver told "no such name, and I am only
+    // guessing" retries elsewhere, and on a cable there is nowhere else.
+    let rd = flags & 0x0100;
+    let answered = qtype == 1 || qtype == 255; // A, or ANY
+    let rcode = 0u16; // never NXDOMAIN: see below
+    out.extend_from_slice(&(0x8580 | rd | rcode).to_be_bytes());
+    out.extend_from_slice(&1u16.to_be_bytes()); // QDCOUNT
+    out.extend_from_slice(&(if answered { 1u16 } else { 0u16 }).to_be_bytes());
+    out.extend_from_slice(&0u16.to_be_bytes()); // NSCOUNT
+    out.extend_from_slice(&0u16.to_be_bytes()); // ARCOUNT
+    out.extend_from_slice(&query[12..name_end + 4]); // the question, verbatim
+
+    // A query for AAAA gets a real answer with no records rather than an
+    // error. Saying "this name does not exist" would be a lie that stops the
+    // client asking for the A record it would have accepted, and some
+    // resolvers cache the denial for the whole name.
+    if answered {
+        out.extend_from_slice(&[0xc0, 0x0c]); // name: a pointer back to offset 12
+        out.extend_from_slice(&1u16.to_be_bytes()); // TYPE A
+        out.extend_from_slice(&1u16.to_be_bytes()); // CLASS IN
+        // Sixty seconds. Long enough that a page of images does not re-ask for
+        // every one, short enough that a laptop unplugged from this cable and
+        // carried to a real network is not still holding our answer for the
+        // name of somebody's bank.
+        out.extend_from_slice(&60u32.to_be_bytes());
+        out.extend_from_slice(&4u16.to_be_bytes()); // RDLENGTH
+        out.extend_from_slice(&us.octets());
+    }
+    Some(out)
+}
+
+/// Answer names on this cable until told to stop.
+///
+/// The guard is `dhcp::safe_to_offer`, checked by the caller, and the socket
+/// error is reported the same way for the same reason: on Linux and macOS this
+/// port needs root, and a person has to be told that rather than left with a
+/// prompt that never appears.
+pub fn start(
+    us: Ipv4Addr,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> std::io::Result<std::thread::JoinHandle<()>> {
+    let socket = UdpSocket::bind(("0.0.0.0", SERVER_PORT))?;
+    socket.set_read_timeout(Some(Duration::from_millis(500)))?;
+    Ok(std::thread::spawn(move || {
+        let mut buf = [0u8; 512];
+        while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+            let (n, from) = match socket.recv_from(&mut buf) {
+                Ok(v) => v,
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    continue
+                }
+                Err(_) => continue,
+            };
+            if let Some(reply) = answer(&buf[..n], us) {
+                let _ = socket.send_to(&reply, from);
+            }
+        }
+    }))
+}
+
+#[cfg(test)]
+mod server_tests {
+    use super::*;
+
+    fn question(name: &str, qtype: u16) -> Vec<u8> {
+        let mut q = vec![0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0];
+        for label in name.split('.') {
+            q.push(label.len() as u8);
+            q.extend_from_slice(label.as_bytes());
+        }
+        q.push(0);
+        q.extend_from_slice(&qtype.to_be_bytes());
+        q.extend_from_slice(&1u16.to_be_bytes());
+        q
+    }
+
+    fn answered_ip(reply: &[u8]) -> Option<Ipv4Addr> {
+        let n = reply.len();
+        if n < 4 {
+            return None;
+        }
+        Some(Ipv4Addr::new(reply[n - 4], reply[n - 3], reply[n - 2], reply[n - 1]))
+    }
+
+    const US: Ipv4Addr = Ipv4Addr::new(169, 254, 87, 61);
+
+    /// The whole point: the probe name a Windows machine asks for must come
+    /// back pointing at us, because that is what makes the sign-in prompt
+    /// appear instead of "no internet".
+    #[test]
+    fn a_connectivity_probe_is_pointed_at_us() {
+        for name in [
+            "www.msftconnecttest.com",
+            "connectivitycheck.gstatic.com",
+            "captive.apple.com",
+            "nmcheck.gnome.org",
+        ] {
+            let r = answer(&question(name, 1), US).expect("must answer");
+            assert_eq!(answered_ip(&r), Some(US), "{name} was not pointed at us");
+        }
+    }
+
+    /// The name a person is told to type.
+    #[test]
+    fn the_easy_name_resolves() {
+        for name in OUR_NAMES {
+            let r = answer(&question(name, 1), US).expect("must answer");
+            assert_eq!(answered_ip(&r), Some(US));
+        }
+    }
+
+    #[test]
+    fn the_transaction_id_and_question_come_back() {
+        let q = question("gorilla", 1);
+        let r = answer(&q, US).unwrap();
+        assert_eq!(&r[0..2], &q[0..2], "id must be echoed or the client ignores it");
+        assert_eq!(r[2] & 0x80, 0x80, "must be marked a response");
+        assert_eq!(r[2] & 0x04, 0x04, "must be authoritative");
+        assert_eq!(u16::from_be_bytes([r[4], r[5]]), 1, "one question");
+        assert_eq!(u16::from_be_bytes([r[6], r[7]]), 1, "one answer");
+        assert_eq!(&r[12..12 + (q.len() - 16)], &q[12..q.len() - 4], "question echoed");
+    }
+
+    /// AAAA gets an empty success, not a denial. NXDOMAIN would stop the
+    /// client asking for the A record it would have accepted, and some
+    /// resolvers cache the denial for the whole name.
+    #[test]
+    fn a_v6_question_is_answered_empty_rather_than_denied() {
+        let r = answer(&question("gorilla", 28), US).expect("must still answer");
+        assert_eq!(u16::from_be_bytes([r[6], r[7]]), 0, "no answer records");
+        assert_eq!(r[3] & 0x0f, 0, "but not an error either");
+    }
+
+    #[test]
+    fn rubbish_is_not_answered() {
+        assert!(answer(&[], US).is_none());
+        assert!(answer(&[0u8; 12], US).is_none(), "no question section");
+        // A response, not a question: answering it would be a loop.
+        let mut resp = question("gorilla", 1);
+        resp[2] |= 0x80;
+        assert!(answer(&resp, US).is_none());
+        // A name whose length byte runs off the end of the packet.
+        let mut bad = question("gorilla", 1);
+        bad[12] = 200;
+        assert!(answer(&bad, US).is_none());
+    }
+
+    /// A chaos-class query is not ours, and answering one is how a server ends
+    /// up in somebody's fingerprinting write-up.
+    #[test]
+    fn only_the_internet_class_is_answered() {
+        let mut q = question("gorilla", 1);
+        let n = q.len();
+        q[n - 2] = 0;
+        q[n - 1] = 3; // CH
+        assert!(answer(&q, US).is_none());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -252,9 +252,26 @@ hub cable  -  hand a folder down a cable to one other computer
         .copied()
         .find(|a| a.is_link_local())
         .unwrap_or(std::net::Ipv4Addr::new(169, 254, 1, 1));
-    match dhcp::start(ours, &addresses, gateway, stop.clone()) {
+    // Names before addresses, because the address lease has to say whether a
+    // resolver is running, and it only knows that once one has tried to start.
+    //
+    // Behind the SAME guard as the address server, and that is not caution for
+    // its own sake. This resolver answers every name with our own address,
+    // which is right on a cable with two machines and nothing else, and on a
+    // real network is a machine claiming to be every host on the internet.
+    let bare_cable = dhcp::safe_to_offer(&addresses, gateway);
+    let naming = bare_cable && dns::start(ours, stop.clone()).is_ok();
+    match dhcp::start(ours, &addresses, gateway, naming, stop.clone()) {
         Ok(_) => println!("  addresses      giving the other computer an address if it asks"),
         Err(e) => println!("  addresses      {e}"),
+    }
+    if naming {
+        println!("  names          they can type  gorilla/  instead of an address");
+        println!("                 and their computer should offer to open this page itself");
+    } else {
+        // Not a warning. On Windows this is nearly always available; on Linux
+        // and macOS port 53 needs root, and the transfer works without it.
+        println!("  names          not answering names, so the address has to be typed");
     }
 
     let mut told = false;

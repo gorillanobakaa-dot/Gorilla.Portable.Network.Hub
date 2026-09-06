@@ -157,6 +157,11 @@ struct App {
     /// What the address server decided, in words, for the screen to show. A
     /// refusal here is normal and correct on a network that has a router.
     cable_note: String,
+    /// Whether we are answering names as well as handing out addresses. When
+    /// true the other end can type a word instead of an address, and its own
+    /// operating system should offer to open the page. When false, port 53 was
+    /// refused, which on Linux and macOS means no root.
+    naming: bool,
     started: Option<Instant>,
     addresses: Vec<std::net::Ipv4Addr>,
     joined: Vec<net::Joined>,
@@ -262,6 +267,7 @@ impl App {
             cable: false,
             cable_stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             cable_note: String::new(),
+            naming: false,
             started: None,
             addresses: Vec::new(),
             joined: Vec::new(),
@@ -1925,10 +1931,19 @@ impl App {
                 .copied()
                 .find(|a| a.is_link_local())
                 .unwrap_or(std::net::Ipv4Addr::new(169, 254, 1, 1));
+            // Names first: the address lease has to say whether a resolver is
+            // running, and that is only known once one has tried to start.
+            // Behind the same guard as the address server: this resolver
+            // answers every name with our address, which is correct on a bare
+            // cable and is claiming to be the whole internet anywhere else.
+            let bare_cable = dhcp::safe_to_offer(&self.addresses, net::default_gateway());
+            self.naming =
+                bare_cable && crate::dns::start(ours, Arc::clone(&self.cable_stop)).is_ok();
             self.cable_note = match dhcp::start(
                 ours,
                 &self.addresses,
                 net::default_gateway(),
+                self.naming,
                 Arc::clone(&self.cable_stop),
             ) {
                 Ok(_) => "Giving the other computer an address if it asks.".into(),
