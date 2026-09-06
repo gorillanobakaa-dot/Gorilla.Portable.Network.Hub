@@ -205,9 +205,46 @@ struct App {
     since: Option<Instant>,
 }
 
+/// Where the folder field starts.
+///
+/// The working directory is the right answer when somebody typed `hub` in a
+/// terminal, and the wrong one in the case this tool actually ships for.
+/// Double-clicking the desktop shortcut sets the working directory to wherever
+/// the program was installed, so the first thing a teacher saw offered as the
+/// folder to hand out was the program's own install directory: never what
+/// anybody wants to send, and sixty characters of path to edit down by hand.
+///
+/// So: the working directory when it looks like a place a person chose, and
+/// the desktop when it looks like the program was double-clicked.
+fn starting_folder() -> PathBuf {
+    let here = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let launched_from_install = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|p| p.to_path_buf()))
+        .map(|dir| dir == here)
+        .unwrap_or(false);
+    if !launched_from_install {
+        return here;
+    }
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from);
+    match home {
+        Some(h) => {
+            let desktop = h.join("Desktop");
+            if desktop.is_dir() {
+                desktop
+            } else {
+                h
+            }
+        }
+        None => here,
+    }
+}
+
 impl App {
     fn new() -> App {
-        let here = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let here = starting_folder();
         App {
             screen: Screen::Home,
             back: Screen::Home,
@@ -393,7 +430,10 @@ impl App {
     }
 
     fn draw_send(&self, f: &mut Frame) {
-        self.title(f, "Hand out files");
+        self.title(
+            f,
+            if self.cable { "Send files down a cable" } else { "Hand out files" },
+        );
         let fields = self.send_fields();
         // Wide enough for the longest label. It was 22, which "Connections to
         // serve at once" overflows, and an overflowing label pushes its value
@@ -408,14 +448,11 @@ impl App {
         plain.push("  Start handing out".into());
         let w = term::group_width(&plain);
         for (i, (label, value)) in fields.iter().enumerate() {
-            let shown = if self.row == i {
-                if let Some(buf) = &self.editing {
-                    // A reverse-video space is the cursor. The real cursor is
-                    // hidden because it flickers across a full redraw.
-                    format!("{buf}\x1b[7m \x1b[0m")
-                } else {
-                    value.clone()
-                }
+            let editing_here = self.row == i && self.editing.is_some();
+            let shown = if let (true, Some(buf)) = (self.row == i, &self.editing) {
+                // A reverse-video space is the cursor. The real cursor is
+                // hidden because it flickers across a full redraw.
+                format!("{buf}\x1b[7m \x1b[0m")
             } else {
                 value.clone()
             };
@@ -424,6 +461,17 @@ impl App {
                 f.push_selected_within(&line, w);
             } else {
                 f.push(&line);
+            }
+            // Say, on the row itself, that this field is now taking typing.
+            //
+            // Pressing enter used to REMOVE the selection bar and add a
+            // one-character block at the end of a path sixty characters long.
+            // The only other sign was a hint at the very bottom of the screen.
+            // On a full-screen window that is far from where the eye is, so
+            // the field looked deselected and the reasonable conclusion was
+            // that it could not be edited at all. Reported as exactly that.
+            if editing_here {
+                f.push_dim("      now typing. enter keeps it, esc leaves it alone");
             }
         }
         f.blank();
@@ -434,7 +482,7 @@ impl App {
             f.push(start);
         }
         f.blank();
-        if self.row == fields.len() - 1 {
+        if self.row == fields.len() - 1 && self.editing.is_none() {
             // Only while the teacher is on that row, so the screen is not
             // carrying an explanation nobody is reading.
             f.push_dim("  One device holds several connections at a time: a phone's browser");
@@ -442,7 +490,7 @@ impl App {
             f.push_dim("  phones is nearer 180 connections than 30.");
             f.blank();
         }
-        if self.row == 3 && !self.ssid.is_empty() {
+        if !self.cable && self.row == 3 && !self.ssid.is_empty() {
             let allowed = net::allowed_channels();
             f.push_dim("  Channels are lanes on the same road. If the room is slow, another");
             if allowed.is_empty() {
@@ -457,7 +505,13 @@ impl App {
             f.push_dim("  device cannot find the network, use 11 or lower.");
             f.blank();
         }
-        if self.ssid.is_empty() {
+        if self.cable {
+            // The wifi advice below is not merely unhelpful here, it is about
+            // a field this mode does not have, so it sends a person looking
+            // for a row that is not on the screen.
+            f.push_dim("  Plug a network cable between the two computers, then wait");
+            f.push_dim("  half a minute before starting. No wifi and no router needed.");
+        } else if self.ssid.is_empty() {
             f.push_dim("  Leave the network name empty if the class is already");
             f.push_dim("  on the same wifi as this computer.");
         } else {
