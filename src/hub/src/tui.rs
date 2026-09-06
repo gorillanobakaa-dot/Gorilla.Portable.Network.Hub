@@ -177,6 +177,14 @@ struct App {
     /// The folder could not be read. A different thing from having no
     /// subfolders, and it has to say so differently.
     pick_unreadable: bool,
+    /// Give out addresses even on a machine that is on another network.
+    ///
+    /// Off, and it takes a deliberate act to turn on, because the thing it
+    /// switches off is the guard that stops this taking down a school network.
+    /// It exists because the guard is also in the way of somebody testing on a
+    /// laptop that has to stay online for other reasons, and a guard with no
+    /// override gets worked around by worse means.
+    anyway: bool,
     /// Exactly what may be handed out, when the picker was used to choose
     /// rather than to point at a folder. None means the whole folder.
     chosen: Option<std::collections::HashSet<String>>,
@@ -359,6 +367,7 @@ impl App {
             picked: Vec::new(),
             pick_top: 0,
             pick_unreadable: false,
+            anyway: false,
             chosen: None,
             naming: false,
             started: None,
@@ -480,6 +489,14 @@ impl App {
         if self.cable {
             return vec![
                 ("Folder to send".into(), self.folder.clone()),
+                (
+                    "Give out addresses".into(),
+                    if self.anyway {
+                        "yes, even on this network. CAN BREAK IT.".into()
+                    } else {
+                        "only when nothing else is connected".into()
+                    },
+                ),
                 ("Connections to serve at once".into(), self.helpers.to_string()),
             ];
         }
@@ -609,8 +626,15 @@ impl App {
             // The wifi advice below is not merely unhelpful here, it is about
             // a field this mode does not have, so it sends a person looking
             // for a row that is not on the screen.
-            f.push_dim("  Plug a network cable between the two computers, then wait");
-            f.push_dim("  half a minute before starting. No wifi and no router needed.");
+            if self.anyway {
+                f.push_dim("  WARNING. Addresses will be given out on every network this");
+                f.push_dim("  computer is connected to, not only the cable. On a network");
+                f.push_dim("  that has a router this can take it down for everyone on it.");
+                f.push_dim("  Turn this back off unless you know why you turned it on.");
+            } else {
+                f.push_dim("  Plug a network cable between the two computers, then wait");
+                f.push_dim("  half a minute before starting. No wifi and no router needed.");
+            }
         } else if self.ssid.is_empty() {
             f.push_dim("  Leave the network name empty if the class is already");
             f.push_dim("  on the same wifi as this computer.");
@@ -1411,7 +1435,8 @@ impl App {
             // number means a different field and has to be read separately.
             Screen::Send if self.cable => match self.row {
                 0 => self.folder = buf,
-                1 => self.helpers = buf.trim().parse().unwrap_or(self.helpers).clamp(1, 512),
+                // Row 1 is the addresses toggle and never opens an editor.
+                2 => self.helpers = buf.trim().parse().unwrap_or(self.helpers).clamp(1, 512),
                 _ => {}
             },
             Screen::Send => match self.row {
@@ -1520,7 +1545,14 @@ impl App {
                 .map(|a| a.to_path_buf())
                 .unwrap_or_else(starting_folder)
         };
-        self.picked.clear();
+        // Ticks are NOT cleared on the way in.
+        //
+        // Choosing four files, going back to the form to check something, and
+        // returning to change one of them used to throw all four away. The
+        // picker is the place where a choice is made and unmade; leaving it is
+        // not a decision to discard the choice. Only "SEND EVERYTHING IN THIS
+        // FOLDER" clears it, because that is a person saying they want the
+        // whole folder instead.
         self.pick_at(start);
         self.screen = Screen::Pick;
     }
@@ -1582,6 +1614,15 @@ impl App {
 
     fn pick_is_ticked(&self, p: &Path) -> bool {
         self.picked.iter().any(|q| q == p)
+    }
+
+    /// Tick, idempotently. Pressing this twice is the same as pressing it
+    /// once, which is what makes it safe to bind to the key people press by
+    /// reflex.
+    fn pick_add(&mut self, p: PathBuf) {
+        if !self.picked.iter().any(|q| *q == p) {
+            self.picked.push(p);
+        }
     }
 
     fn pick_toggle(&mut self, p: PathBuf) {
@@ -1657,9 +1698,12 @@ impl App {
             f.push_dim("  Ticks are kept while you move around, so you can take a file");
             f.push_dim("  from here and a folder from somewhere else.");
         }
+        // Naming both keys, because they do different things and the
+        // difference is the one that cost somebody their selection: space
+        // takes a tick off, enter never does.
         self.hints(
             f,
-            "  up and down    space to tick    enter to open    esc to go back",
+            "  space ticks and unticks    enter opens a folder    esc goes back",
         );
     }
 
@@ -1713,10 +1757,20 @@ impl App {
                     if p.is_dir() {
                         self.pick_at(p);
                     } else {
-                        // Enter on a file ticks it. Nothing else it could
-                        // usefully mean, and a person who has not read the
-                        // hint will press enter before they press space.
-                        self.pick_toggle(p);
+                        // Enter on a file ADDS it, and can never take it away.
+                        //
+                        // This used to toggle, on the reasoning that somebody
+                        // who has not read the hint will press enter before
+                        // they press space. True, and it made enter destructive:
+                        // press it on something already ticked and the tick
+                        // silently went. Reported as "pressing enter actually
+                        // unselects the previously selected things", which is
+                        // exactly what it did.
+                        //
+                        // Only space takes a tick off now. One key adds, one
+                        // key removes, and the one people press by reflex is
+                        // the one that cannot lose work.
+                        self.pick_add(p);
                     }
                 }
             }
@@ -1752,6 +1806,7 @@ impl App {
     fn finish_picking(&mut self) {
         if self.picked.is_empty() {
             self.folder = self.pick_dir.to_string_lossy().into_owned();
+            self.picked.clear();
             self.chosen = None;
             self.screen = Screen::Send;
             self.row = 0;
@@ -1800,11 +1855,16 @@ impl App {
                         self.open_picker();
                         return false;
                     }
+                    // Cable mode's middle row is a yes/no, not text, so
+                    // enter flips it instead of opening an editor.
+                    if self.cable && self.row == 1 {
+                        self.anyway = !self.anyway;
+                        return false;
+                    }
                     self.editing = Some(if self.cable {
-                        // Cable mode has two rows, not five, so the row
-                        // numbers mean different fields. Reading them off the
-                        // wifi list here would file a folder name as a
-                        // password.
+                        // Cable mode's rows are not the wifi rows. Reading
+                        // them off the wifi list would file a folder name as
+                        // a password.
                         match self.row {
                             0 => self.folder.clone(),
                             _ => self.helpers.to_string(),
@@ -2367,7 +2427,8 @@ impl App {
             // Behind the same guard as the address server: this resolver
             // answers every name with our address, which is correct on a bare
             // cable and is claiming to be the whole internet anywhere else.
-            let bare_cable = dhcp::safe_to_offer(&self.addresses, net::default_gateway());
+            let bare_cable =
+                self.anyway || dhcp::safe_to_offer(&self.addresses, net::default_gateway());
             self.naming =
                 bare_cable && crate::dns::start(ours, Arc::clone(&self.cable_stop)).is_ok();
             self.cable_note = match dhcp::start(
@@ -2375,6 +2436,7 @@ impl App {
                 &self.addresses,
                 net::default_gateway(),
                 self.naming,
+                self.anyway,
                 Arc::clone(&self.cable_stop),
             ) {
                 Ok(_) => "Giving the other computer an address if it asks.".into(),

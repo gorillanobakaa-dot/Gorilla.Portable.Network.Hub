@@ -192,6 +192,10 @@ hub cable  -  hand a folder down a cable to one other computer
 
   --name <text>         what to call this computer on the other end's screen
   --port <number>       which port to listen on (default 8080)
+  --addresses-anyway    give out addresses even though this computer is on
+                        another network. Read the warning first: on a network
+                        that already has a router this can take it down for
+                        everyone on it. Only for a machine you are testing.
   -h, --help            this text
 
   example:
@@ -264,9 +268,17 @@ hub cable  -  hand a folder down a cable to one other computer
     // its own sake. This resolver answers every name with our own address,
     // which is right on a cable with two machines and nothing else, and on a
     // real network is a machine claiming to be every host on the internet.
-    let bare_cable = dhcp::safe_to_offer(&addresses, gateway);
+    let anyway = args.iter().any(|a| a == "--addresses-anyway");
+    if anyway && !dhcp::safe_to_offer(&addresses, gateway) {
+        println!();
+        println!("  !! This computer is on another network as well as the cable, and you");
+        println!("  !! have asked for addresses to be given out regardless. If that other");
+        println!("  !! network has a router, this can take it down for everyone on it.");
+        println!();
+    }
+    let bare_cable = anyway || dhcp::safe_to_offer(&addresses, gateway);
     let naming = bare_cable && dns::start(ours, stop.clone()).is_ok();
-    match dhcp::start(ours, &addresses, gateway, naming, stop.clone()) {
+    match dhcp::start(ours, &addresses, gateway, naming, anyway, stop.clone()) {
         Ok(_) => println!("  addresses      giving the other computer an address if it asks"),
         Err(e) => println!("  addresses      {e}"),
     }

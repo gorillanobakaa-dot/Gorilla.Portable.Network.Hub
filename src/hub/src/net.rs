@@ -52,6 +52,19 @@ pub fn local_addresses() -> Vec<Ipv4Addr> {
         }
     }
     probes.push(Ipv4Addr::new(8, 8, 8, 8)); // routes via whatever the default is
+    // The link-local broadcast, so a cable is found even when this machine is
+    // also on a real network.
+    //
+    // Without this every probe above routes out of the default interface, so a
+    // laptop with wifi up reported only its wifi address and the cable plugged
+    // into its other socket was invisible. That made `hub doctor` deny there
+    // was a cable, made the sending screen say "no cable address yet" while
+    // holding 169.254.87.61, and left the address pool derived from a made-up
+    // address instead of the real one. RFC 3927 traffic goes out of the
+    // interface that owns a link-local address, so asking the kernel for the
+    // source address it would use to reach 169.254.255.255 names that
+    // interface and nothing else.
+    probes.push(Ipv4Addr::new(169, 254, 255, 255));
 
     let mut found: Vec<Ipv4Addr> = Vec::new();
     for p in probes {

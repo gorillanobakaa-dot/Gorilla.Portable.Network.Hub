@@ -385,12 +385,19 @@ pub fn start(
     addresses: &[Ipv4Addr],
     gateway: Option<Ipv4Addr>,
     naming: bool,
+    anyway: bool,
     stop: Arc<AtomicBool>,
 ) -> Result<thread::JoinHandle<()>, Refused> {
     // One rule, asked once. This used to repeat a weaker version of the check
     // inline and then call safe_to_offer, so the two could disagree, and the
     // inline one was the one that ran first.
-    if !safe_to_offer(addresses, gateway) {
+    //
+    // `anyway` is a person saying they have read the warning and want it
+    // regardless. It exists because the guard, being right, is also in the way
+    // of the one who is deliberately testing on a machine that has to stay on
+    // a network for other reasons. A guard with no override gets worked around
+    // by worse means.
+    if !anyway && !safe_to_offer(addresses, gateway) {
         let other_network = addresses
             .iter()
             .any(|a| !a.is_link_local() && !a.is_loopback() && !a.is_unspecified())
