@@ -15,8 +15,40 @@ if [ "$1" = configure ]; then
     # is what makes the sign-in screen pop up and open the class page. Ports
     # under 1024 need this one capability; granting it here means the teacher
     # never types sudo. If setcap is missing the tool still works on 8080.
+    #
+    # Say so when it does not happen. This used to be a silent `|| true`, so on
+    # a machine without libcap2-bin the grant was skipped, dpkg reported a
+    # clean install, and the one feature the capability exists for was missing
+    # with nothing anywhere saying why. Recommends: libcap2-bin is honoured by
+    # apt but NOT by `dpkg -i`, which is how the release page tells people to
+    # install this, so the silent path was the common one.
+    granted=no
     if which setcap >/dev/null 2>&1; then
-        setcap 'cap_net_bind_service=+ep' /usr/bin/hub 2>/dev/null || true
+        if setcap 'cap_net_bind_service=+ep' /usr/bin/hub 2>/dev/null; then
+            # Verify the artifact, not the exit code.
+            if which getcap >/dev/null 2>&1 && getcap /usr/bin/hub 2>/dev/null | grep -q cap_net_bind_service; then
+                granted=yes
+            fi
+        fi
+    fi
+    if [ "$granted" = no ]; then
+        echo ""
+        echo "gorilla-portable-network-hub: port 80 was NOT granted."
+        echo ""
+        echo "  Everything works except one thing: phones joining the wifi will"
+        echo "  not be brought to the page automatically by the sign-in screen."
+        echo "  People can still open the address themselves."
+        echo ""
+        if which setcap >/dev/null 2>&1; then
+            echo "  setcap is present but the grant did not take."
+        else
+            echo "  The tool that grants it is not installed. To fix:"
+            echo "    sudo apt install libcap2-bin"
+            echo "    sudo setcap cap_net_bind_service=+ep /usr/bin/hub"
+        fi
+        echo ""
+        echo "  Or just run it with sudo when you need the sign-in screen."
+        echo ""
     fi
 fi
 exit 0
