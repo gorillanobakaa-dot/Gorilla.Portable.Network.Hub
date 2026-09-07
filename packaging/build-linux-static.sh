@@ -76,14 +76,53 @@ esac
 cd "$ROOT/src/hub"
 
 # On Windows, build with the GNU host so build.rs compiles without MSVC.
+#
+# `cargo +toolchain` is a rustup directive, not a cargo one, and a plain cargo
+# answers "no such command: `+stable-x86_64-pc-windows-gnu`". That is not an
+# academic case. A machine can have the toolchain AND the musl standard
+# library both installed and still have no rustup on PATH, because the shim
+# lives in a package manager's shim directory while the toolchains live in a
+# persisted directory beside it, and only the former is on PATH. This machine
+# was exactly that, and the error names the toolchain rather than the missing
+# rustup, so it reads as "the toolchain is not installed" when it is.
+#
+# So: rustup when it is there, and the toolchain's own cargo when it is not.
+CARGO="cargo"
 TOOLCHAIN=""
 case "$(uname -s 2>/dev/null || echo Windows)" in
-    MINGW*|MSYS*|CYGWIN*|Windows) TOOLCHAIN="+stable-x86_64-pc-windows-gnu" ;;
+    MINGW*|MSYS*|CYGWIN*|Windows)
+        NEEDED=stable-x86_64-pc-windows-gnu
+        if command -v rustup >/dev/null 2>&1; then
+            TOOLCHAIN="+$NEEDED"
+        else
+            for home in "${RUSTUP_HOME:-}" "$HOME/.rustup"                         "${USERPROFILE:-}/scoop/persist/rustup/.rustup"                         "$HOME/scoop/persist/rustup/.rustup"; do
+                [ -n "$home" ] || continue
+                if [ -x "$home/toolchains/$NEEDED/bin/cargo.exe" ]; then
+                    CARGO="$home/toolchains/$NEEDED/bin/cargo.exe"
+                    break
+                fi
+            done
+            if [ "$CARGO" = "cargo" ]; then
+                echo "Need the $NEEDED toolchain, and neither rustup nor the" >&2
+                echo "toolchain itself could be found. Install rustup, then:" >&2
+                echo "  rustup toolchain install $NEEDED --profile minimal" >&2
+                echo "  rustup target add $TARGET --toolchain $NEEDED" >&2
+                exit 1
+            fi
+            # cargo does not carry its own rustc. Called directly it runs
+            # whichever rustc is on PATH, and that one has a different
+            # sysroot: it reported "can't find crate for `std`" and advised
+            # installing a target that was already installed, in the other
+            # toolchain. Put this toolchain's bin first so cargo and rustc
+            # agree about where the standard library lives.
+            PATH="$(dirname "$CARGO"):$PATH"
+            export PATH
+            echo "rustup is not on PATH; using $CARGO directly."
+        fi
+        ;;
 esac
 
-CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="$LINKER" \
-CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C target-feature=+crt-static -C link-self-contained=no" \
-    cargo $TOOLCHAIN build --release --target "$TARGET"
+CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="$LINKER" CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C target-feature=+crt-static -C link-self-contained=no"     "$CARGO" $TOOLCHAIN build --release --target "$TARGET"
 
 # Verify rather than assume. A dynamically linked artifact here would work on
 # the build machine and fail on the machines this exists for, which is the

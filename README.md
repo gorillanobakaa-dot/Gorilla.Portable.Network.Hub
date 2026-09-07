@@ -206,8 +206,19 @@ it.
 | **0.8.0, with folders, the streamed archive, the QR code and the channel picker** | **761,224** |
 | the same 0.8.0 built for Windows | 653,824 |
 | **0.9.0, adding the cable, the address server and the wire tuning** | **not measured on Linux yet** |
-| the same 0.9.0 built for Windows | 700,416 |
-| 0.9.0 built for Linux, static, runs on any distribution | 858,160 |
+| the same 0.9.0 built for Windows, as published | 828,928 |
+| 0.9.0 built for Linux, static, runs on any distribution | 913,016 |
+| **0.9.1, a test-harness fix and packaging that verifies itself** | |
+| the same 0.9.1 built for Windows | 828,928 |
+| 0.9.1 built for Linux, static, runs on any distribution | 913,016 |
+
+The 0.9.0 rows above said 700,416 and 858,160 until 0.9.1. Both were measured
+before the icon was embedded and never updated, so the table understated the
+published files by about 128 KB and 55 KB. It is corrected here rather than
+quietly, because a table of costs that is not checked is worth less than no
+table: the numbers now match what the release page actually serves. 0.9.1 adds
+nothing to either binary, which is what a release touching only comments and
+test code should do, and is why the figures repeat.
 
 On the connections this is for, the whole program is about a minute of
 somebody's life. Everything it gained since the first release cost 246,744
@@ -226,13 +237,13 @@ Built packages for all three are on the
 **Debian, Ubuntu, Mint:**
 
 ```
-sudo dpkg -i gorilla-portable-network-hub_0.9.0_amd64.deb
+sudo dpkg -i gorilla-portable-network-hub_0.9.1_amd64.deb
 ```
 
 **Arch, CachyOS, Manjaro:**
 
 ```
-sudo pacman -U gorilla-portable-network-hub-0.9.0-1-x86_64.pkg.tar.zst
+sudo pacman -U gorilla-portable-network-hub-0.9.1-1-x86_64.pkg.tar.zst
 ```
 
 Or from source with `makepkg -si` in `packaging/`. The Arch package is
@@ -240,7 +251,7 @@ assembled to spec and structurally verified on a Debian machine; it has not yet
 been installed on an Arch one, and that is exactly the kind of thing worth
 telling us about.
 
-**Windows:** unzip `hub-0.9.0-windows-x86_64.zip` and read
+**Windows:** unzip `hub-0.9.1-windows-x86_64.zip` and read
 `READ-THIS-FIRST.txt`. Windows will not let a normal program create a wifi
 network, so you switch the hotspot on in Settings first. Everything else works
 the same.
@@ -250,7 +261,7 @@ the same.
 ```
 cd src/hub && cargo build --release && cd ../..
 ./packaging/build-deb.sh          # or ./packaging/build-arch.sh
-sudo dpkg -i packaging/build/gorilla-portable-network-hub_0.9.0_amd64.deb
+sudo dpkg -i packaging/build/gorilla-portable-network-hub_0.9.1_amd64.deb
 ```
 
 It installs `hub`, a menu entry called **Portable Network Hub**, a man page, and

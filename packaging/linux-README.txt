@@ -1,4 +1,4 @@
-Gorilla Portable Network Hub 0.9.1  -  Windows
+Gorilla Portable Network Hub 0.9.1  -  Linux (x86-64, static)
 
 WHAT THIS IS
 A laptop that becomes the network. It hands a folder to every device in the
@@ -6,7 +6,7 @@ room over wifi, or straight down a network cable to one other laptop. No
 internet, no router, no accounts, nothing installed on the receiving devices.
 
 TO START
-Double-click hub.exe. A screen opens with four choices. That is the way in.
+Run ./hub in a terminal. A screen opens with four choices. That is the way in.
 
   1. Hand out files to the class over wifi
   2. Send files down a cable to one other computer
@@ -44,3 +44,16 @@ but please test it before relying on it in front of a class.
 
 Full guide:  docs/HOW-TO.md in the source repository
 Licence:     AGPL-3.0
+
+LINUX NOTES
+This binary is statically linked. It has no dependencies at all and runs on any
+distribution, including Alpine. Make it executable if your browser cleared the
+flag:  chmod +x hub
+
+Giving out addresses over a cable uses UDP port 67, which is privileged on
+Linux. If you are SENDING from this machine to another Linux machine, run it
+with sudo. Receiving, and sending to Windows or Mac, need nothing.
+
+The firewall check cannot read ufw/firewalld/nftables from inside the program,
+so "hub doctor" reports "cannot tell on this system" rather than guessing.
+Run "hub fix-firewall" and it prints the exact line to paste for your firewall.

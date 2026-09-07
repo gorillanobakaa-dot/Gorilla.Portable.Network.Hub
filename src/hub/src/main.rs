@@ -468,5 +468,43 @@ mod packaging_tests {
             howto.contains(&format!("hub {version}")),
             "docs/HOW-TO.md does not tell people to expect version {version}"
         );
+
+        // The Windows archive names itself. A drifted number here ships a zip
+        // called 0.9.0 containing a 0.9.1 binary, which is the version of this
+        // mistake that survives a checksum: both the file and the sum are
+        // internally consistent and the name is a lie.
+        let winzip = std::fs::read_to_string(format!("{root}/packaging/build-windows-zip.py"))
+            .expect("packaging/build-windows-zip.py must exist");
+        assert!(
+            winzip.contains(&format!("VERSION = \"{version}\"")),
+            "packaging/build-windows-zip.py VERSION has drifted from {version}"
+        );
+
+        // And the readme inside that archive, which is the first line a
+        // Windows user reads after unzipping.
+        let winreadme = std::fs::read_to_string(format!("{root}/packaging/windows-README.txt"))
+            .expect("packaging/windows-README.txt must exist");
+        assert!(
+            winreadme.contains(&format!("Hub {version}")),
+            "packaging/windows-README.txt has drifted from {version}"
+        );
+
+        // The Linux archive and its readme. The readme lived only inside the
+        // gitignored dist/ directory until 0.9.1, so it was one `rm -rf dist`
+        // away from a release that shipped a binary and no instructions, and
+        // nothing in the project would have said a word.
+        let lintar = std::fs::read_to_string(format!("{root}/packaging/build-linux-tarball.py"))
+            .expect("packaging/build-linux-tarball.py must exist");
+        assert!(
+            lintar.contains(&format!("VERSION = \"{version}\"")),
+            "packaging/build-linux-tarball.py VERSION has drifted from {version}"
+        );
+
+        let linreadme = std::fs::read_to_string(format!("{root}/packaging/linux-README.txt"))
+            .expect("packaging/linux-README.txt must exist");
+        assert!(
+            linreadme.contains(&format!("Hub {version}")),
+            "packaging/linux-README.txt has drifted from {version}"
+        );
     }
 }
