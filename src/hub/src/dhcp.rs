@@ -392,6 +392,92 @@ impl std::fmt::Display for Refused {
     }
 }
 
+/// Keep watching, and start handing out addresses the moment it becomes safe.
+///
+/// WHY THIS EXISTS. The guard used to be asked once, when serving started, and
+/// the answer stood for the life of the program. So a person who read "turn
+/// the wifi off" and turned the wifi off saw nothing change, because the
+/// decision had been made thirty-six seconds earlier and nothing was ever
+/// going to look again.
+///
+/// From the outside that is indistinguishable from the guard being broken, and
+/// it was reported as exactly that: "even though i turned my wifi off the
+/// program is not able to recognize that". The guard was right about the world
+/// as it had been. It was simply describing the past.
+///
+/// Advice a person acts on has to be advice the program will notice them
+/// acting on. So this looks every few seconds, and the moment the other
+/// network goes away it starts the address server and the resolver and says
+/// so. Nothing has to be restarted and nothing has to be typed.
+///
+/// Returns the line the screen shows, which this thread keeps current.
+pub fn supervise(
+    anyway: bool,
+    stop: Arc<AtomicBool>,
+) -> Arc<std::sync::Mutex<String>> {
+    let note = Arc::new(std::sync::Mutex::new(String::from("looking at the network...")));
+    let out = Arc::clone(&note);
+
+    thread::spawn(move || {
+        let mut serving = false;
+        while !stop.load(Ordering::Relaxed) {
+            if !serving {
+                let addresses = crate::net::local_addresses();
+                let gateway = crate::net::default_gateway();
+                let ours = addresses
+                    .iter()
+                    .copied()
+                    .find(|a| a.is_link_local())
+                    .unwrap_or(Ipv4Addr::new(169, 254, 1, 1));
+
+                let allowed = anyway || safe_to_offer(&addresses, gateway);
+                if allowed {
+                    // Names first, because the lease has to say whether a
+                    // resolver is running and it only knows once one has tried.
+                    let naming = crate::dns::start(ours, Arc::clone(&stop)).is_ok();
+                    match start(ours, &addresses, gateway, naming, anyway, Arc::clone(&stop)) {
+                        Ok(_) => {
+                            serving = true;
+                            let mut n = note.lock().unwrap_or_else(|e| e.into_inner());
+                            *n = if naming {
+                                "giving the other computer an address, and answering names".into()
+                            } else {
+                                "giving the other computer an address if it asks".into()
+                            };
+                        }
+                        Err(e) => {
+                            let mut n = note.lock().unwrap_or_else(|e| e.into_inner());
+                            *n = e.to_string();
+                        }
+                    }
+                } else {
+                    // Not safe yet. Say why, currently, and keep looking: the
+                    // whole point is that this sentence can stop being true
+                    // while somebody is reading it.
+                    let seen = addresses
+                        .iter()
+                        .find(|a| !a.is_link_local() && !a.is_loopback() && !a.is_unspecified())
+                        .copied();
+                    let mut n = note.lock().unwrap_or_else(|e| e.into_inner());
+                    *n = match seen {
+                        Some(a) => format!(
+                            "waiting. This computer is still on another network, at {a}. \
+                             Turn that off and this will start on its own, within a few seconds."
+                        ),
+                        None => "waiting for this computer to settle on a cable address.".into(),
+                    };
+                }
+            }
+            // Three seconds: fast enough that switching the wifi off feels
+            // like it did something, slow enough to be nothing on a 2012
+            // processor drawing a screen four times a second.
+            thread::sleep(Duration::from_secs(3));
+        }
+    });
+
+    out
+}
+
 /// Start answering, if it is safe to.
 pub fn start(
     server: Ipv4Addr,

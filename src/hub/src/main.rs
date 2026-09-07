@@ -256,18 +256,6 @@ hub cable  -  hand a folder down a cable to one other computer
         Err(e) => println!("  finding        not announcing ({e}); type the address by hand"),
     }
 
-    let ours = addresses
-        .iter()
-        .copied()
-        .find(|a| a.is_link_local())
-        .unwrap_or(std::net::Ipv4Addr::new(169, 254, 1, 1));
-    // Names before addresses, because the address lease has to say whether a
-    // resolver is running, and it only knows that once one has tried to start.
-    //
-    // Behind the SAME guard as the address server, and that is not caution for
-    // its own sake. This resolver answers every name with our own address,
-    // which is right on a cable with two machines and nothing else, and on a
-    // real network is a machine claiming to be every host on the internet.
     let anyway = args.iter().any(|a| a == "--addresses-anyway");
     if anyway && !dhcp::safe_to_offer(&addresses, gateway) {
         println!();
@@ -281,35 +269,51 @@ hub cable  -  hand a folder down a cable to one other computer
     // Multicast DNS needs nobody to be told anything: it is link-scoped, and
     // announcing one name is what every printer already does, so it is safe on
     // a network with a router. That makes it the only naming that survives the
-    // guard, and the guard is on precisely when somebody is testing from a
-    // laptop that is also on wifi.
-    let mdns = dns::start_mdns(ours, stop.clone()).is_ok();
-
-    let bare_cable = anyway || dhcp::safe_to_offer(&addresses, gateway);
-    let naming = bare_cable && dns::start(ours, stop.clone()).is_ok();
-    match dhcp::start(ours, &addresses, gateway, naming, anyway, stop.clone()) {
-        Ok(_) => println!("  addresses      giving the other computer an address if it asks"),
-        Err(e) => println!("  addresses      {e}"),
-    }
-    if mdns {
+    // guard.
+    let ours = addresses
+        .iter()
+        .copied()
+        .find(|a| a.is_link_local())
+        .unwrap_or(std::net::Ipv4Addr::new(169, 254, 1, 1));
+    if dns::start_mdns(ours, stop.clone()).is_ok() {
         println!("  name           they can type  gorilla.local  instead of an address");
     }
-    if naming {
-        println!("  names          they can also type  gorilla/");
-        println!("                 and their computer should offer to open this page itself");
-    } else if !mdns {
-        // Not a warning. On Windows this is nearly always available; on Linux
-        // and macOS port 53 needs root, and the transfer works without it.
-        println!("  names          not answering names, so the address has to be typed");
+
+    // And the address server, watched rather than decided once.
+    //
+    // This used to be settled at startup and never looked at again, so
+    // somebody who read "turn the wifi off", and turned the wifi off, saw
+    // nothing change: the verdict had been reached seconds earlier and nothing
+    // was going to look twice. It now checks every few seconds and starts on
+    // its own when the way is clear.
+    let watch = dhcp::supervise(anyway, stop.clone());
+    if !anyway {
+        println!("  addresses      watching. Switch the other network off and this starts");
+        println!("                 on its own, without restarting anything.");
     }
 
-    // The address is NOT printed here.
+    // Say it again whenever it changes.
     //
-    // It cannot be known yet: whether the page ends up on port 80 or on 8080
-    // depends on a bind that has not happened, and serve() prints the right
-    // one a moment later. Printing a guess here produced two addresses one
-    // above the other, differing by a port, one of them wrong, on the single
-    // line a person is meant to read out to somebody else.
+    // Printing the state once is what caused the trouble in the first place: a
+    // line written at startup describes the world at startup, and somebody who
+    // then does what it asked watches a sentence that cannot answer them. This
+    // thread is the difference between advice and a recording.
+    {
+        let watch = std::sync::Arc::clone(&watch);
+        let stop = stop.clone();
+        std::thread::spawn(move || {
+            let mut last = String::new();
+            while !stop.load(Ordering::Relaxed) {
+                let now = watch.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                if now != last && !now.starts_with("looking") {
+                    println!("  addresses      {now}");
+                    last = now;
+                }
+                std::thread::sleep(Duration::from_secs(2));
+            }
+        });
+    }
+
     if !addresses.iter().any(|a| a.is_link_local()) {
         println!("  open this      no cable address yet. Wait half a minute and look again.");
     }

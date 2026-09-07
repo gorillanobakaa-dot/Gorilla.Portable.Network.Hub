@@ -159,6 +159,9 @@ struct App {
     /// What the address server decided, in words, for the screen to show. A
     /// refusal here is normal and correct on a network that has a router.
     cable_note: String,
+    /// The supervisor's live view of that, re-read on every frame so the
+    /// screen can change while somebody is looking at it.
+    cable_watch: Option<Arc<std::sync::Mutex<String>>>,
     /// The folder the picker is looking inside.
     pick_dir: PathBuf,
     /// Its subfolders, sorted, hidden ones left out.
@@ -363,6 +366,7 @@ impl App {
             cable: false,
             cable_stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             cable_note: String::new(),
+            cable_watch: None,
             pick_dir: PathBuf::from("."),
             pick_kids: Vec::new(),
             pick_files: Vec::new(),
@@ -410,6 +414,7 @@ impl App {
         self.chosen = None;
         self.tick.clear();
         self.cable_note.clear();
+        self.cable_watch = None;
         self.naming = false;
         self.mdns = false;
         serve::forget_session();
@@ -432,6 +437,15 @@ impl App {
 
 impl App {
     fn draw(&mut self, rows: usize, cols: usize) {
+        // The supervisor's answer can change between frames: that is the whole
+        // point of it. Read it here rather than remembering what it said when
+        // serving began.
+        if let Some(w) = &self.cable_watch {
+            let now = w.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            if now != self.cable_note {
+                self.cable_note = now;
+            }
+        }
         if rows < 10 || cols < 44 {
             let mut f = Frame::new(rows, cols);
             f.push("The window is too small.");
@@ -2553,21 +2567,14 @@ impl App {
             // link-scoped and needs nothing configured on the far end, so it
             // is the naming that still works when the guard refuses.
             self.mdns = crate::dns::start_mdns(ours, Arc::clone(&self.cable_stop)).is_ok();
-            let bare_cable =
-                self.anyway || dhcp::safe_to_offer(&self.addresses, net::default_gateway());
-            self.naming =
-                bare_cable && crate::dns::start(ours, Arc::clone(&self.cable_stop)).is_ok();
-            self.cable_note = match dhcp::start(
-                ours,
-                &self.addresses,
-                net::default_gateway(),
-                self.naming,
-                self.anyway,
-                Arc::clone(&self.cable_stop),
-            ) {
-                Ok(_) => "Giving the other computer an address if it asks.".into(),
-                Err(e) => e.to_string(),
-            };
+            // Watched, not decided once.
+            //
+            // Deciding at this moment and never looking again is what made
+            // "turn the wifi off" unactionable: the answer was reached before
+            // the person did the thing it asked for, and the screen then said
+            // the same sentence forever. The supervisor re-reads the network
+            // every few seconds and starts on its own when the way is clear.
+            self.cable_watch = Some(dhcp::supervise(self.anyway, Arc::clone(&self.cable_stop)));
         }
 
         self.started = Some(Instant::now());
