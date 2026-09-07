@@ -36,6 +36,13 @@ STAMPED="$("$BIN" --version 2>/dev/null || true)"
 # And refuse a PKGBUILD that has drifted. Same failure, different file: a stale
 # pkgver still makes a valid recipe, so nothing complains and Arch users build
 # last month's release.
+# Read the licence from the PKGBUILD rather than restating it here. It was
+# written out in full in both files, they drifted, and the .PKGINFO shipped
+# "MIT" for a project licensed AGPL-3.0. One source of truth, so the two files
+# cannot disagree again.
+LICENSE=$(grep -m1 '^license=' "$ROOT/packaging/PKGBUILD" | sed "s/^license=(//; s/)$//; s/'//g")
+[ -n "$LICENSE" ] || { echo "Could not read license= from PKGBUILD" >&2; exit 1; }
+
 PKGVER=$(grep -m1 '^pkgver=' "$ROOT/packaging/PKGBUILD" | cut -d= -f2)
 [ "$PKGVER" = "$VERSION" ] || {
     echo "packaging/PKGBUILD says pkgver=$PKGVER but this is $VERSION." >&2
@@ -77,7 +84,7 @@ builddate = ${BUILD_DATE}
 packager = gorillanobakaa <gorillanobakaa@gmail.com>
 size = ${SIZE_BYTES}
 arch = x86_64
-license = MIT
+license = ${LICENSE}
 depend = glibc
 optdepend = networkmanager: to create a wifi network where there is none
 optdepend = libcap: to answer on port 80, so a joining phone pops its own sign-in screen

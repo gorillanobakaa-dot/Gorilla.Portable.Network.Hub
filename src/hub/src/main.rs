@@ -507,4 +507,57 @@ mod packaging_tests {
             "packaging/linux-README.txt has drifted from {version}"
         );
     }
+
+    /// Every packaging file has to name the licence the project actually ships.
+    ///
+    /// The version test above exists because a number can drift silently. A
+    /// licence drifts the same way and matters more. packaging/PKGBUILD said
+    /// license=('MIT') from the day it was written until 2026-09-07, while the
+    /// LICENSE file at the root, the Debian copyright and both README.txt
+    /// files said AGPL-3.0. So `pacman -Qi` told an Arch user MIT and the
+    /// package installed the AGPL text beside it.
+    ///
+    /// Nothing failed. makepkg does not read the LICENSE file, and the two
+    /// statements never met until somebody compared them by hand. MIT and
+    /// AGPL-3.0 place materially different obligations on whoever redistributes
+    /// this, and the metadata is what an auditing user reads first.
+    #[test]
+    fn every_packaging_recipe_names_the_right_licence() {
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+
+        // The licence of record is the file itself, not anybody's summary.
+        let text = std::fs::read_to_string(format!("{root}/LICENSE"))
+            .expect("LICENSE must exist at the repository root");
+        assert!(
+            text.contains("GNU AFFERO GENERAL PUBLIC LICENSE"),
+            "LICENSE is no longer the AGPL, so every claim below needs revisiting"
+        );
+
+        let pkgbuild = std::fs::read_to_string(format!("{root}/packaging/PKGBUILD"))
+            .expect("packaging/PKGBUILD must exist");
+        let declared = pkgbuild
+            .lines()
+            .find(|l| l.starts_with("license="))
+            .expect("PKGBUILD must set license");
+        assert!(
+            declared.contains("AGPL"),
+            "packaging/PKGBUILD declares {declared:?}, but this project is AGPL-3.0"
+        );
+
+        // build-arch.sh must not restate it. It derives the value from the
+        // PKGBUILD precisely so the two cannot disagree again, and a literal
+        // here would reintroduce the bug this test was written for.
+        let arch = std::fs::read_to_string(format!("{root}/packaging/build-arch.sh"))
+            .expect("packaging/build-arch.sh must exist");
+        assert!(
+            !arch.contains("license = MIT"),
+            "packaging/build-arch.sh hardcodes a licence again; derive it from PKGBUILD"
+        );
+
+        for f in ["packaging/copyright", "packaging/linux-README.txt", "packaging/windows-README.txt"] {
+            let body = std::fs::read_to_string(format!("{root}/{f}"))
+                .unwrap_or_else(|_| panic!("{f} must exist"));
+            assert!(body.contains("AGPL"), "{f} does not name the AGPL");
+        }
+    }
 }

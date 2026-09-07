@@ -25,12 +25,17 @@ pkgname=gorilla-portable-network-hub
 # it, so following the project's own instructions built something from the
 # previous month. `cargo test` now fails if the two disagree, which is the only
 # reason this line can be trusted.
-pkgver=0.9.1
+pkgver=0.9.2
 pkgrel=1
 pkgdesc="Turn a laptop into the network and hand a folder to the room"
 arch=('x86_64')
 url="https://github.com/gorillanobakaa-dot/Gorilla.Portable.Network.Hub"
-license=('MIT')
+# AGPL-3.0, matching the LICENSE file at the root of this repository, the
+# Debian copyright file and both README.txt files. This line said MIT until
+# 2026-09-07, so pacman -Qi reported MIT while /usr/share/licenses/ installed
+# the AGPL text. Those are materially different obligations and the metadata
+# is what a packager or an auditing user reads first.
+license=('AGPL-3.0-or-later')
 # The program itself has no dependencies. Everything below is about what it
 # TALKS TO, and each is optional in the strict sense: without any of them the
 # tool still hands files out over a network that already exists.
