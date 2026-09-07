@@ -343,7 +343,12 @@ pub fn safe_to_offer(addresses: &[Ipv4Addr], gateway: Option<Ipv4Addr>) -> bool 
 /// Why the responder did not start, in words that say what to do.
 pub enum Refused {
     /// Something is routing here, so something else is probably leasing.
-    NetworkHasARouter,
+    ///
+    /// Carries what it saw. "This computer is on another network" is an
+    /// assertion a person cannot check, and when they believe they have turned
+    /// the wifi off it reads as the program being wrong. Naming the address
+    /// turns it into something they can go and look at.
+    NetworkHasARouter(Option<Ipv4Addr>),
     /// No link-local address, so we cannot tell this is a bare cable.
     NotABareCable,
     /// Port 67 is a privileged port on Unix.
@@ -354,13 +359,21 @@ pub enum Refused {
 impl std::fmt::Display for Refused {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Refused::NetworkHasARouter => write!(
-                f,
-                "not handing out addresses: this computer is on another network \
-                 as well as the cable, and handing out addresses there would \
-                 break it for everyone on it. Turn the wifi off, or unplug from \
-                 the wall socket, and the cable will still work on its own."
-            ),
+            Refused::NetworkHasARouter(seen) => match seen {
+                Some(a) => write!(
+                    f,
+                    "not handing out addresses: this computer is still on another \
+                     network, at {a}. Handing out addresses there would break it \
+                     for everyone on it. If you think the wifi is off, check \
+                     again: this is the address it is still holding."
+                ),
+                None => write!(
+                    f,
+                    "not handing out addresses: this computer is on another network \
+                     as well as the cable. Turn the wifi off, or unplug from the \
+                     wall socket, and the cable will still work on its own."
+                ),
+            },
             Refused::NotABareCable => write!(
                 f,
                 "not handing out addresses yet: waiting for this computer to \
@@ -398,14 +411,19 @@ pub fn start(
     // a network for other reasons. A guard with no override gets worked around
     // by worse means.
     if !anyway && !safe_to_offer(addresses, gateway) {
-        let other_network = addresses
+        // The address it is objecting to, so the message can name it.
+        let seen = addresses
             .iter()
-            .any(|a| !a.is_link_local() && !a.is_loopback() && !a.is_unspecified())
-            || matches!(gateway, Some(g) if !g.is_link_local());
-        return Err(if other_network {
-            Refused::NetworkHasARouter
-        } else {
-            Refused::NotABareCable
+            .find(|a| !a.is_link_local() && !a.is_loopback() && !a.is_unspecified())
+            .copied();
+        let routed_gateway = match gateway {
+            Some(g) if !g.is_link_local() => Some(g),
+            _ => None,
+        };
+        return Err(match (seen, routed_gateway) {
+            (Some(a), _) => Refused::NetworkHasARouter(Some(a)),
+            (None, Some(_)) => Refused::NetworkHasARouter(None),
+            (None, None) => Refused::NotABareCable,
         });
     }
     let socket = UdpSocket::bind(("0.0.0.0", SERVER_PORT)).map_err(|e| {

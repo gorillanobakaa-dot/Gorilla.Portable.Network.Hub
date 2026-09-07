@@ -1083,7 +1083,21 @@ impl App {
             if self.naming {
                 f.push("  Or just            gorilla/");
             }
-            f.push_dim(&format!("  addresses         {}", self.cable_note));
+            // Wrapped at a readable measure, not at the window width.
+            //
+            // push() truncates at the terminal's own width, so on a window
+            // stretched across a wide screen this sentence ran the whole way
+            // across in one line and read as broken. Prose needs a measure a
+            // person can follow back to the start of the next line, and that
+            // is not "however wide somebody dragged the window".
+            let measure = f.cols.saturating_sub(22).min(64).max(24);
+            for (i, chunk) in wrap(&self.cable_note, measure).into_iter().enumerate() {
+                if i == 0 {
+                    f.push_dim(&format!("  addresses         {chunk}"));
+                } else {
+                    f.push_dim(&format!("                    {chunk}"));
+                }
+            }
         }
         if self.hotspot.is_some() && port80 {
             // The dnsmasq drop-in answers these names on OUR hotspot only.
