@@ -1,4 +1,11 @@
-// Version: 0.1.0 · updated 26-08-24-23-15
+// Version: 0.2.0 · updated 26-09-07-11-00
+//
+// 0.9.0 rebuilt the picker so nothing is ever typed. Space ticks files and
+// folders at any depth, ticks are held as absolute paths and survive moving
+// between folders, and the served root is the deepest folder containing all of
+// them. Enter only adds, because it is the reflex key and making the reflex
+// key the destructive one cost a real transfer. Also the cable screens, the
+// checkup screen, and a live read of the address supervisor every frame.
 //
 // The screen a teacher actually uses.
 //
@@ -3005,7 +3012,7 @@ mod tests {
     use super::*;
 
     fn scaffold() -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("hub-tab-test-{}", std::process::id()));
+        let d = crate::scratchdir::scratch("tab");
         for sub in ["Pictures", "Public", "Music", "Pictures/Screenshots"] {
             std::fs::create_dir_all(d.join(sub)).unwrap();
         }

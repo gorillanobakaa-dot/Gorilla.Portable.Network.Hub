@@ -1,4 +1,12 @@
-// Version: 0.1.0 · updated 26-08-24-22-45
+// Version: 0.2.0 · updated 26-09-07-11-00
+//
+// 0.9.0 added the distinction between an address we hold and a network we are
+// actually on. Windows keeps an address configured on a disconnected adapter
+// and a socket still selects it, so local_addresses() answered 'where can I be
+// reached' when the guard was asking 'what networks am I on'.
+// connected_addresses() and live_default_gateway() answer the second question
+// by membership testing the platform's own output, never by parsing its
+// labels, which are translated on a system installed in another language.
 //
 // Finding the other machine, and creating the network when there is none.
 //

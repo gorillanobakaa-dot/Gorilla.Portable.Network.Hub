@@ -1,4 +1,11 @@
-// Version: 1.0.0 · updated 26-08-24-23-40
+// Version: 1.1.0 · updated 26-09-07-11-00
+//
+// 0.9.0 added two answerers beside the reverse lookups this file started as:
+// a plain A responder for OUR_NAMES, reachable only by a machine we handed a
+// lease to, and an mDNS responder for LOCAL_NAMES, which needs nothing
+// configured and so keeps working when the address guard refuses. The mDNS
+// socket is built by hand through FFI because UdpSocket::bind cannot set
+// SO_REUSEADDR and a browser already holds 5353.
 //
 // Just enough DNS to ask "what is this device called?".
 //

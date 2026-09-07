@@ -1,4 +1,10 @@
-// Version: 0.1.0 · updated 26-08-24-22-30
+// Version: 0.2.0 · updated 26-09-07-11-00
+//
+// 0.9.0 set ENABLE_VIRTUAL_TERMINAL_INPUT on the input handle. Without it the
+// Windows console never turns an arrow key into the escape sequence the
+// decoder reads, so the key produced no bytes at all and the selector could
+// not be moved. Letters and Enter arrived either way, so the screen looked
+// alive and no released version had ever worked here.
 //
 // The terminal layer: raw mode, size, keys, and a frame that is EXACTLY the
 // height of the screen.

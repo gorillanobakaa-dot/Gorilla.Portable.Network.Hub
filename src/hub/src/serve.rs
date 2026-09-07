@@ -1,5 +1,11 @@
 #![allow(dead_code, unused_imports, clippy::needless_return)]
-// Version: 0.1.0 · updated 26-08-24-16-45
+// Version: 0.2.0 · updated 26-09-07-11-00
+//
+// 0.9.0 sized reads from the measured link speed, moved the port 80 flag to
+// bind time rather than the accept loop, taught the address lines to describe
+// a cable instead of a wifi network, and made stopping a transfer forget
+// everything it learned. That last one is not tidiness: a tick made twenty
+// minutes earlier survived into a later transfer and became the whole of it.
 //
 // A static file server for the wifi bench, and the serving core the classroom
 // tool will need anyway.
@@ -1713,9 +1719,7 @@ mod block_tests {
     }
 
     fn tmproot(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("hub-block-test-{}-{tag}", std::process::id()));
-        let _ = fs::create_dir_all(&d);
-        d
+        crate::scratchdir::scratch(&format!("block-{tag}"))
     }
 
     fn serve_loopback(root: PathBuf) -> u16 {
@@ -1989,7 +1993,7 @@ mod walk_tests {
     }
 
     fn tree(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("hub-walk-{}-{tag}", std::process::id()));
+        let d = crate::scratchdir::scratch(&format!("walk-{tag}"));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(d.join("subject/week1/deep/deeper")).unwrap();
         fs::create_dir_all(d.join("handed-in")).unwrap();
