@@ -55,13 +55,43 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 TARGET=x86_64-unknown-linux-musl
 OUT=$ROOT/src/hub/target/$TARGET/release/hub
 
-command -v zig >/dev/null || { echo "zig is not on PATH" >&2; exit 1; }
+# zig is the preferred linker because one download covers every host, including
+# a Windows machine with no Visual C++ Build Tools. But it is not the only one,
+# and requiring it meant a plain Debian box could not build the Linux release at
+# all, despite Debian shipping a musl toolchain in its own archive:
+#
+#   sudo apt install musl-tools
+#   rustup target add x86_64-unknown-linux-musl
+#
+# Verified on the VAIO 2026-09-07: musl-gcc produced a working static binary of
+# 992,592 bytes that runs and reports its version. NOTE it is static-pie where
+# the zig build is plain static, so the two are not the same size and a figure
+# from one must not be quoted for the other.
+USE=""
+if command -v zig >/dev/null 2>&1; then
+    USE=zig
+elif command -v musl-gcc >/dev/null 2>&1; then
+    USE=musl-gcc
+else
+    echo "Neither zig nor musl-gcc is on PATH." >&2
+    echo "  zig:      https://ziglang.org/download/" >&2
+    echo "  or musl:  sudo apt install musl-tools" >&2
+    echo "and either way: rustup target add x86_64-unknown-linux-musl" >&2
+    exit 1
+fi
+echo "linking with $USE"
 
 # A wrapper, because cargo wants one command and zig needs two words plus a
 # target triple. Written next to the build rather than into the source tree.
 WRAP=$(mktemp -d)
 trap 'rm -rf "$WRAP"' EXIT
-case "$(uname -s 2>/dev/null || echo Windows)" in
+if [ "$USE" = musl-gcc ]; then
+    # musl-gcc is already one command taking cc arguments, so it needs no
+    # wrapper and no target triple. cargo is told to use it directly.
+    LINKER=musl-gcc
+    export CC_x86_64_unknown_linux_musl=musl-gcc
+fi
+[ "$USE" = musl-gcc ] || case "$(uname -s 2>/dev/null || echo Windows)" in
     MINGW*|MSYS*|CYGWIN*|Windows)
         printf '@echo off\r\nzig cc -target x86_64-linux-musl %%*\r\n' > "$WRAP/zigcc.bat"
         LINKER="$WRAP/zigcc.bat"
@@ -122,14 +152,43 @@ case "$(uname -s 2>/dev/null || echo Windows)" in
         ;;
 esac
 
-CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="$LINKER" CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C target-feature=+crt-static -C link-self-contained=no"     "$CARGO" $TOOLCHAIN build --release --target "$TARGET"
+# link-self-contained differs between the two linkers, and getting it wrong
+# fails at the link step with a message that names neither.
+#
+#   zig      ships its own musl CRT. Leaving rustc's self-contained objects in
+#            as well duplicates _start and the link fails on a symbol clash,
+#            which is why this is "no" for zig.
+#   musl-gcc ships the CRT but NOT libunwind, so rustc's self-contained objects
+#            are the only source of it. With "no" the link fails on
+#            "cannot find -lunwind", which reads like a missing system package
+#            and is not one.
+if [ "$USE" = musl-gcc ]; then
+    RFLAGS="-C target-feature=+crt-static"
+else
+    RFLAGS="-C target-feature=+crt-static -C link-self-contained=no"
+fi
+CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="$LINKER" CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="$RFLAGS"     "$CARGO" $TOOLCHAIN build --release --target "$TARGET"
 
 # Verify rather than assume. A dynamically linked artifact here would work on
 # the build machine and fail on the machines this exists for, which is the
 # worst way for it to fail.
-if command -v file >/dev/null; then
+#
+# The test is "does it need an interpreter", not "does file say the words
+# statically linked". A static-pie binary IS static, and the zig build and the
+# musl-gcc build disagree on which of the two phrasings `file` prints, so the
+# literal check rejected a perfectly good binary and would have sent somebody
+# hunting a linking fault that did not exist. An ELF that needs no PT_INTERP
+# loads with no dynamic loader present, which is the property being claimed.
+if command -v readelf >/dev/null 2>&1; then
+    command -v file >/dev/null && file "$OUT"
+    if readelf -l "$OUT" 2>/dev/null | grep -q "INTERP"; then
+        echo "Needs a dynamic loader. NOT static. Do not ship this." >&2
+        exit 1
+    fi
+    echo "verified: no interpreter, so it needs no loader on the target"
+elif command -v file >/dev/null; then
     file "$OUT"
-    file "$OUT" | grep -q "statically linked" || {
+    file "$OUT" | grep -qE "statically linked|static-pie linked" || {
         echo "NOT statically linked. Do not ship this." >&2
         exit 1
     }
