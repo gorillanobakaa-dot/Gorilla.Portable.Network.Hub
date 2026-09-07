@@ -157,6 +157,142 @@ pub fn local_addresses() -> Vec<Ipv4Addr> {
     found
 }
 
+/// The default gateway, but only if something is actually answering as it.
+///
+/// WHY THE PLAIN ONE IS NOT ENOUGH. On Windows and Mac default_gateway() is a
+/// guess: ".1 of whatever subnet we are on", derived from a source address the
+/// kernel picks. When an adapter is disconnected Windows keeps its address, so
+/// the guess survives the network it was guessed from, and the address server
+/// refused to start because of a router on a network the machine had already
+/// left. That was reported twice as the program not noticing the wifi being
+/// turned off.
+///
+/// Asking whether the address is CONNECTED fixes most of it and leaves one
+/// hole: a machine that is on a live network but has just released its address
+/// has no connected address either, and is exactly the machine that must not
+/// be served DHCP. So the question asked here is the one that actually
+/// matters, which is not "is there an address" but "is there a router".
+///
+/// A router that has spoken to this machine is in the neighbour table. When
+/// the adapter goes down the entry goes with it, verified on the machine:
+///
+///   wifi up    10.29.128.1  00-fe-ed-c0-ff-ee  dynamic
+///   wifi off   gone
+///
+/// Read by membership of the address, never by the words around it, so it does
+/// not care what language the machine is installed in.
+pub fn live_default_gateway() -> Option<Ipv4Addr> {
+    let gw = default_gateway()?;
+    // A link-local gateway is a guess about a cable and is never a router:
+    // RFC 3927 forbids forwarding link-local traffic.
+    if gw.is_link_local() {
+        return None;
+    }
+    let out = std::process::Command::new("arp").arg("-a").output().ok()?;
+    if !out.status.success() {
+        // Cannot tell. Report it, because the caller treats a gateway as a
+        // reason to stand down and being over-cautious is the safe direction.
+        return Some(gw);
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    if mentions_address(&text, gw) {
+        Some(gw)
+    } else {
+        None
+    }
+}
+
+/// The addresses this machine holds on interfaces that are actually connected.
+///
+/// WHY local_addresses() IS NOT ENOUGH. It asks the kernel which source
+/// address it would use to reach a target, which is the right question for
+/// "where can I be reached" and the wrong one for "what networks am I on".
+/// Windows keeps an address configured on an adapter after the adapter has
+/// disconnected, and a UDP socket will still choose it:
+///
+///   ipconfig             Media disconnected, no address listed
+///   Get-NetIPAddress     10.29.136.94
+///   connect(8.8.8.8)     picks 10.29.136.94
+///
+/// So the address server refused to start on a laptop whose wifi had been off
+/// for four minutes, saying "this computer is still on another network, at
+/// 10.29.136.94" while nothing was on that network at all. Reported, twice, as
+/// the program failing to notice the wifi being turned off. It had noticed
+/// nothing, because it was asking a question whose answer does not change when
+/// a radio is switched off.
+///
+/// HOW THIS ANSWERS IT WITHOUT READING LABELS. The platform's own tool already
+/// leaves out interfaces that are down: a disconnected adapter has no address
+/// line in ipconfig at all. So rather than parse "IPv4 Address" (which is
+/// translated on a Windows installed in any other language, and this program is
+/// for Kabul and Bamako as much as anywhere), the addresses we already hold are
+/// tested for MEMBERSHIP in that output. A stale address appears nowhere in it.
+/// Nothing here depends on a word.
+///
+/// Falls back to local_addresses() if the tool cannot be run, because refusing
+/// to serve at all is worse than the caution being imperfect.
+pub fn connected_addresses() -> Vec<Ipv4Addr> {
+    let held = local_addresses();
+    if held.is_empty() {
+        return held;
+    }
+
+    let text = {
+        use std::process::Command;
+        #[cfg(target_os = "windows")]
+        let out = Command::new("ipconfig").output();
+        #[cfg(target_os = "linux")]
+        let out = Command::new("ip").args(["-4", "-o", "addr", "show", "up"]).output();
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        let out = Command::new("ifconfig").output();
+
+        match out {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).into_owned(),
+            _ => return held, // cannot tell: keep every address, stay cautious
+        }
+    };
+
+    // An address counts as connected when the tool mentions it. Masks and
+    // gateways appear in that text too and are harmless here: only addresses
+    // this machine actually holds are ever looked up.
+    let connected: Vec<Ipv4Addr> = held
+        .iter()
+        .copied()
+        .filter(|a| mentions_address(&text, *a))
+        .collect();
+
+    // If the parse produced nothing at all, something is wrong with the
+    // assumption rather than with the network. Fall back rather than declare
+    // the machine to be on no network, which would switch the guard OFF.
+    if connected.is_empty() {
+        held
+    } else {
+        connected
+    }
+}
+
+/// Does this text contain this address, as a whole address?
+///
+/// Bounded so that 10.29.136.9 does not match inside 10.29.136.94, which would
+/// make a machine look connected on the strength of somebody else's address.
+fn mentions_address(text: &str, a: Ipv4Addr) -> bool {
+    let want = a.to_string();
+    let mut from = 0;
+    while let Some(i) = text[from..].find(&want) {
+        let start = from + i;
+        let end = start + want.len();
+        let before_ok = start == 0
+            || !text.as_bytes()[start - 1].is_ascii_digit() && text.as_bytes()[start - 1] != b'.';
+        let after_ok = end >= text.len()
+            || !text.as_bytes()[end].is_ascii_digit() && text.as_bytes()[end] != b'.';
+        if before_ok && after_ok {
+            return true;
+        }
+        from = start + 1;
+    }
+    false
+}
+
 /// The default gateway, read from the kernel's own routing table.
 #[cfg(target_os = "linux")]
 pub fn default_gateway() -> Option<Ipv4Addr> {
@@ -1269,6 +1405,34 @@ impl Hotspot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 10.29.136.9 must not match inside 10.29.136.94, or a machine looks
+    /// connected on the strength of a different address entirely.
+    #[test]
+    fn an_address_is_matched_whole_and_not_as_a_prefix() {
+        let text = "   IPv4 Address. . . . . : 10.29.136.94
+   Mask: 255.255.240.0
+";
+        assert!(mentions_address(text, "10.29.136.94".parse().unwrap()));
+        assert!(!mentions_address(text, "10.29.136.9".parse().unwrap()));
+        // A substring that is a valid address in its own right.
+        let text2 = "   addr 110.29.136.941 and 10.29.136.94
+";
+        assert!(mentions_address(text2, "10.29.136.94".parse().unwrap()));
+        assert!(!mentions_address(text, "10.29.136.4".parse().unwrap()));
+    }
+
+    #[test]
+    fn a_disconnected_adapters_address_is_absent_from_the_tools_output() {
+        // What ipconfig prints for an adapter whose media is disconnected:
+        // a header and a state, and no address at all.
+        let text = "Wireless LAN adapter Wi-Fi:
+
+   Media State . . . : Media disconnected
+";
+        assert!(!mentions_address(text, "10.29.136.94".parse().unwrap()));
+    }
+
     use std::net::TcpListener;
 
     /// The sweep is the thing that makes discovery work in a room that has a

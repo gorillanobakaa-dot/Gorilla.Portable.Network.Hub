@@ -324,15 +324,25 @@ pub fn safe_to_offer(addresses: &[Ipv4Addr], gateway: Option<Ipv4Addr>) -> bool 
         return false;
     }
 
-    // A link-local gateway is not a gateway.
+    // A router, if one is really there.
     //
-    // On Windows and Mac net::default_gateway() does not read the routing
-    // table: it answers ".1 of whatever subnet we are on", which is right for
-    // a home router and meaningless on a cable. On a bare cable that guess
-    // comes back as 169.254.x.1, and reading it as "there is a router here"
-    // switched this off on exactly the machines it was written for. RFC 3927
-    // is explicit that link-local traffic is never forwarded, so nothing on
-    // 169.254/16 can be a router by definition.
+    // Three versions of this line have been wrong, each found by somebody
+    // switching their wifi off and watching nothing happen.
+    //
+    // The first treated any gateway as proof of a router, so on a bare cable
+    // the invented 169.254.x.1 switched the feature off on exactly the
+    // machines it exists for. The second ignored link-local gateways, which
+    // left the real case: with the wifi off Windows keeps the address on the
+    // disconnected adapter, so the guess was still 10.29.136.1 and still not
+    // link-local, and the guard refused because of a router on a network the
+    // machine had already left.
+    //
+    // The caller now passes a gateway that has been checked against the
+    // neighbour table, so a gateway arriving here is one something is actually
+    // answering for. Refusing on it is right, and it is the case that protects
+    // a machine which is on a live network but has not been given an address
+    // yet: no routable address, and a live router, is still somebody's
+    // network.
     let real_router = matches!(gateway, Some(g) if !g.is_link_local());
     if real_router {
         return false;
@@ -422,8 +432,14 @@ pub fn supervise(
         let mut serving = false;
         while !stop.load(Ordering::Relaxed) {
             if !serving {
-                let addresses = crate::net::local_addresses();
-                let gateway = crate::net::default_gateway();
+                // Connected addresses, not merely configured ones. Windows
+                // keeps an address on an adapter after it disconnects, and a
+                // socket still picks it, so local_addresses() reports a network
+                // that is not there and the guard refuses for no reason.
+                let addresses = crate::net::connected_addresses();
+                // Checked against the neighbour table: a gateway nothing
+                // answers for is a leftover, not a router.
+                let gateway = crate::net::live_default_gateway();
                 let ours = addresses
                     .iter()
                     .copied()
@@ -454,17 +470,46 @@ pub fn supervise(
                     // Not safe yet. Say why, currently, and keep looking: the
                     // whole point is that this sentence can stop being true
                     // while somebody is reading it.
-                    let seen = addresses
+                    // Report the whole basis for the decision, not a
+                    // conclusion drawn from it.
+                    //
+                    // "still on another network, at 10.29.136.94" was shown at
+                    // a moment when ipconfig listed no such address, and there
+                    // was no way to tell from the screen whether the program
+                    // was looking at something stale, at an interface ipconfig
+                    // was not showing, or at nothing at all. A message that
+                    // states its evidence can be checked; one that states only
+                    // a verdict can be believed or disbelieved and nothing
+                    // else.
+                    let routable: Vec<String> = addresses
                         .iter()
-                        .find(|a| !a.is_link_local() && !a.is_loopback() && !a.is_unspecified())
-                        .copied();
+                        .filter(|a| !a.is_link_local() && !a.is_loopback() && !a.is_unspecified())
+                        .map(|a| a.to_string())
+                        .collect();
+                    let cable: Vec<String> = addresses
+                        .iter()
+                        .filter(|a| a.is_link_local())
+                        .map(|a| a.to_string())
+                        .collect();
+                    let gw = match gateway {
+                        Some(g) => g.to_string(),
+                        None => "none".to_string(),
+                    };
                     let mut n = note.lock().unwrap_or_else(|e| e.into_inner());
-                    *n = match seen {
-                        Some(a) => format!(
-                            "waiting. This computer is still on another network, at {a}. \
-                             Turn that off and this will start on its own, within a few seconds."
-                        ),
-                        None => "waiting for this computer to settle on a cable address.".into(),
+                    *n = if !routable.is_empty() {
+                        format!(
+                            "waiting. On another network: {}. Route out: {}. Cable: {}.",
+                            routable.join(", "),
+                            gw,
+                            if cable.is_empty() { "none yet".to_string() } else { cable.join(", ") }
+                        )
+                    } else if cable.is_empty() {
+                        format!("waiting: no address at all yet. Route out: {gw}.")
+                    } else {
+                        format!(
+                            "waiting: route out is {gw}, which is not a cable. Cable: {}.",
+                            cable.join(", ")
+                        )
                     };
                 }
             }
@@ -688,6 +733,20 @@ mod tests {
         let cable_only = [Ipv4Addr::new(169, 254, 87, 61)];
         assert!(safe_to_offer(&cable_only, None));
         assert!(safe_to_offer(&cable_only, Some(Ipv4Addr::new(169, 254, 87, 1))));
+    }
+
+    /// A live router still stops it, even with no routable address of our own.
+    ///
+    /// That is the case a machine is in when it is plugged into a school
+    /// network and has not been given an address yet, which is precisely the
+    /// network that must not be served DHCP. Whether a gateway is live is
+    /// net::live_default_gateway's job; by the time one arrives here it has
+    /// been checked, so this refuses on it.
+    #[test]
+    fn a_live_router_stops_it_even_before_we_have_an_address() {
+        let cable_only = [Ipv4Addr::new(169, 254, 87, 61)];
+        assert!(!safe_to_offer(&cable_only, Some(Ipv4Addr::new(10, 29, 136, 1))));
+        assert!(safe_to_offer(&cable_only, None));
     }
 
     /// Loopback is always there and is not another network.
