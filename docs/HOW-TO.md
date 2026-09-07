@@ -243,10 +243,20 @@ two pounds, and on most laptops made since about 2005 you do not need a special
    hub cable ~/lessons
    ```
 
-4. It prints what it is doing and an address beginning `http://169.254.`
+4. It prints what it is doing, and a name: **gorilla.local**
 
-5. On the other computer, either open the screen and choose **Get files from
-   another computer**, or type:
+5. On the other computer, open any web browser and type:
+
+   ```
+   gorilla.local
+   ```
+
+   That is the whole thing. No numbers, no dots to get right. Some computers
+   will offer to open the page by themselves, the same way a hotel wifi does,
+   in which case there is nothing to type at all.
+
+   If the name does not work, the address it printed always will. And if you
+   would rather run the program on the second computer too:
 
    ```
    hub cable-get

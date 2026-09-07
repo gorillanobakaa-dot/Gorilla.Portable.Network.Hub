@@ -154,6 +154,9 @@ machine.
 | [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) | every screen, photographed on real hardware |
 | [docs/0.9.0-WHAT-CHANGED.md](docs/0.9.0-WHAT-CHANGED.md) | what 0.9.0 added, in plain language, including what is not yet proven |
 | [docs/0.9.0-DEVELOPER-NOTES.md](docs/0.9.0-DEVELOPER-NOTES.md) | the same release as an audit trail: every decision, what was abandoned, and why |
+| [docs/0.9.0-WHAT-CHANGED-PART-2.md](docs/0.9.0-WHAT-CHANGED-PART-2.md) | what the owner found by using it, in plain language, including a near miss |
+| [docs/0.9.0-DEVELOPER-NOTES-PART-2.md](docs/0.9.0-DEVELOPER-NOTES-PART-2.md) | three stale-state faults in the address guard, and how each was measured |
+| [bench/cable/](bench/cable/) | testing the cable with the network genuinely off, unattended |
 | [bench/](bench/) | the raw research: source reading, measurements, corrections, open questions |
 
 Both tracks are complete. The layman one is a different language, not a
