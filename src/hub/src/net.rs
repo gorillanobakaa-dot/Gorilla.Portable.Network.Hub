@@ -41,6 +41,23 @@ const KNOWN_HOTSPOT_GATEWAYS: [&str; 3] = ["10.42.0.1", "192.168.137.1", "192.16
 /// to answer a question this already answers.
 pub fn source_address_for(target: Ipv4Addr) -> Option<Ipv4Addr> {
     let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
+    // Broadcast targets need this permission before connect() will touch them.
+    //
+    // One of the probes above is 169.254.255.255, added specifically so a
+    // machine with wifi up could still see the cable in its other socket.
+    // Connecting a UDP socket to a broadcast address without SO_BROADCAST is
+    // refused by the kernel with EACCES, so that probe failed every single
+    // time, on every Linux, and the feature it was written for never worked.
+    // The routing was never the problem. Measured on the VAIO, cable up,
+    // holding 169.254.87.1:
+    //
+    //   ip route get 169.254.255.255 -> broadcast ... dev enp3s0 src 169.254.87.1
+    //   connect(169.254.255.255)     -> EACCES, Permission denied
+    //   connect(169.254.87.61)       -> 169.254.87.1, correct
+    //
+    // The kernel knew the answer throughout. The socket was not allowed to ask.
+    // Failure to set it is not fatal: a non-broadcast probe still works.
+    let _ = sock.set_broadcast(true);
     sock.connect(SocketAddr::new(IpAddr::V4(target), 9)).ok()?;
     match sock.local_addr().ok()? {
         SocketAddr::V4(a) if !a.ip().is_unspecified() => Some(*a.ip()),
