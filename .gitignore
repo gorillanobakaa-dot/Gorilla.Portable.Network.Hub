@@ -36,3 +36,6 @@ bench/results/capture-*/
 # rather than committed, so a clone is source and not binaries
 dist/
 packaging/build/
+
+__pycache__/
+*.pyc

@@ -156,6 +156,9 @@ machine.
 | [docs/0.9.0-DEVELOPER-NOTES.md](docs/0.9.0-DEVELOPER-NOTES.md) | the same release as an audit trail: every decision, what was abandoned, and why |
 | [docs/0.9.0-WHAT-CHANGED-PART-2.md](docs/0.9.0-WHAT-CHANGED-PART-2.md) | what the owner found by using it, in plain language, including a near miss |
 | [docs/0.9.0-DEVELOPER-NOTES-PART-2.md](docs/0.9.0-DEVELOPER-NOTES-PART-2.md) | three stale-state faults in the address guard, and how each was measured |
+| [docs/0.9.0-HANDOVER-TO-THE-LINUX-SIDE.md](docs/0.9.0-HANDOVER-TO-THE-LINUX-SIDE.md) | what the Linux side still has to settle, and why each question is asked |
+| [docs/0.9.1-WHAT-CHANGED.md](docs/0.9.1-WHAT-CHANGED.md) | a test that failed once in twenty-five runs, and why a rerun was the wrong answer |
+| [docs/0.9.1-DEVELOPER-NOTES.md](docs/0.9.1-DEVELOPER-NOTES.md) | the same, as an audit trail: the diagnostic, the measurements, and what is still not proven |
 | [bench/cable/](bench/cable/) | testing the cable with the network genuinely off, unattended |
 | [bench/](bench/) | the raw research: source reading, measurements, corrections, open questions |
 

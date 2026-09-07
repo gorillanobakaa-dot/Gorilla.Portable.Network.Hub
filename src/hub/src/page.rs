@@ -1,4 +1,8 @@
-// Version: 1.0.0 · updated 26-08-25-07-40
+// Version: 1.1.0 · updated 26-09-07-11-00
+//
+// 0.9.0 added the accept page and the sender's name to the set of hostnames
+// the page answers to, so gorilla.local reaches it as readily as an address
+// nobody wants to type.
 //
 // The class page: what a kid's browser sees, and everything it can send back.
 //
@@ -1181,19 +1185,8 @@ pub fn accept_page(root: &Path, from: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
-    use std::sync::atomic::{AtomicU32, Ordering};
-
-    static DIR_N: AtomicU32 = AtomicU32::new(0);
-
     fn tmpdir() -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "hub-page-test-{}-{}",
-            std::process::id(),
-            DIR_N.fetch_add(1, Ordering::Relaxed)
-        ));
-        std::fs::create_dir_all(&d).unwrap();
-        d
+        crate::scratchdir::scratch("page")
     }
 
     /// Hands the parser its bytes three at a time, so a boundary that

@@ -256,7 +256,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn tree(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("hub-zip-{}-{tag}", std::process::id()));
+        let d = crate::scratchdir::scratch(&format!("zip-{tag}"));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(d.join("subject/week1")).unwrap();
         std::fs::write(d.join("notes.txt"), b"top level").unwrap();

@@ -15,6 +15,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 mod sha256;
+#[cfg(test)]
+mod scratchdir;
 mod term;
 mod dns;
 mod net;
