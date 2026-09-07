@@ -1,5 +1,46 @@
 gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
 
+  * THE CABLE ADDRESS IS VISIBLE AGAIN. Sending down a cable said "no cable
+    address yet. Wait half a minute and look again." forever, while holding
+    a perfectly good address and serving on it. The probe that finds a cable
+    aims at 169.254.255.255, which is a broadcast address, and connecting a
+    socket to one without asking for broadcast permission is refused by the
+    kernel every time. So the probe written to fix this exact symptom had
+    never once succeeded. One line. It also restores two things nobody knew
+    were missing: `hub doctor` now lists the cable address alongside the
+    wifi one, and the sending screen offers `gorilla.local` again, which was
+    only ever printed when a cable address was known.
+  * Port 80 says what is actually wrong. It reported "port 80 belongs to
+    something else" whatever the cause, and on Linux the usual cause is not
+    a clash at all: ports under 1024 need a permission, so the bind is
+    refused while port 80 sits empty. Being told a free port is taken sends
+    people hunting a web server that does not exist. It now separates the
+    two, and when it is a permission it names sudo and the .deb.
+  * The Arch package declared the wrong licence. packaging/PKGBUILD said
+    MIT while the LICENSE file, the Debian copyright and both README.txt
+    files said AGPL-3.0, so pacman reported one licence and the package
+    installed the text of another. The value was written out in two files,
+    which is how they drifted, so build-arch.sh now reads it from the
+    PKGBUILD and a test fails if either stops naming the AGPL.
+  * The test suite stopped failing at random. Running it gave one failure
+    per run and a different test each time, while running it one test at a
+    time passed every time. The device-blocking tests all talk to 127.0.0.1
+    and cargo runs them in parallel, so one test blocked the address another
+    was mid-request on. They now take a lock. A suite that fails randomly
+    teaches people to re-run it until it is green.
+  * Installing tells you when port 80 was not granted, instead of saying
+    nothing. The capability is a Recommends, which apt honours and `dpkg -i`
+    does not, and `dpkg -i` is what the release page tells people to run.
+  * This changelog's top entry had been stamped with each new version while
+    still describing the 0.8.0 folder work, so recent packages shipped the
+    wrong release notes under the right number. Frozen at 0.8.0 where it
+    belongs. 0.9.0 and 0.9.1 have no entry here and none is invented; their
+    notes are on the GitHub releases page.
+
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+
+gorilla-portable-network-hub (0.8.0) unstable; urgency=medium
+
   * FOLDERS ARE HANDED OUT. Pointing this at a folder used to offer only
     the files sitting loose at the top level, while everything inside a
     subfolder was silently left out of every list. A teacher's folder has
@@ -29,7 +70,7 @@ gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
     the 2026-08-22 ruling against compressing on a weak laptop stands;
     this is boxing, not squeezing.
 
- -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  Mon, 25 Aug 2026 19:00:00 +0100
 
 gorilla-portable-network-hub (0.7.1) unstable; urgency=medium
 

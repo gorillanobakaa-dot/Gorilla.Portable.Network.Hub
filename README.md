@@ -211,6 +211,9 @@ it.
 | **0.9.1, a test-harness fix and packaging that verifies itself** | |
 | the same 0.9.1 built for Windows | 828,928 |
 | 0.9.1 built for Linux, static, runs on any distribution | 913,016 |
+| **0.9.2, the cable address, the port 80 message and the licence** | |
+| 0.9.2 built for Linux, static, with musl-gcc rather than zig | 992,592 |
+| the same 0.9.2 built for Windows | not measured yet |
 
 The 0.9.0 rows above said 700,416 and 858,160 until 0.9.1. Both were measured
 before the icon was embedded and never updated, so the table understated the
@@ -219,6 +222,14 @@ quietly, because a table of costs that is not checked is worth less than no
 table: the numbers now match what the release page actually serves. 0.9.1 adds
 nothing to either binary, which is what a release touching only comments and
 test code should do, and is why the figures repeat.
+
+The 0.9.2 Linux figure is measured but is NOT comparable with the rows above
+it, and is marked with its linker for that reason. Every earlier Linux binary
+was linked by zig and is plain static; this one was linked by musl-gcc on a
+Debian machine and is static-pie, which is a different layout, not 79,576 bytes
+of new program. 0.9.2 adds no features. The two numbers can only be compared
+once the same release is built both ways, and saying so is cheaper than a table
+that quietly compares two different things.
 
 On the connections this is for, the whole program is about a minute of
 somebody's life. Everything it gained since the first release cost 246,744
@@ -237,13 +248,13 @@ Built packages for all three are on the
 **Debian, Ubuntu, Mint:**
 
 ```
-sudo dpkg -i gorilla-portable-network-hub_0.9.1_amd64.deb
+sudo dpkg -i gorilla-portable-network-hub_0.9.2_amd64.deb
 ```
 
 **Arch, CachyOS, Manjaro:**
 
 ```
-sudo pacman -U gorilla-portable-network-hub-0.9.1-1-x86_64.pkg.tar.zst
+sudo pacman -U gorilla-portable-network-hub-0.9.2-1-x86_64.pkg.tar.zst
 ```
 
 Or from source with `makepkg -si` in `packaging/`. The Arch package is
