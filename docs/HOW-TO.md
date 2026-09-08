@@ -44,6 +44,13 @@ back to about 2009. That is the whole requirement on their side.
 
 ## Install it
 
+> **A note on 0.9.6.** The Windows download is on the release page now. The
+> `.deb` and the Arch package have to be built on a Linux machine, and at the
+> time of writing that has not happened yet, so the newest ones on the page
+> are **0.9.5**. Nothing in 0.9.6 changes anything on Linux: the one fix in it
+> is a message that only ever appeared on Windows. So 0.9.5 is the right thing
+> to install there, and you are not missing anything by using it.
+
 ### On Debian, Ubuntu or Mint
 
 1. Download `gorilla-portable-network-hub_0.9.5_amd64.deb` from the releases
@@ -86,13 +93,15 @@ makepkg -si
 
 ### On Windows
 
-1. Download `hub-0.9.5-windows-x86_64.zip` and unzip it anywhere.
+1. Download `hub-0.9.6-windows-x86_64.zip` and unzip it anywhere.
 2. Switch the hotspot on yourself: **Settings**, then **Network and internet**,
    then **Mobile hotspot**. Write down the network name and password Windows
    shows you.
 3. Double-click `hub.exe`.
 
-- **Pass:** a screen appears offering *Hand out files to the class*.
+- **Pass:** a screen appears offering *Hand out files to the class*, with
+  `hub 0.9.6` written at the top of it. Right-click `hub.exe`, choose
+  **Properties**, then **Details**, and it says 0.9.6 there too.
 - **Fail:** Windows may warn that it does not recognise the program. That
   warning appears for any program without a paid signing certificate. Choose
   **More info**, then **Run anyway**, or do not run it. Both are reasonable.
