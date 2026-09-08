@@ -217,6 +217,8 @@ it.
 | **0.9.3, the first screen says which version it is** | |
 | 0.9.3 built for Linux, static, with musl-gcc rather than zig | 992,592 |
 | the same 0.9.3 built for Windows | not measured yet |
+| **0.9.5, a hint that fits the window** | |
+| 0.9.5 built for Linux, static, with musl-gcc rather than zig | 1,000,784 |
 | **0.9.4, names instead of addresses, and a code for a camera** | |
 | 0.9.4 built for Linux, static, with musl-gcc rather than zig | 1,000,784 |
 | the same 0.9.4 cross-built for Windows, with mingw rather than MSVC | 844,800 |
@@ -228,6 +230,9 @@ quietly, because a table of costs that is not checked is worth less than no
 table: the numbers now match what the release page actually serves. 0.9.1 adds
 nothing to either binary, which is what a release touching only comments and
 test code should do, and is why the figures repeat.
+
+0.9.5 is the same size as 0.9.4 to the byte, at 1,000,784: it removes ten
+characters from one hint line and adds a test.
 
 0.9.4 costs 8,192 bytes over 0.9.3, measured. That is the whole of it: asking
 a machine what it is called, refusing to promise a name another machine already
@@ -271,13 +276,13 @@ Built packages for all three are on the
 **Debian, Ubuntu, Mint:**
 
 ```
-sudo dpkg -i gorilla-portable-network-hub_0.9.4_amd64.deb
+sudo dpkg -i gorilla-portable-network-hub_0.9.5_amd64.deb
 ```
 
 **Arch, CachyOS, Manjaro:**
 
 ```
-sudo pacman -U gorilla-portable-network-hub-0.9.4-1-x86_64.pkg.tar.zst
+sudo pacman -U gorilla-portable-network-hub-0.9.5-1-x86_64.pkg.tar.zst
 ```
 
 Or from source with `makepkg -si` in `packaging/`. The Arch package is

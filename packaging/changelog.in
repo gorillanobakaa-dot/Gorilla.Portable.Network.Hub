@@ -1,5 +1,33 @@
 gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
 
+  * THE PICKER'S HINT LINE RAN OFF THE EDGE OF THE WINDOW. "c clears every
+    tick", added in 0.9.4, pushed that line to 77 columns. The window it was
+    photographed in is 72, so it ended "esc goes" and the key for leaving the
+    screen was not on it. Shortened to "c clears all", 67 columns, next to the
+    66 of the hint it replaces.
+  * A guard for it, checked at 72 columns as well as 80. The first version of
+    that guard used 80 alone, passed, and would have let the same fault
+    through, because 77 fits in 80. 72 is not a guess: it is the width of the
+    window in the screenshot, counted from the line that was cut. A terminal
+    nobody has maximised is the one to design for.
+  * A test that asserted the wording rather than the key. It checked for the
+    exact string "c clears every tick", so shortening the hint turned the
+    suite red for a reason unrelated to what the test guards, which is that a
+    tick held in another folder can be removed at all. It now checks for
+    "c clears".
+
+  Cut as its own release rather than folded in, because 0.9.4 is tagged and
+  its Linux packages are published. Shipping different code under one number
+  is the drift the version test in this repository exists to catch, and doing
+  it deliberately would be worse than the fault being fixed.
+
+  No change to the program's size: 1,000,784 bytes, the same as 0.9.4. This
+  release removes ten characters from one line and adds a test.
+
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+
+gorilla-portable-network-hub (0.9.4) unstable; urgency=medium
+
   * THE OTHER COMPUTER IS NAMED, NOT NUMBERED. "Get files from another
     computer" listed what it found as "169.254.87.1    4 files". Nothing has
     to be typed to choose it, but a teacher cannot tell which machine four
@@ -40,7 +68,7 @@ gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
     running the Windows binary under wine when it is there. Both of the
     cross-platform faults above compiled cleanly and would have shipped.
 
- -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  Mon, 08 Sep 2026 10:20:00 +0100
 
 gorilla-portable-network-hub (0.9.3) unstable; urgency=medium
 
