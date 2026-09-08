@@ -1,4 +1,4 @@
-Gorilla Portable Network Hub 0.9.7  -  Windows
+Gorilla Portable Network Hub 0.9.8  -  Windows
 
 WHAT THIS IS
 A laptop that becomes the network. It hands a folder to every device in the

@@ -159,6 +159,8 @@ machine.
 | [docs/0.9.0-HANDOVER-TO-THE-LINUX-SIDE.md](docs/0.9.0-HANDOVER-TO-THE-LINUX-SIDE.md) | what the Linux side still has to settle, and why each question is asked |
 | [docs/0.9.1-WHAT-CHANGED.md](docs/0.9.1-WHAT-CHANGED.md) | a test that failed once in twenty-five runs, and why a rerun was the wrong answer |
 | [docs/0.9.1-DEVELOPER-NOTES.md](docs/0.9.1-DEVELOPER-NOTES.md) | the same, as an audit trail: the diagnostic, the measurements, and what is still not proven |
+| [docs/0.9.8-WHAT-CHANGED.md](docs/0.9.8-WHAT-CHANGED.md) | one fewer thing to type, because somebody actually checked |
+| [docs/0.9.8-DEVELOPER-NOTES.md](docs/0.9.8-DEVELOPER-NOTES.md) | settling a judgement call with a controlled experiment, and why over-reporting is unfalsifiable |
 | [docs/0.9.7-WHAT-CHANGED.md](docs/0.9.7-WHAT-CHANGED.md) | the laptop is not broken, somebody switched part of it off: in plain language |
 | [docs/0.9.7-DEVELOPER-NOTES.md](docs/0.9.7-DEVELOPER-NOTES.md) | diagnosing a modified machine, why the message is the feature, and what is only reasoned |
 | [docs/0.9.6-WHAT-CHANGED.md](docs/0.9.6-WHAT-CHANGED.md) | a line that told every Windows laptop it had no wifi, in plain language |
@@ -221,6 +223,9 @@ it.
 | **0.9.3, the first screen says which version it is** | |
 | 0.9.3 built for Linux, static, with musl-gcc rather than zig | 992,592 |
 | the same 0.9.3 built for Windows | not measured yet |
+| **0.9.8, one fewer service to switch on, measured** | |
+| **0.9.8 built for Windows, as published** | **842,752** |
+| 0.9.8 built for Linux, cross-built here with zig, never published | 922,600 |
 | **0.9.7, telling somebody their laptop was switched off, not broken** | |
 | **0.9.7 built for Windows, as published** | **842,752** |
 | 0.9.7 built for Linux, cross-built here with zig, never published | 922,600 |
@@ -241,6 +246,9 @@ quietly, because a table of costs that is not checked is worth less than no
 table: the numbers now match what the release page actually serves. 0.9.1 adds
 nothing to either binary, which is what a release touching only comments and
 test code should do, and is why the figures repeat.
+
+0.9.8 is the same size as 0.9.7 to the byte, at 842,752. It removes one entry
+from a list of two lines and adds a test, and those happen to cancel out.
 
 0.9.7 costs 3,584 bytes on Windows over 0.9.6, 839,168 to 842,752. Almost all
 of that is the text itself: a page of plain English explaining that two

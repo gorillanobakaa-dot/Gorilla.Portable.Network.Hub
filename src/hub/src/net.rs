@@ -1078,14 +1078,39 @@ pub fn wifi_interface() -> Option<String> {
 /// off and what turning it on would do; it does not tell anybody to fight
 /// their own IT department. The command needs Administrator, so nobody can
 /// follow this advice without already having the right to.
-const HOTSPOT_SERVICES: [(&str, &str); 3] = [
+///
+/// TWO SERVICES, NOT THREE. WFDSConMgrSvc, the Wi-Fi Direct Services
+/// Connection Manager, was in this list in 0.9.7 and has been measured out.
+///
+/// The argument for it was reasonable: Windows 11 builds its hotspot on Wi-Fi
+/// Direct rather than the old hosted-network path, so its connection manager
+/// looks like it has to be involved. It is not a declared dependency of either
+/// service below, so it was listed last and asked for separately.
+///
+/// Settled by running it, 2026-09-08, on this machine. Both services below set
+/// to Manual, WFDSConMgrSvc deliberately left Disabled and Stopped:
+///
+///   manager created: YES, ssid 'WIN-VR6KGAH3RAF 5437', band Auto
+///   operational state: On
+///   adapters up: Wi-Fi, Ethernet, Local Area Connection* 2
+///
+/// That third adapter is the virtual access point. The hotspot did not merely
+/// report itself configurable, it ran, with the service that was supposed to be
+/// necessary switched off throughout.
+///
+/// Taking it out is not tidying. A message that names three services when two
+/// are the problem sends somebody to change something that did not matter, and
+/// destroys the evidence of which change did: the next person to look at that
+/// laptop cannot tell which one mattered. That reasoning is already a test
+/// here, `the_advice_does_not_name_services_that_are_fine`, and it applies to
+/// the list itself and not only to the filtering.
+const HOTSPOT_SERVICES: [(&str, &str); 2] = [
     ("icssvc", "Windows Mobile Hotspot Service"),
+    // Never actually RAN in either measurement: set to Manual and left
+    // Stopped, hotspot included. It has to be startable, not started, which is
+    // why the advice asks for Set-Service on it and Start-Service only on
+    // icssvc.
     ("SharedAccess", "Internet Connection Sharing"),
-    // Not a declared dependency of either of the two above, and listed last
-    // for that reason. Windows 11 builds its hotspot on Wi-Fi Direct rather
-    // than the old hosted-network path, so this is the next thing to reach for
-    // when the first two are on and it still refuses.
-    ("WFDSConMgrSvc", "Wi-Fi Direct Services Connection Manager"),
 ];
 
 /// The `Start` value out of one `reg query` result, or None.
@@ -2016,6 +2041,30 @@ mod switched_off_tests {
         let s = switched_off_advice(&off).expect("advice");
         assert!(!s.contains("SharedAccess"), "names a service that is on:\n{s}");
         assert!(!s.contains("WFDSConMgrSvc"), "names a service that is on:\n{s}");
+    }
+
+    /// The list holds only what was measured to matter.
+    ///
+    /// WFDSConMgrSvc was in it in 0.9.7, on the reasoning that Windows 11
+    /// builds its hotspot on Wi-Fi Direct so Wi-Fi Direct's connection manager
+    /// must be involved. Reasonable, and wrong. Measured 2026-09-08 with the
+    /// two below set to Manual and that one deliberately left Disabled and
+    /// Stopped: the hotspot reached operational state On and the virtual access
+    /// point appeared as its own adapter.
+    ///
+    /// This test exists because the argument for putting it back is more
+    /// persuasive than the argument for leaving it out, and the argument is
+    /// beaten by a measurement. If somebody adds a third service here, they
+    /// should have to delete this and say why.
+    #[test]
+    fn the_list_holds_only_services_measured_to_matter() {
+        assert_eq!(HOTSPOT_SERVICES.len(), 2, "a service was added without a measurement");
+        assert!(
+            !HOTSPOT_SERVICES.iter().any(|(s, _)| *s == "WFDSConMgrSvc"),
+            "WFDSConMgrSvc was measured NOT to be needed; the hotspot started with it Disabled"
+        );
+        assert!(HOTSPOT_SERVICES.iter().any(|(s, _)| *s == "icssvc"));
+        assert!(HOTSPOT_SERVICES.iter().any(|(s, _)| *s == "SharedAccess"));
     }
 
     /// Asking a real machine must not panic, hang, or invent a fault.

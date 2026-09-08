@@ -44,15 +44,15 @@ back to about 2009. That is the whole requirement on their side.
 
 ## Install it
 
-> **A note on 0.9.6 and 0.9.7.** Both are Windows releases, and both are on
-> the release page. The `.deb` and the Arch package have to be built on a
-> Linux machine, and at the time of writing that has not happened, so the
-> newest ones there are **0.9.5**.
+> **A note on 0.9.6, 0.9.7 and 0.9.8.** All three are Windows releases and all
+> three are on the release page. The `.deb` and the Arch package have to be
+> built on a Linux machine, and at the time of writing that has not happened,
+> so the newest ones there are **0.9.5**.
 >
-> **Neither release changes anything on Linux.** 0.9.6 corrects a sentence
-> that only ever appeared on Windows, and 0.9.7 adds a check for pieces of
-> Windows being switched off, which is not a thing that exists on Linux. So
-> 0.9.5 is the right thing to install there and you are not missing anything.
+> **None of them changes anything on Linux.** They correct a sentence that
+> only ever appeared on Windows, and add a check for pieces of Windows being
+> switched off, which is not a thing that exists on Linux. So 0.9.5 is the
+> right thing to install there and you are not missing anything.
 
 ### On Debian, Ubuntu or Mint
 
@@ -96,15 +96,15 @@ makepkg -si
 
 ### On Windows
 
-1. Download `hub-0.9.7-windows-x86_64.zip` and unzip it anywhere.
+1. Download `hub-0.9.8-windows-x86_64.zip` and unzip it anywhere.
 2. Switch the hotspot on yourself: **Settings**, then **Network and internet**,
    then **Mobile hotspot**. Write down the network name and password Windows
    shows you.
 3. Double-click `hub.exe`.
 
 - **Pass:** a screen appears offering *Hand out files to the class*, with
-  `hub 0.9.7` written at the top of it. Right-click `hub.exe`, choose
-  **Properties**, then **Details**, and it says 0.9.7 there too.
+  `hub 0.9.8` written at the top of it. Right-click `hub.exe`, choose
+  **Properties**, then **Details**, and it says 0.9.8 there too.
 - **Fail:** Windows may warn that it does not recognise the program. That
   warning appears for any program without a paid signing certificate. Choose
   **More info**, then **Run anyway**, or do not run it. Both are reasonable.
@@ -520,6 +520,12 @@ box, and the laptop looks broken.
 switched off and prints the exact lines to type. If it says nothing about
 services, this is not your problem and something else is going on.
 
+**This has been tested, not just reasoned about.** On the laptop these
+instructions were written on, the two lines below turned an empty, refusing
+Mobile hotspot page into a working one with a name and password filled in,
+and the hotspot then switched on. Undoing them brought the fault straight
+back, which is how we know it was the cause and not a coincidence.
+
 **To fix it:** open Windows Terminal or PowerShell **as administrator**.
 Right-click the Start button and choose the entry with **(Admin)** after it.
 Then type these, one line at a time:
@@ -533,16 +539,13 @@ Start-Service icssvc
 Open **Settings**, **Network and internet**, **Mobile hotspot** again. The name
 and password boxes should now be filled in.
 
-**If it still refuses**, there is one more:
-
-```powershell
-Set-Service WFDSConMgrSvc -StartupType Manual
-```
-
-That is *Wi-Fi Direct Services Connection Manager*. Windows 11 builds its
-hotspot on Wi-Fi Direct, so it is the next thing to try. It is listed second
-because it is not formally required, and changing one thing at a time is how
-you find out what actually mattered.
+**That is the whole fix.** An earlier version of this page suggested a third
+service, *Wi-Fi Direct Services Connection Manager* (`WFDSConMgrSvc`), on the
+reasoning that Windows 11 builds its hotspot on Wi-Fi Direct. It was tested
+properly on 8 September 2026, with that service deliberately left switched
+off, and the hotspot started anyway. So it is not needed and the line has been
+removed. One less thing to type, and one less thing changed on a machine that
+somebody else may have to look at later.
 
 **Nothing is being installed and nothing is being removed.** `Manual` is the
 setting Windows ships with. This puts them back where they started; it does not

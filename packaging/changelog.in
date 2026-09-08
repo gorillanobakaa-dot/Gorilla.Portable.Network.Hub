@@ -1,5 +1,52 @@
 gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
 
+  * ONE FEWER THING TO TYPE, BECAUSE IT WAS MEASURED. 0.9.7 named three
+    switched-off services and asked for three Set-Service lines. The third,
+    WFDSConMgrSvc, the Wi-Fi Direct Services Connection Manager, was in the
+    list on reasoning rather than evidence: Windows 11 builds its hotspot on
+    Wi-Fi Direct, so its connection manager looks like it has to be involved.
+    It is not a declared dependency of either of the others, which is why it
+    was listed last and asked for separately, and why 0.9.7 said out loud that
+    it was a judgement call.
+  * Settled by running it. Both other services set to Manual, WFDSConMgrSvc
+    deliberately left Disabled and Stopped: the tethering manager built, gave
+    up a name, a passphrase and a band, and the hotspot then reached
+    operational state On with the virtual access point appearing as its own
+    adapter. It did not merely report itself configurable. It ran, with the
+    service that was supposed to be necessary switched off throughout.
+  * So it is out. This is not tidying. A message that names three services
+    when two are the problem sends somebody to change something that did not
+    matter and destroys the evidence of which change did, so the next person
+    to look at that laptop cannot tell. That reasoning was already a test in
+    this file and it applies to the list itself, not only to the filtering.
+  * A test guards it, because the argument for putting it back is more
+    persuasive than the argument for leaving it out, and an argument is beaten
+    by a measurement. Anybody adding a third service has to delete that test
+    and say why.
+  * The whole of 0.9.7's advice is now measured rather than reasoned. Before:
+    CreateFromConnectionProfile failed with 0x83120001, which is exactly what
+    the Settings page is reporting when it shows an empty box. After the two
+    lines: configurable, then On. Undone: 0x83120001 again. The fault returns
+    when the change is undone, which is what makes it a cause and not a
+    coincidence.
+  * Also recorded: SharedAccess never RAN in any of the three runs. It has to
+    be startable, not started, which is why the advice asks for Set-Service on
+    it and Start-Service only on icssvc.
+  * bench/hotspot-services-test.ps1 and bench/hotspot-service-isolation.ps1
+    are the two scripts, kept in the repository rather than in somebody's temp
+    folder. Both capture the before-state rather than assume it, do the work in
+    a try and restore in a finally, which is bench/cable/'s shape and exists
+    for the same reason.
+
+  NOTHING IN THIS RELEASE CHANGES ANYTHING ON LINUX.
+
+  116 tests.
+
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+
+
+gorilla-portable-network-hub (0.9.7) unstable; urgency=medium
+
   * THE LAPTOP IS NOT BROKEN, IT HAS BEEN SWITCHED OFF. Windows Settings
     answers a request for a mobile hotspot with "We can't set up mobile
     hotspot" and an EMPTY properties box: no name, no password, no band.
