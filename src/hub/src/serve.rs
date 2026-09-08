@@ -2014,74 +2014,54 @@ mod block_tests {
         let root = tmproot("agent");
         let port = serve_loopback(root.clone());
 
-        // Ask up to three times, and say why that is not papering over a fault.
+        // Asked once, because there is a real lock now.
         //
-        // WHAT WAS MEASURED. This test failed roughly three times in forty full
-        // parallel runs, on this tree and on pristine v0.9.1 alike, so it is not
-        // new and not caused by the lock added above. The failure said only
-        // "left: None".
+        // This used to ask three times, and the comment on it named the wrong
+        // cause. It said a handler that answered but stored nothing must have
+        // read the request before its headers arrived, and asked whoever came
+        // next to audit the request read loop. That was a guess dressed as a
+        // finding, and the guess was wrong.
         //
-        // WHAT None ACTUALLY MEANS HERE. note_agent() drops a User-Agent it
-        // cannot describe, so a stored entry always classifies to Some. None is
-        // therefore not a wrong label, it is no entry at all. The added
-        // assertion below proves the server did answer, so the request WAS
-        // handled. A handler that ran, answered, and stored nothing found no
-        // "User-Agent:" line in the request text it had read, and the header is
-        // only ever taken once per address:
+        // The cause was found on the Windows side: block_tests and walk_tests
+        // held two different locks, which is no lock at all, and walk_tests
+        // calls forget_session(), which clears AGENTS along with everything
+        // else. The header was stored and then wiped by a sibling test. Both
+        // modules take SESSION_LOCK now.
         //
-        //     if !knows_agent(&peer_ip) { ...find the header... }
-        //
-        // So the likely cause is a request read before all its headers had
-        // arrived. Over loopback that is rare, which matches the rate. It is
-        // worth someone checking whether the request read loop reads until the
-        // blank line that ends the headers, or once and hopes. If it is the
-        // latter the same thing can happen to a real device on a real network,
-        // where a split across packets is ordinary rather than rare, and the
-        // symptom out there is only a device labelled "unknown", which nobody
-        // would ever report as a bug.
-        //
-        // Retrying is honest for THIS test because the property under test is
-        // "a real header off a real socket reaches the store", not "it arrives
-        // in one packet". A genuine break still fails all three attempts.
+        // Retrying is removed rather than left in. It hid a real fault for as
+        // long as it was there, and a retry nobody can justify is the thing a
+        // later reader trusts instead of the lock.
+        let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        write!(
+            s,
+            "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\
+             User-Agent: Mozilla/5.0 (Linux; Android 13; 2109119DG) Mobile Safari/537.36\r\n\
+             Connection: close\r\n\r\n"
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        let _ = s.read_to_end(&mut out);
+        assert!(
+            !out.is_empty(),
+            "the server never answered, so nothing could have been recorded"
+        );
+
+        // The header is stored by whichever helper thread took the request,
+        // not by this one, so it lands shortly after the reply.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut seen = None;
-        for _ in 0..3 {
-            AGENTS.lock().unwrap_or_else(|e| e.into_inner()).retain(|(ip, _)| ip != "127.0.0.1");
-
-            let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect");
-            s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
-            write!(
-                s,
-                "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\
-                 User-Agent: Mozilla/5.0 (Linux; Android 13; 2109119DG) Mobile Safari/537.36\r\n\
-                 Connection: close\r\n\r\n"
-            )
-            .unwrap();
-            let mut out = Vec::new();
-            let _ = s.read_to_end(&mut out);
-            assert!(
-                !out.is_empty(),
-                "the server never answered, so nothing could have been recorded"
-            );
-
-            // The header is stored by the helper thread that took the request,
-            // not by this one, so it appears shortly after the reply.
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-            while std::time::Instant::now() < deadline {
-                seen = agent_label("127.0.0.1");
-                if seen.is_some() {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
+        while std::time::Instant::now() < deadline {
+            seen = agent_label("127.0.0.1");
             if seen.is_some() {
                 break;
             }
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
-
         assert_eq!(
             seen.as_deref(),
             Some("an Android phone"),
-            "the User-Agent did not reach the store in three attempts"
+            "the User-Agent did not reach the store"
         );
         let _ = fs::remove_dir_all(&root);
     }

@@ -50,6 +50,23 @@ fi
 PORT=8099                  # our own test server, away from anything real
 
 P=0; F=0; S=0
+SERVE_PID=""
+
+# Clean up on the way out, whatever the way out is.
+#
+# The Windows side made this point about these scripts and it was right: the
+# check that decides whether to CLEAN UP must not be the check that decides
+# whether the thing WORKED. This killed the server on the last line, so a
+# ctrl-c, a failed assertion that exited early, or any error before that line
+# left a file server running on somebody's network and the watchdog running
+# with it. Cleanup now runs on "we started it at all".
+cleanup() {
+    [ -n "$SERVE_PID" ] && kill "$SERVE_PID" 2>/dev/null
+    # timeout(1) is the parent; the hub is its child and outlives it otherwise.
+    [ -n "$SERVE_PID" ] && pkill -P "$SERVE_PID" 2>/dev/null
+    "$HERE/network-watchdog.sh" stop >/dev/null 2>&1
+}
+trap cleanup EXIT INT TERM
 say(){ printf '%s\n' "$*" | tee -a "$LOG"; }
 sec(){ say ""; say "======== $* ========"; }
 ok(){  printf '%-4s %-5s %s\n' PASS "$1" "$2" >>"$SUM"; say "[PASS] $1 $2"; P=$((P+1)); }
@@ -80,9 +97,20 @@ else
 
     # Fetch one file two ways and compare. Same bytes from the browser path and
     # the download path, or one of them is lying.
+    # Ask the peer what it HAS rather than assuming it still serves the folder
+    # it served last week. This named readme.txt, and when the far end changed
+    # what it was handing out the checks reported 404 as a fault in the code.
+    # A test that only passes against one folder on one laptop is the same
+    # mistake as hardcoding that laptop's interface names.
     D="$RESULTS/recv-$STAMP"; mkdir -p "$D"
-    code "http://$WIN/readme.txt" "$D/plain.txt" >/dev/null
-    code "http://$WIN/readme.txt?dl=1" "$D/dl.txt" >/dev/null
+    PEER_LIST="$RESULTS/peer-list-$STAMP.txt"
+    timeout 15 curl -s "http://$WIN/?list" -o "$PEER_LIST" 2>/dev/null
+    # size <TAB> name, smallest first so the byte comparisons stay cheap.
+    SUBJECT=$(sort -n "$PEER_LIST" 2>/dev/null | head -1 | cut -f2-)
+    say "  peer is handing out $(wc -l < "$PEER_LIST" 2>/dev/null) file(s); using '${SUBJECT:-none}'"
+    SUBJ_URL=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))" "$SUBJECT" 2>/dev/null)
+    code "http://$WIN/$SUBJ_URL" "$D/plain.txt" >/dev/null
+    code "http://$WIN/$SUBJ_URL?dl=1" "$D/dl.txt" >/dev/null
     if [ -s "$D/plain.txt" ] && cmp -s "$D/plain.txt" "$D/dl.txt"; then
         ok A3 "a file fetched with and without ?dl=1 is byte identical"
     else
@@ -91,7 +119,7 @@ else
 
     # Resume. The help claims files are served in pieces that can be asked for
     # individually, which is what makes a dropped signal survivable.
-    RANGE=$(timeout 15 curl -s -r 0-9 -o "$D/range.bin" -w '%{http_code}' "http://$WIN/readme.txt" 2>/dev/null)
+    RANGE=$(timeout 15 curl -s -r 0-9 -o "$D/range.bin" -w '%{http_code}' "http://$WIN/$SUBJ_URL" 2>/dev/null)
     got=$(stat -c %s "$D/range.bin" 2>/dev/null || echo 0)
     if [ "$RANGE" = 206 ] && [ "$got" = 10 ]; then
         ok A4 "a range request returns 206 and exactly the 10 bytes asked for"
@@ -115,13 +143,20 @@ print(len(z.namelist()))
     fi
 
     # Folder structure has to survive the archive, not be flattened.
-    if python3 -c "
+    # Only a question worth asking when the peer is serving folders at all.
+    # Reported as a fault when the far end was handing out a single loose file,
+    # which is not the archive flattening anything.
+    if grep -q "/" "$PEER_LIST" 2>/dev/null; then
+        if python3 -c "
 import zipfile,sys
 n=zipfile.ZipFile('$D/everything.zip').namelist()
 sys.exit(0 if any('/' in x for x in n) else 1)" 2>/dev/null; then
-        ok A6 "the archive keeps folders rather than flattening them"
+            ok A6 "the archive keeps folders rather than flattening them"
+        else
+            no A6 "the archive has no nested paths, folders were flattened"
+        fi
     else
-        no A6 "the archive has no nested paths, folders were flattened"
+        sk A6 "the peer is serving no folders, so there is nothing to flatten"
     fi
     # The headline claim: nothing typed. It listens for the sender's beacon on
     # UDP 42424 rather than being told an address, so this is run from an empty
@@ -139,12 +174,12 @@ sys.exit(0 if any('/' in x for x in n) else 1)" 2>/dev/null; then
     fi
 
     # And what it fetched has to be the same bytes the web path serves.
-    if [ -f "$G/readme.txt" ] && [ -s "$D/plain.txt" ]; then
-        cmp -s "$G/readme.txt" "$D/plain.txt" \
+    if [ -n "$SUBJECT" ] && [ -f "$G/$SUBJECT" ] && [ -s "$D/plain.txt" ]; then
+        cmp -s "$G/$SUBJECT" "$D/plain.txt" \
           && ok A8 "a file taken by cable-get matches the same file over HTTP" \
-          || no A8 "cable-get and HTTP returned different bytes for readme.txt"
+          || no A8 "cable-get and HTTP returned different bytes for $SUBJECT"
     else
-        sk A8 "readme.txt not present on both paths to compare"
+        sk A8 "$SUBJECT not present on both paths to compare"
     fi
 fi
 
@@ -160,6 +195,7 @@ echo "secret" > "$ROOT/.hidden/secret.txt"
 echo "child work" > "$ROOT/handed-in/homework.txt"
 
 setsid nohup timeout 120 "$HUB" serve "$ROOT" --port $PORT >"$RESULTS/serve-$STAMP.log" 2>&1 &
+SERVE_PID=$!
 sleep 5
 
 c=$(code "http://127.0.0.1:$PORT/")
@@ -337,7 +373,10 @@ else
     sk E4 "nothing landed to ask for"
 fi
 
-for p in $(pgrep -f "$HUB serve"); do kill "$p" 2>/dev/null; done
+# The server is stopped by the trap, not here: pgrep -f on a pattern that also
+# appears in this script's own command line has already killed the wrong thing
+# once today.
+cleanup
 sleep 1
 
 sec "Totals"

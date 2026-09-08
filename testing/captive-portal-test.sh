@@ -47,7 +47,25 @@ CABLE_DEV="$(for d in /sys/class/net/*/; do n=$(basename "$d"); [ "$n" = lo ] &&
              [ -e "$d/wireless" ] && continue
              [ "$(cat "$d/carrier" 2>/dev/null)" = 1 ] && { echo "$n"; break; }; done)"
 
-say "portal-test  window=${WINDOW}s  wifi=$WIFI_DEV/'$WIFI_CON'  cable=${CABLE_DEV:-none}"
+# The restore timers below are armed before anything is switched off and fire
+# whatever happens, which is the important half. This trap is the other half:
+# the things that are merely untidy if the script is interrupted, rather than
+# dangerous. It must not decide anything based on whether the test succeeded.
+DBUS_PID=""
+WATCHDOG_WAS_UP=0
+cleanup() {
+    [ -n "$DBUS_PID" ] && kill "$DBUS_PID" 2>/dev/null
+    # Bring wifi back here too rather than trusting the timers alone. They are
+    # the belt; this is the one that runs immediately on a ctrl-c.
+    nmcli radio wifi on >/dev/null 2>&1
+    nmcli device connect "$WIFI_DEV" >/dev/null 2>&1 \
+        || nmcli connection up "$WIFI_CON" >/dev/null 2>&1
+    [ "$WATCHDOG_WAS_UP" = 1 ] && "$HERE/network-watchdog.sh" start --lifetime 600 >/dev/null 2>&1
+    true
+}
+trap cleanup EXIT INT TERM
+
+say "captive-portal-test  window=${WINDOW}s  wifi=$WIFI_DEV/'$WIFI_CON'  cable=${CABLE_DEV:-none}"
 
 if [ -z "$WIFI_DEV" ] || [ -z "$WIFI_CON" ]; then
     say "ABORT: no connected wifi to restore afterwards. Refusing to switch anything off."
@@ -112,8 +130,6 @@ if "$HERE/network-watchdog.sh" is-running; then
     say "standing the watchdog down for the duration (it would undo this test)"
     "$HERE/network-watchdog.sh" stop >>"$LOG" 2>&1
     WATCHDOG_WAS_UP=1
-else
-    WATCHDOG_WAS_UP=0
 fi
 
 # ---------------------------------------------------------------- capture
