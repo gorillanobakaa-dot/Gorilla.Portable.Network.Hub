@@ -26,7 +26,7 @@
 // a second. A five second freeze on a teacher's laptop, in front of a class, is
 // not a trade worth three lines. Here the timeout is ours.
 
-use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddr, ToSocketAddrs, UdpSocket};
 use std::time::Duration;
 
 /// Ask `server` what `ip` is called. None means no answer, which is normal:
@@ -700,6 +700,70 @@ fn shared_udp(port: u16) -> std::io::Result<UdpSocket> {
 ///
 /// Unlike the plain resolver this needs no guard. It answers for two names it
 /// owns, on the local link only, which is what mDNS is for.
+/// Is another machine on this link already answering to our .local name?
+///
+/// WHY THIS EXISTS. The name is a fixed constant and there was no check, so
+/// two machines both running the hub both answered to it, and each resolved
+/// it to ITSELF. Measured on the cable, 2026-09-08, with a hub running at both
+/// ends: `gorilla.local` gave 169.254.87.1 on the Debian laptop and the
+/// Windows machine on the Windows laptop. The sending screen says "they can
+/// type gorilla.local", so following that instruction took a person to their
+/// own machine, which served a page and looked exactly like it had worked.
+///
+/// This asks the question before making the promise. It does not rename to
+/// gorilla-2.local: a person who has to know WHICH name to type is worse off
+/// than one who is told plainly to use the list instead.
+///
+/// Answering false on any error is deliberate. This decides whether to print
+/// one sentence, and a network hiccup must not stop the name being offered on
+/// a link where it would have worked.
+pub fn name_is_taken(us: Ipv4Addr, patience: Duration) -> bool {
+    // Ask the way the PERSON will ask.
+    //
+    // The first two attempts sent multicast queries directly. Both reported
+    // the name free while `gorilla.local` demonstrably resolved to the machine
+    // at the other end of the cable, because std's UdpSocket cannot choose
+    // which interface a multicast query leaves by, so the question went out of
+    // the wifi and never down the cable it was about.
+    //
+    // The resolver has no such problem, and it is the thing that actually
+    // answers when somebody types the name, so it is the right thing to ask.
+    // Being wrong here is cheap in one direction only: saying "taken" when it
+    // is free costs one unnecessary sentence, while saying "free" when it is
+    // taken is the silent failure this exists to stop.
+    let deadline = std::time::Instant::now() + patience;
+    let mut taken = false;
+    let name = LOCAL_NAMES[0];
+    while std::time::Instant::now() < deadline && !taken {
+        if let Ok(addrs) = (name, 0u16).to_socket_addrs() {
+            for a in addrs {
+                if let SocketAddr::V4(v4) = a {
+                    let ip = *v4.ip();
+                    // Ourselves does not count, in any of our own addresses.
+                    //
+                    // Comparing against the one address we are serving on is
+                    // not enough: this machine holds a wifi address as well as
+                    // the cable one, and an answer naming either of them is
+                    // still us. Getting that wrong would refuse to offer a
+                    // name that works perfectly.
+                    let ours = ip == us
+                        || ip.is_loopback()
+                        || ip.is_unspecified()
+                        || crate::net::local_addresses().contains(&ip);
+                    if !ours {
+                        taken = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if !taken {
+            std::thread::sleep(Duration::from_millis(150));
+        }
+    }
+    taken
+}
+
 pub fn start_mdns(
     us: Ipv4Addr,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,

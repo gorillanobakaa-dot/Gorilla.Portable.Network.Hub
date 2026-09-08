@@ -1,5 +1,49 @@
 gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
 
+  * THE OTHER COMPUTER IS NAMED, NOT NUMBERED. "Get files from another
+    computer" listed what it found as "169.254.87.1    4 files". Nothing has
+    to be typed to choose it, but a teacher cannot tell which machine four
+    numbers and three dots are, and in a room with two of them there is no
+    way to find out. It now reads "Teacher's laptop    4 files". The name was
+    already travelling in the beacon and on the page, so the numbers were
+    standing in front of an answer the program already had.
+  * gorilla.local can no longer quietly mean "this computer". The name was a
+    fixed constant with no check, so two machines both running this both
+    answered to it and each resolved it to ITSELF. Following the sending
+    screen's own advice took a person to their own machine, which served a
+    page and looked exactly like it had worked. It now asks before promising,
+    and when the name is taken it says so and points at the list instead. It
+    does not rename to gorilla-2.local: somebody who has to know WHICH name
+    to type is worse off than somebody told plainly to use the list.
+  * A code for a camera on a cable. "Join by camera" had nothing to offer
+    without a wifi password and said so, which left phones and tablets, the
+    devices that most need a camera, reading an address off a terminal and
+    typing it by hand. It now puts the page address in the code.
+  * Ticks made in another folder are named, and one key clears them all.
+    Ticking a file while an earlier tick was still held somewhere else gave
+    "SEND THE 2 TICKED" with one box ticked on screen and no way to find or
+    remove the other. Press c to clear every tick.
+  * A file count that had been capped now says so. The walk stops at 100,000
+    and records that it stopped; the picker threw that away, so a folder of
+    150,000 files was announced as "100001 files chosen" and 50,000 of them
+    would never have been sent.
+  * cable-get says where the files are going. It printed "to fetch into ..",
+    because the default is "." and the sentence ended in a full stop, and ".."
+    in a path is the folder ABOVE. It now names the folder in full, and on
+    Windows without the \\?\ prefix that canonicalize adds.
+  * "0.0 MB in 1 pieces" is now "49 B in 1 piece".
+  * The port 80 note gives the remedy for the system it is printed on. It said
+    "needs administrator rights on Linux ... install the .deb" on Windows,
+    where none of that is true and there is no .deb to install.
+  * packaging/check-both-builds.sh builds both targets from the one tree and
+    checks that per-system text landed only in the system it belongs to,
+    running the Windows binary under wine when it is there. Both of the
+    cross-platform faults above compiled cleanly and would have shipped.
+
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+
+gorilla-portable-network-hub (0.9.3) unstable; urgency=medium
+
   * THE FIRST SCREEN SAYS WHICH VERSION IT IS. The menu is the way in for
     most people and it was the one screen that never named the build, so
     somebody reporting that something does not work was looking at it with
@@ -16,7 +60,7 @@ gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
   * Costs nothing: 992,592 bytes, the same as 0.9.2 to the byte. The
     version string was already in the binary for `--version`.
 
- -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  Sun, 07 Sep 2026 18:00:00 +0100
 
 gorilla-portable-network-hub (0.9.2) unstable; urgency=medium
 

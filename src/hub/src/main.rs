@@ -50,6 +50,27 @@ Everything works with no internet. Making a wifi network needs administrator
 rights; joining one that already exists needs nothing at all. A cable between
 two computers needs neither, and is the fastest way to move a lot at once.";
 
+/// A path a person can read, with Windows' verbatim prefix taken off.
+///
+/// canonicalize() on Windows returns an extended-length path, so the folder a
+/// teacher is told their work went into reads `\\?\C:\Users\...`. That
+/// prefix is for the API, not for people, and it is exactly the kind of thing
+/// that makes somebody think the program has gone wrong.
+fn plain_path(p: &std::path::Path) -> String {
+    let s = p.display().to_string();
+    #[cfg(windows)]
+    {
+        return s.strip_prefix(r"\\?\UNC\")
+            .map(|rest| format!(r"\\{rest}"))
+            .or_else(|| s.strip_prefix(r"\\?\").map(|rest| rest.to_string()))
+            .unwrap_or(s);
+    }
+    #[cfg(not(windows))]
+    {
+        s
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     // No arguments opens the screen rather than printing usage and stopping.
@@ -277,8 +298,19 @@ hub cable  -  hand a folder down a cable to one other computer
         .copied()
         .find(|a| a.is_link_local())
         .unwrap_or(std::net::Ipv4Addr::new(169, 254, 1, 1));
+    // Ask whether the name is free BEFORE promising it, and before starting our
+    // own responder so we are not hearing ourselves answer.
+    let name_taken = dns::name_is_taken(ours, std::time::Duration::from_millis(700));
     if dns::start_mdns(ours, stop.clone()).is_ok() {
-        println!("  name           they can type  gorilla.local  instead of an address");
+        if name_taken {
+            println!("  name           NOT offered: another computer here already answers to");
+            println!("                 gorilla.local, so typing it would reach that one, or");
+            println!("                 whichever answers first. Use the address above, or on");
+            println!("                 the other computer choose \"Get files from another");
+            println!("                 computer\" and pick this one from the list by name.");
+        } else {
+            println!("  name           they can type  gorilla.local  instead of an address");
+        }
     }
 
     // And the address server, watched rather than decided once.
@@ -392,7 +424,19 @@ hub cable-get  -  take everything from the computer on the other end of a cable
         std::process::exit(1);
     }
 
-    println!("{} file(s) to fetch into {into}.", files.len());
+    // Name the real folder, and never let a full stop touch the path.
+    //
+    // This printed "{into}." with into defaulting to ".", so a run in the
+    // current folder announced "4 file(s) to fetch into ..". In a path, ".."
+    // is the folder ABOVE, so the one line that says where the work is going
+    // named the wrong place. Reported from a real Windows run.
+    //
+    // Showing the resolved absolute path also answers the question a person
+    // actually has, which is not "what did I type" but "where will these be".
+    let shown = std::fs::canonicalize(&into)
+        .map(|p| plain_path(&p))
+        .unwrap_or_else(|_| into.clone());
+    println!("{} file(s) to fetch into {shown}", files.len());
     let mut failed = Vec::new();
     for (i, f) in files.iter().enumerate() {
         // The slash matters. url_path() escapes the name and does not add

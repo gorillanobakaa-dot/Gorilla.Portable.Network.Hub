@@ -1110,11 +1110,31 @@ hub serve  -  hand out the files in a folder to every device in the room
     if !on_port_80() {
         match port80_why() {
             WHY_PERMISSION => {
-                println!("note: port 80 needs administrator rights on Linux, so joining");
-                println!("      phones will NOT be brought here by the sign-in screen.");
-                println!("      Everything else works. To get it, either run this with");
-                println!("      sudo, or install the .deb, which grants it once at");
-                println!("      install so you never type sudo again.");
+                // The reason is the same everywhere, the remedy is not, and a
+                // remedy for the wrong system is worse than none: it sends
+                // somebody looking for a package manager they do not have.
+                println!("note: port 80 was refused, so joining phones will NOT be");
+                println!("      brought here by the sign-in screen. Everything else works.");
+                #[cfg(target_os = "linux")]
+                {
+                    println!("      Ports under 1024 need a permission on Linux. Either run");
+                    println!("      this with sudo, or install the .deb, which grants it once");
+                    println!("      at install so you never type sudo again.");
+                }
+                #[cfg(target_os = "macos")]
+                {
+                    println!("      Ports under 1024 need a permission on macOS. Run this");
+                    println!("      with sudo to get it.");
+                }
+                #[cfg(windows)]
+                {
+                    // Windows does not reserve low ports the way Unix does, so
+                    // a refusal here is normally http.sys holding the port for
+                    // something else, IIS or Skype being the usual pair.
+                    println!("      Windows has not let this program have port 80. Usually");
+                    println!("      another program has reserved it: IIS, Skype or Windows");
+                    println!("      itself. Close it, or run this as administrator.");
+                }
             }
             WHY_TAKEN => {
                 println!("note: another program is already using port 80, so joining");
@@ -1398,6 +1418,18 @@ fn serve_one(
         // file, size then a tab then the name.
         if query.contains("list") {
             return respond(&mut out, 200, "text/plain; charset=utf-8", plain_listing(root, root).as_bytes()).map(|_| keep);
+        }
+        // `?who` is how another copy asks what to CALL this machine, so the
+        // receiving screen can offer "Teacher's laptop" instead of an address.
+        //
+        // A separate endpoint rather than a line added to `?list`, because a
+        // 0.9.3 machine and a 0.9.4 one have to keep working together: an
+        // older copy answers this with its ordinary page, the asker sees no
+        // usable name and falls back to the address, which is what it showed
+        // before. Changing the shape of `?list` would instead have made one
+        // version misread the other's file list.
+        if query.contains("who") {
+            return respond(&mut out, 200, "text/plain; charset=utf-8", crate::page::sender().as_bytes()).map(|_| keep);
         }
         mark_page_seen(&peer_ip);
         let done = query.strip_prefix("done=");

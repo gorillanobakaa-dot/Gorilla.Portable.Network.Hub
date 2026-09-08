@@ -387,7 +387,7 @@ pub fn candidate_servers() -> Vec<Ipv4Addr> {
 /// switched off does not refuse a connection, it says nothing at all, so each
 /// dead candidate costs the full 400 ms. In parallel the whole sweep costs 400
 /// ms regardless of how many are dead.
-pub fn find_servers(port: u16) -> Vec<(Ipv4Addr, usize)> {
+pub fn find_servers(port: u16) -> Vec<(Ipv4Addr, usize, String)> {
     let quick = ask_all(candidate_servers(), port);
     if !quick.is_empty() {
         return quick;
@@ -445,7 +445,7 @@ fn sweep_subnet(me: Ipv4Addr, port: u16) -> Vec<Ipv4Addr> {
 }
 
 /// Ask each address what it is handing out, all at once.
-fn ask_all(addrs: Vec<Ipv4Addr>, port: u16) -> Vec<(Ipv4Addr, usize)> {
+fn ask_all(addrs: Vec<Ipv4Addr>, port: u16) -> Vec<(Ipv4Addr, usize, String)> {
     let mut handles = Vec::new();
     for ip in addrs {
         handles.push(std::thread::spawn(move || {
@@ -457,10 +457,58 @@ fn ask_all(addrs: Vec<Ipv4Addr>, port: u16) -> Vec<(Ipv4Addr, usize)> {
             // things out, from an empty folder, which the teacher can fix.
             // Something that is not this program will fail to answer at all.
             let count = list_over(&mut sock, ip, port).ok()?.len();
-            Some((ip, count))
+            // And ask what it calls itself, so the person choosing sees a name
+            // rather than four numbers and three dots. Asked on its own socket
+            // and allowed to fail: a machine running an older copy has no
+            // answer for this, and an empty name simply means the address is
+            // shown, which is what happened before this existed.
+            let name = ask_name(ip, port).unwrap_or_default();
+            Some((ip, count, name))
         }));
     }
     handles.into_iter().filter_map(|h| h.join().ok().flatten()).collect()
+}
+
+/// What the machine at `ip` calls itself, if it is new enough to say.
+///
+/// Deliberately forgiving. Anything unexpected here is not worth failing a
+/// discovery over: the caller falls back to the address, which is the older
+/// behaviour and always works.
+fn ask_name(ip: Ipv4Addr, port: u16) -> Option<String> {
+    let addr = SocketAddr::new(IpAddr::V4(ip), port);
+    let mut sock = TcpStream::connect_timeout(&addr, PROBE_TIMEOUT).ok()?;
+    sock.set_read_timeout(Some(PROBE_TIMEOUT)).ok()?;
+    sock.set_write_timeout(Some(PROBE_TIMEOUT)).ok()?;
+    write!(sock, "GET /?who HTTP/1.1\r\nHost: {ip}:{port}\r\nConnection: close\r\n\r\n").ok()?;
+    let mut raw = Vec::new();
+    sock.take(4096).read_to_end(&mut raw).ok()?;
+    let text = String::from_utf8_lossy(&raw);
+    usable_name(text.split("\r\n\r\n").nth(1)?)
+}
+
+/// Is this reply a name, or an older copy's whole web page?
+///
+/// Split out so it can be tested without a socket. Every rejection here means
+/// the caller shows the address instead, which is the behaviour that existed
+/// before names did, so being strict costs nothing and being loose would put
+/// a page of HTML in a menu row.
+pub(crate) fn usable_name(body: &str) -> Option<String> {
+    let body = body.trim();
+    if body.is_empty() || body.starts_with('<') {
+        return None;
+    }
+    // One line, and short enough to sit in a menu row next to a file count.
+    let first = body.lines().next()?.trim();
+    if first.is_empty() || first.chars().count() > 40 {
+        return None;
+    }
+    // Control characters would move the cursor around the screen from inside
+    // a menu row. The sender already strips tabs from the beacon for the same
+    // reason; this is the same care applied to the same value over HTTP.
+    if first.chars().any(|c| c.is_control()) {
+        return None;
+    }
+    Some(first.to_string())
 }
 
 /// One file being handed out: name, size in bytes.
@@ -1430,6 +1478,51 @@ impl Hotspot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A socket-level test of ask_name() was written here and then removed,
+    // deliberately, and this note is what is left of it.
+    //
+    // It stood up a listener that answered one canned response. It failed
+    // roughly three runs in four for reasons that were all about the fake
+    // server, not about ask_name: answering before reading the request closed
+    // the socket under the client, and reading first left a race on how much
+    // of the request had arrived. Every fix moved the flakiness rather than
+    // removing it.
+    //
+    // A test that fails at random is worse than no test, because it teaches
+    // people to re-run until green, which is the habit that hid two real bugs
+    // in this same suite earlier today. The parser below is the part with the
+    // decisions in it and is tested exactly. The wire itself was verified by
+    // hand against two live machines on 2026-09-08:
+    //
+    //   0.9.4 sender:  curl "http://127.0.0.1:8095/?who"  ->  Teacher's laptop
+    //   0.9.3 sender:  curl "http://169.254.87.61/?who"   ->  an HTML page,
+    //                  which usable_name() rejects, so the address is shown
+    //                  exactly as it was before names existed.
+    //
+    // That second one is the compatibility case, and it is the one that would
+    // have mattered if it were wrong.
+
+    /// A name from another machine is untrusted text going into a menu row.
+    #[test]
+    fn only_something_that_looks_like_a_name_is_used_as_one() {
+        assert_eq!(usable_name("Teacher's laptop").as_deref(), Some("Teacher's laptop"));
+        assert_eq!(usable_name("  Year 7 Maths \n").as_deref(), Some("Year 7 Maths"));
+
+        // An older copy answers /?who with its whole page. Showing that in a
+        // menu row is worse than showing the address it replaces.
+        assert_eq!(usable_name("<!doctype html><html>..."), None);
+        assert_eq!(usable_name(""), None);
+        assert_eq!(usable_name("   "), None);
+
+        // Escape sequences would move the cursor from inside a row.
+        assert_eq!(usable_name("evil\u{1b}[2Jname"), None);
+        assert_eq!(usable_name("two\nlines").as_deref(), Some("two"));
+
+        // Too long to sit beside a file count.
+        assert_eq!(usable_name(&"x".repeat(41)), None);
+        assert_eq!(usable_name(&"x".repeat(40)).as_deref(), Some("x".repeat(40)).as_deref());
+    }
 
     /// 10.29.136.9 must not match inside 10.29.136.94, or a machine looks
     /// connected on the strength of a different address entirely.

@@ -136,7 +136,7 @@ struct Batch {
 
 /// What a probe thread has found so far. `None` means still looking, which is
 /// a different thing from "found nothing" and has to look different on screen.
-type Found = Arc<Mutex<Option<Vec<(std::net::Ipv4Addr, usize)>>>>;
+type Found = Arc<Mutex<Option<Vec<(std::net::Ipv4Addr, usize, String)>>>>;
 
 struct App {
     screen: Screen,
@@ -181,6 +181,15 @@ struct App {
     /// another folder. A person can take two files from here and a whole
     /// folder from three levels down in one pass.
     picked: Vec<PathBuf>,
+    /// Another machine on this link already answers to our .local name.
+    name_taken: bool,
+    /// A ticked folder held more files than the walk will return.
+    ///
+    /// serve::all_files() stops at MAX_FILES and records it, and the serving
+    /// screen already says so. The picker threw that away, so ticking a folder
+    /// of 150,000 files produced a confident "100,000 files chosen" and 50,000
+    /// files that would never be sent, with nothing anywhere saying a word.
+    pick_truncated: bool,
     /// First subfolder shown, so a folder with two hundred children scrolls
     /// instead of drawing off the bottom of the window.
     pick_top: usize,
@@ -378,6 +387,8 @@ impl App {
             pick_kids: Vec::new(),
             pick_files: Vec::new(),
             picked: Vec::new(),
+            name_taken: false,
+            pick_truncated: false,
             pick_top: 0,
             pick_unreadable: false,
             anyway: false,
@@ -424,6 +435,7 @@ impl App {
         self.cable_watch = None;
         self.naming = false;
         self.mdns = false;
+        self.name_taken = false;
         serve::forget_session();
     }
 
@@ -559,6 +571,12 @@ impl App {
                 let short = name.rsplit('/').next().unwrap_or(name);
                 format!("{short}   (1 file, from {})", self.folder)
             }
+            Some(only) if self.pick_truncated => format!(
+                "more than {} files from {}, and only the first {} will be sent",
+                only.len(),
+                self.folder,
+                only.len()
+            ),
             Some(only) => format!("{} files chosen from {}", only.len(), self.folder),
             None => self.folder.clone(),
         }
@@ -946,14 +964,64 @@ impl App {
     /// standard requires is 19 rows, and the default terminal is 24, so every
     /// other line on this screen has to earn its place. Anything optional is
     /// added only once the code is known to fit.
+    /// The address a phone should open, chosen the same way the screen chooses
+    /// which one to print. On a cable that is the link-local one, because the
+    /// wifi address is the one the other machine cannot reach.
+    fn page_url(&self) -> Option<String> {
+        let show: Vec<std::net::Ipv4Addr> = if self.cable {
+            let ll: Vec<_> = self.addresses.iter().copied().filter(|a| a.is_link_local()).collect();
+            if ll.is_empty() { self.addresses.clone() } else { ll }
+        } else {
+            self.addresses.clone()
+        };
+        let a = show.first()?;
+        Some(if crate::serve::on_port_80() {
+            format!("http://{a}")
+        } else {
+            format!("http://{a}:{}", port())
+        })
+    }
+
     fn draw_joincode(&self, f: &mut Frame) {
         let Some(h) = &self.hotspot else {
-            self.title(f, "Join by camera");
-            f.push("  This computer did not make the network, so there is no");
-            f.push("  password for it to put in a code.");
+            // No hotspot means a cable, or a network somebody else set up. In
+            // both cases there is no password to encode, and this screen used
+            // to stop there and say so, which left the one group who most need
+            // a camera, phones and tablets, with an address to read off a
+            // terminal and type in by hand.
+            //
+            // There is still something worth putting in a code: the page
+            // itself. A phone points at it and the page opens, which is the
+            // whole ask, and it needs no password because there is no network
+            // to join.
+            self.title(f, "Open by camera");
+            const QUIET: usize = 4;
+            let Some(url) = self.page_url() else {
+                f.push("  This computer has no address yet, so there is nothing");
+                f.push("  to put in a code. Wait half a minute and look again.");
+                self.hints(f, "  esc to go back");
+                return;
+            };
+            f.push(&format!("  Point a camera at this to open   {url}"));
             f.blank();
-            f.push_dim("  The class is on a network somebody else set up. They join it");
-            f.push_dim("  the way they always do, then open the address on the roster.");
+            let Some(code) = crate::qr::encode(url.as_bytes()) else {
+                f.push("  That address is too long to fit in a code.");
+                f.push(&format!("  Everything still works; open {url} by hand."));
+                self.hints(f, "  esc to go back");
+                return;
+            };
+            let (cols, rows) = crate::qr::rendered_size(&code, QUIET);
+            let room = f.rows.saturating_sub(f.used() + 1);
+            if cols + 2 > f.cols || rows > room {
+                f.push("  The window is too small to draw the code.");
+                f.push(&format!("  It needs {} rows and {} columns; this window has {} by {}.", rows + 3, cols + 2, f.rows, f.cols));
+                f.push(&format!("  Make it bigger, or open {url} by hand."));
+                self.hints(f, "  esc to go back");
+                return;
+            }
+            for line in crate::qr::render(&code, QUIET) {
+                f.push_raw(&format!("  {line}"));
+            }
             self.hints(f, "  esc to go back");
             return;
         };
@@ -1113,7 +1181,18 @@ impl App {
             // being told anything are actually running. Said here because this
             // is the screen a person is looking at while wondering why nothing
             // has appeared on the other laptop.
-            if self.mdns {
+            if self.mdns && self.name_taken {
+                // Say nothing encouraging about a name that will not reach us.
+                //
+                // Two machines both running this both answer to gorilla.local
+                // and each resolves it to ITSELF, so a person following the
+                // old line landed on their own computer and saw a working page
+                // with the wrong files on it. Nothing failed, which is what
+                // made it hard to notice.
+                f.push_dim("  gorilla.local will NOT reach this computer: another");
+                f.push_dim("  computer here already answers to it. Use the address,");
+                f.push_dim("  or pick this machine by name on the other one.");
+            } else if self.mdns {
                 f.push("  Or they can type   gorilla.local");
             }
             if self.naming {
@@ -1305,8 +1384,21 @@ impl App {
                 f.blank();
             }
             Some(list) => {
-                for (ip, count) in list {
-                    let line = format!("  {ip}    {count} file{}", if *count == 1 { "" } else { "s" });
+                for (ip, count, who) in list {
+                    // A NAME, and the address only when there is no name.
+                    //
+                    // This listed "169.254.87.1    4 files". Nothing has to be
+                    // typed to choose it, but a teacher still has to recognise
+                    // which machine four numbers and three dots refer to, and
+                    // in a room with two of them there is no way to tell. The
+                    // name already travels: the beacon carries it and the page
+                    // says it, so this was four numbers standing in front of
+                    // an answer the program already had.
+                    //
+                    // An older copy on the far end answers with no name, and
+                    // then the address is shown exactly as before.
+                    let label = if who.is_empty() { ip.to_string() } else { who.clone() };
+                    let line = format!("  {label}    {count} file{}", if *count == 1 { "" } else { "s" });
                     if self.row == n {
                         f.push_selected_within(&line, 40);
                     } else {
@@ -1846,16 +1938,58 @@ impl App {
             f.push_dim("  Tick things with space to send only those. Tick nothing and");
             f.push_dim("  the whole folder goes.");
         } else {
-            f.push_dim("  Ticks are kept while you move around, so you can take a file");
-            f.push_dim("  from here and a folder from somewhere else.");
+            // NAME what is ticked somewhere else, do not just say ticks are kept.
+            //
+            // Reported by the owner: he ticked one font, and the button said
+            // SEND THE 2 TICKED while one box was ticked on screen. The other
+            // tick was a folder in a branch he had walked through earlier, and
+            // nothing on this screen could tell him what it was or take it off.
+            // The folder held over 100,000 files, so the next screen announced
+            // "100001 files chosen" for what he believed was a single file.
+            //
+            // "Ticks are kept while you move around" was true and useless: it
+            // explains the mechanism and names none of the consequences. A
+            // count that disagrees with what is on screen has to be accounted
+            // for on the screen it disagrees with.
+            let elsewhere: Vec<&PathBuf> = self
+                .picked
+                .iter()
+                .filter(|p| p.parent() != Some(self.pick_dir.as_path()))
+                .collect();
+            if elsewhere.is_empty() {
+                f.push_dim("  Ticks are kept while you move around, so you can take a file");
+                f.push_dim("  from here and a folder from somewhere else.");
+            } else {
+                let word = if elsewhere.len() == 1 { "tick" } else { "ticks" };
+                f.push_dim(&format!(
+                    "  {} more {word} in other folders, still going with this:",
+                    elsewhere.len()
+                ));
+                for p in elsewhere.iter().take(2) {
+                    let name = p.file_name().map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| p.display().to_string());
+                    let mark = if p.is_dir() { "/  (a whole folder)" } else { "" };
+                    f.push_dim(&format!("    {name}{mark}"));
+                }
+                if elsewhere.len() > 2 {
+                    f.push_dim(&format!("    and {} more", elsewhere.len() - 2));
+                }
+            }
         }
         // Naming both keys, because they do different things and the
         // difference is the one that cost somebody their selection: space
         // takes a tick off, enter never does.
-        self.hints(
-            f,
-            "  space ticks and unticks    enter opens a folder    esc goes back",
-        );
+        if self.picked.is_empty() {
+            self.hints(
+                f,
+                "  space ticks and unticks    enter opens a folder    esc goes back",
+            );
+        } else {
+            self.hints(
+                f,
+                "  space ticks    c clears every tick    enter opens a folder    esc goes back",
+            );
+        }
     }
 
     fn pick_key(&mut self, k: Key) -> bool {
@@ -1896,6 +2030,15 @@ impl App {
                 if let Some(p) = under {
                     self.pick_toggle(p);
                 }
+            }
+            // One key that takes every tick off, wherever it was made.
+            //
+            // Space only reaches what is under the cursor, so a tick left in a
+            // folder three branches away could be removed only by walking back
+            // to it, and the screen did not say where it was. Starting again
+            // meant leaving the picker entirely.
+            Key::Char('c') => {
+                self.picked.clear();
             }
             Key::Enter => {
                 if self.row == 0 {
@@ -1969,6 +2112,7 @@ impl App {
         // Expand ticked folders into the files under them, so the allow list
         // is files and only files: that is what the server checks against.
         let mut allow: std::collections::HashSet<String> = std::collections::HashSet::new();
+        self.pick_truncated = false;
         for p in &self.picked {
             if p.is_dir() {
                 for (rel, _) in serve::all_files(p) {
@@ -1976,6 +2120,12 @@ impl App {
                     if let Some(r) = relative_to(&root, &full) {
                         allow.insert(r);
                     }
+                }
+                // Asked per folder, not once at the end: the flag describes the
+                // most recent walk, so checking after the loop would only ever
+                // report on whichever folder happened to be last.
+                if serve::files_truncated() {
+                    self.pick_truncated = true;
                 }
             } else if let Some(r) = relative_to(&root, p) {
                 allow.insert(r);
@@ -2588,6 +2738,8 @@ impl App {
             // .local is announced whatever the guard decides: it is
             // link-scoped and needs nothing configured on the far end, so it
             // is the naming that still works when the guard refuses.
+            // Asked before we start answering, so the probe cannot hear us.
+            self.name_taken = crate::dns::name_is_taken(ours, std::time::Duration::from_millis(700));
             self.mdns = crate::dns::start_mdns(ours, Arc::clone(&self.cable_stop)).is_ok();
             // Watched, not decided once.
             //
@@ -2690,9 +2842,9 @@ impl App {
             // 80 first (the packaged install), 8080 for an unpackaged build.
             let mut list = net::find_servers(80);
             let more = net::find_servers(port());
-            for (ip, n) in more {
-                if !list.iter().any(|(i, _)| *i == ip) {
-                    list.push((ip, n));
+            for (ip, n, who) in more {
+                if !list.iter().any(|(i, _, _)| *i == ip) {
+                    list.push((ip, n, who));
                 }
             }
             *found.lock().unwrap_or_else(|e| e.into_inner()) = Some(list);
@@ -3054,6 +3206,115 @@ mod tests {
         assert!(
             shown.contains(env!("CARGO_PKG_VERSION")),
             "the home screen does not name the version:\n{shown}"
+        );
+    }
+
+    /// A tick made in another folder has to be visible from wherever you are.
+    ///
+    /// The owner ticked one font and the button read SEND THE 2 TICKED with a
+    /// single box ticked on screen. The other tick was a folder he had walked
+    /// past earlier, and nothing on the screen named it or could take it off.
+    /// That folder held over 100,000 files, so the next screen announced
+    /// "100001 files chosen" for what he believed was one file.
+    /// On a cable there is no password, and this screen used to stop there.
+    ///
+    /// That left phones and tablets, the devices that most need a camera, with
+    /// an address to read off a terminal and type by hand. The code now
+    /// carries the page itself, which needs no password because there is no
+    /// network to join.
+    #[test]
+    fn the_camera_screen_offers_the_page_when_there_is_no_password() {
+        let mut app = App::new();
+        app.hotspot = None;
+        app.cable = true;
+        app.addresses = vec![std::net::Ipv4Addr::new(169, 254, 87, 1)];
+
+        let mut f = crate::term::Frame::new(30, 90);
+        app.draw_joincode(&mut f);
+        let shown = f.text();
+
+        assert!(shown.contains("Open by camera"), "{shown}");
+        assert!(
+            shown.contains("169.254.87.1"),
+            "the address is not offered:\n{shown}"
+        );
+        assert!(
+            !shown.contains("no password for it to put in a code"),
+            "still the old dead end:\n{shown}"
+        );
+        // A drawn code, not just a promise of one. The renderer uses block
+        // characters, so their presence is the evidence it got that far.
+        assert!(
+            shown.contains('\u{2588}') || shown.contains('\u{2584}') || shown.contains('\u{2580}'),
+            "no code was drawn:\n{shown}"
+        );
+    }
+
+    #[test]
+    fn a_tick_in_another_folder_is_named_on_screen() {
+        let d = crate::scratchdir::scratch("pick-elsewhere");
+        std::fs::create_dir_all(d.join("here")).unwrap();
+        std::fs::create_dir_all(d.join("away")).unwrap();
+        std::fs::write(d.join("here/a-font.ttf"), b"x").unwrap();
+
+        let mut app = App::new();
+        app.pick_dir = d.join("here");
+        app.picked = vec![d.join("here/a-font.ttf"), d.join("away")];
+
+        let mut f = crate::term::Frame::new(40, 100);
+        app.draw_pick(&mut f);
+        let shown = f.text();
+
+        assert!(shown.contains("SEND THE 2 TICKED"), "{shown}");
+        assert!(
+            shown.contains("in other folders"),
+            "the screen does not account for the tick that is not on it:\n{shown}"
+        );
+        assert!(
+            shown.contains("away"),
+            "the tick held elsewhere is not named:\n{shown}"
+        );
+        assert!(
+            shown.contains("c clears every tick"),
+            "no key is offered to take it off:\n{shown}"
+        );
+    }
+
+    /// And that key has to work from anywhere, not only where the tick was made.
+    #[test]
+    fn c_clears_every_tick_including_ones_made_elsewhere() {
+        let d = crate::scratchdir::scratch("pick-clear");
+        std::fs::create_dir_all(d.join("here")).unwrap();
+        std::fs::create_dir_all(d.join("away")).unwrap();
+        let mut app = App::new();
+        app.pick_dir = d.join("here");
+        app.picked = vec![d.join("away"), d.join("here/x")];
+        app.screen = Screen::Pick;
+
+        app.pick_key(Key::Char('c'));
+        assert!(app.picked.is_empty(), "c left ticks behind: {:?}", app.picked);
+    }
+
+    /// A capped walk must not be reported as the whole truth.
+    ///
+    /// serve::all_files() stops at MAX_FILES and says so, and the picker threw
+    /// that away, so a folder of 150,000 files produced a confident
+    /// "100000 files chosen" and 50,000 files that would never be sent.
+    #[test]
+    fn a_capped_folder_does_not_claim_to_be_the_whole_count() {
+        let mut app = App::new();
+        app.folder = "/somewhere".into();
+        app.chosen = Some(["a".to_string(), "b".to_string()].into_iter().collect());
+
+        app.pick_truncated = false;
+        let honest = app.what_to_send();
+        assert!(honest.contains("2 files chosen"), "{honest}");
+
+        app.pick_truncated = true;
+        let capped = app.what_to_send();
+        assert!(
+            capped.contains("more than") && capped.contains("only the first"),
+            "a capped count is still presented as exact: {capped}"
         );
     }
 

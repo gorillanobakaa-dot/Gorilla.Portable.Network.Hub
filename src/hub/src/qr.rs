@@ -778,3 +778,29 @@ mod tests {
 }
 
 
+
+#[cfg(test)]
+mod url_code_tests {
+    use super::*;
+
+    /// A page address has to fit in a code, at the sizes a cable actually
+    /// produces. Added when the "Join by camera" screen stopped being a dead
+    /// end on a cable and started offering the page instead of a password.
+    #[test]
+    fn a_page_address_fits_in_a_code() {
+        for url in [
+            "http://169.254.87.1",
+            "http://169.254.87.1:8080",
+            "http://10.42.0.1:8080",
+            "http://192.168.137.1",
+        ] {
+            let code = encode(url.as_bytes())
+                .unwrap_or_else(|| panic!("{url} did not fit in a code"));
+            let (cols, rows) = rendered_size(&code, 4);
+            // The default terminal is 24 by 80, and the screen spends rows on
+            // a title and a hint. A code that only fits a maximised window is
+            // one that is not there when it is needed.
+            assert!(rows <= 24 && cols <= 78, "{url} needs {rows}x{cols}");
+        }
+    }
+}

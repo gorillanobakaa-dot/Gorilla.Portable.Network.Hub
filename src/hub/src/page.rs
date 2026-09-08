@@ -433,7 +433,7 @@ pub fn view_page(name: &str) -> String {
     s
 }
 
-fn human(bytes: u64) -> String {
+pub(crate) fn human(bytes: u64) -> String {
     const K: f64 = 1000.0;
     let b = bytes as f64;
     if b >= K * K * K {

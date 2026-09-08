@@ -217,6 +217,9 @@ it.
 | **0.9.3, the first screen says which version it is** | |
 | 0.9.3 built for Linux, static, with musl-gcc rather than zig | 992,592 |
 | the same 0.9.3 built for Windows | not measured yet |
+| **0.9.4, names instead of addresses, and a code for a camera** | |
+| 0.9.4 built for Linux, static, with musl-gcc rather than zig | 1,000,784 |
+| the same 0.9.4 cross-built for Windows, with mingw rather than MSVC | 844,800 |
 
 The 0.9.0 rows above said 700,416 and 858,160 until 0.9.1. Both were measured
 before the icon was embedded and never updated, so the table understated the
@@ -225,6 +228,17 @@ quietly, because a table of costs that is not checked is worth less than no
 table: the numbers now match what the release page actually serves. 0.9.1 adds
 nothing to either binary, which is what a release touching only comments and
 test code should do, and is why the figures repeat.
+
+0.9.4 costs 8,192 bytes over 0.9.3, measured. That is the whole of it: asking
+a machine what it is called, refusing to promise a name another machine already
+answers to, and putting the page address in a code a camera can read. It buys
+back a person typing four numbers and three dots, which on the hardware this is
+for is the difference between a lesson starting and a lesson not starting.
+
+The Windows figure is a cross-build made with mingw on the Debian machine, so
+it is comparable with earlier Windows rows only in the loosest sense; the
+published Windows binaries are built on Windows. It is written down because a
+number nobody measured is worse than one with its method attached.
 
 0.9.3 is byte for byte the same size as 0.9.2, and that is measured rather
 than assumed: both are 992,592. Putting the version on the first screen cost
@@ -257,13 +271,13 @@ Built packages for all three are on the
 **Debian, Ubuntu, Mint:**
 
 ```
-sudo dpkg -i gorilla-portable-network-hub_0.9.3_amd64.deb
+sudo dpkg -i gorilla-portable-network-hub_0.9.4_amd64.deb
 ```
 
 **Arch, CachyOS, Manjaro:**
 
 ```
-sudo pacman -U gorilla-portable-network-hub-0.9.3-1-x86_64.pkg.tar.zst
+sudo pacman -U gorilla-portable-network-hub-0.9.4-1-x86_64.pkg.tar.zst
 ```
 
 Or from source with `makepkg -si` in `packaging/`. The Arch package is

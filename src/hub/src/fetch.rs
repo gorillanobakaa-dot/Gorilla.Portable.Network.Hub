@@ -661,8 +661,13 @@ fn download_inner(url_str: &str, out: &str, workers: usize, verify: bool, known:
     } else { HashMap::new() });
 
     let chunks: u64 = total.div_ceil(CHUNK);
-    log(&format!("{:.1} MB in {} pieces, {} at a time",
-                 total as f64 / 1e6, chunks, workers));
+    // "0.0 MB in 1 pieces" was three small wrongs in one line: a 49 byte file
+    // is not 0.0 MB, one piece is not "1 pieces", and neither reads like the
+    // rest of the program. Sizes are shown the way the pages show them, and
+    // the count agrees with itself.
+    let piece = if chunks == 1 { "piece" } else { "pieces" };
+    log(&format!("{} in {} {piece}, {} at a time",
+                 crate::page::human(total), chunks, workers));
 
     // Preallocate, then load whatever a previous run finished.
     // How much is actually on disk, read BEFORE the file is grown to full size.

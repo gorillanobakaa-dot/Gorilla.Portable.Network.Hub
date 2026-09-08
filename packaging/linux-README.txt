@@ -1,4 +1,4 @@
-Gorilla Portable Network Hub 0.9.3  -  Linux (x86-64, static)
+Gorilla Portable Network Hub 0.9.4  -  Linux (x86-64, static)
 
 WHAT THIS IS
 A laptop that becomes the network. It hands a folder to every device in the
