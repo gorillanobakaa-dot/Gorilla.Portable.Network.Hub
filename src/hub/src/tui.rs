@@ -502,7 +502,22 @@ impl App {
     }
 
     fn draw_home(&self, f: &mut Frame) {
-        self.title(f, "Gorilla Portable Network Hub");
+        // The version belongs on this screen, not only behind --version.
+        //
+        // The menu is the way in for most people, and it was the one screen
+        // that never said which build it was. A teacher on the phone, or
+        // anyone reporting that something does not work, has the program open
+        // in front of them and no way to answer "which version". Telling them
+        // to quit and run `hub --version` is asking them to leave the only
+        // thing they know how to use.
+        //
+        // It goes on the title line rather than a line of its own: rows here
+        // are a fixed budget shared with the content, and a heading that
+        // already exists costs nothing to extend.
+        self.title(
+            f,
+            &format!("Gorilla Portable Network Hub {}", env!("CARGO_PKG_VERSION")),
+        );
         let items: Vec<String> = [
             "Hand out files to the class over wifi",
             "Send files down a cable to one other computer",
@@ -3018,6 +3033,28 @@ mod tests {
         }
         std::fs::write(d.join("Pictures/a-file.txt"), b"x").unwrap();
         d
+    }
+
+    /// The first screen has to say which build it is.
+    ///
+    /// It did not, for every release up to 0.9.2. The menu is the way in for
+    /// most people, so somebody reporting that something does not work has the
+    /// program open in front of them and no way to answer "which version".
+    /// Sending them to `hub --version` means telling them to quit the only
+    /// part of it they know how to use.
+    ///
+    /// Guarded because a heading is exactly the kind of string that gets
+    /// rewritten for tone and quietly loses a detail on the way.
+    #[test]
+    fn the_first_screen_says_which_version_it_is() {
+        let app = App::new();
+        let mut f = crate::term::Frame::new(24, 80);
+        app.draw_home(&mut f);
+        let shown = f.text();
+        assert!(
+            shown.contains(env!("CARGO_PKG_VERSION")),
+            "the home screen does not name the version:\n{shown}"
+        );
     }
 
     #[test]

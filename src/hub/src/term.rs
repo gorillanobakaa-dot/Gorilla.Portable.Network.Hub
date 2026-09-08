@@ -525,6 +525,12 @@ impl Frame {
 
     /// One write for the whole screen. Drawing line by line with a flush each
     /// time is what makes a terminal UI flicker.
+    /// What was drawn, for tests. Nothing in the program reads a frame back.
+    #[cfg(test)]
+    pub fn text(&self) -> String {
+        self.lines.join("\n")
+    }
+
     pub fn draw(&self) {
         let mut buf = String::with_capacity(self.rows * (self.cols + 8));
         buf.push_str("\x1b[H"); // home, without clearing: clearing first is the flicker
