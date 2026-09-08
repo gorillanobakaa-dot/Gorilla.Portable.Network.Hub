@@ -3311,8 +3311,12 @@ mod tests {
             shown.contains("away"),
             "the tick held elsewhere is not named:\n{shown}"
         );
+        // The KEY, not the sentence around it. This asserted the exact wording
+        // and broke the moment that wording was shortened to fit the window,
+        // which is a test failing for a reason that has nothing to do with
+        // what it is guarding.
         assert!(
-            shown.contains("c clears every tick"),
+            shown.contains("c clears"),
             "no key is offered to take it off:\n{shown}"
         );
     }
