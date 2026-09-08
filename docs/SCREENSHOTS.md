@@ -141,31 +141,55 @@ Windows 11 laptop with an Intel Wi-Fi 6 AX201, and it is a **tuned** machine:
 about 150 services set to Disabled by a previous owner, which is what makes the
 first picture worth having.
 
-### The screen 0.9.6, 0.9.7 and 0.9.8 all changed
+### Three releases, one screen, photographed one version at a time
+
+`hub doctor` is the screen 0.9.6, 0.9.7 and 0.9.8 each changed, so each
+release's own published zip was unpacked and run rather than photographing the
+newest build three times. A picture of 0.9.8 on the 0.9.6 page would be a small
+lie, and this project's method is not telling those.
+
+**0.9.6.** The `wifi adapter` block, and nothing below the list.
+
+[![hub doctor from the published 0.9.6 build on Windows: the version, processors, window size, then four lines saying this program cannot turn a wifi adapter into a network by itself and where the hotspot switch lives, then the gateway, two addresses, the wire speed, the firewall and the password line. Nothing follows the list](gallery/windows-doctor-0.9.6.png)](gallery/windows-doctor-0.9.6.png)
+
+That block used to read `none found, so this computer cannot make a network`,
+unconditionally, on every Windows machine, while the wifi was connected at 173
+Mbps. It had never looked: the check only exists on Linux.
+
+**0.9.7.** The same screen, now explaining a laptop somebody has tuned. Count
+the services: **three**.
+
+[![hub doctor from the published 0.9.7 build, with everything 0.9.6 printed plus a page of plain text below it naming three switched-off services, Windows Mobile Hotspot Service, Internet Connection Sharing and Wi-Fi Direct Services Connection Manager, and three Set-Service commands to switch them back on](gallery/windows-doctor-0.9.7.png)](gallery/windows-doctor-0.9.7.png)
+
+**0.9.8.** The same screen again. **Two.**
+
+[![hub doctor from the published 0.9.8 build, identical to 0.9.7 except that only two services are named, Windows Mobile Hotspot Service and Internet Connection Sharing, with two Set-Service commands rather than three](gallery/windows-doctor-0.9.8.png)](gallery/windows-doctor-0.9.8.png)
+
+The third service was in 0.9.7 on reasoning rather than evidence. It was tested
+with that service deliberately left switched off, the hotspot started anyway,
+and the line came out. The difference between those two pictures is the whole
+of 0.9.8.
+
+None of the three is a mock-up. This laptop really does have those services
+switched off, which is why the advice prints at all; a machine with nothing
+wrong sees none of it.
+
+### The same screen with the cable plugged in
 
 [![hub doctor on Windows, listing the version, processors, window size, then four lines about the wifi adapter, the gateway, two addresses, the cable at 1000 Mbps, the firewall, and beneath the list a page of plain text explaining that Windows Mobile Hotspot Service and Internet Connection Sharing have been switched off on this machine, with the exact Set-Service commands to switch them back on](gallery/windows-doctor-switched-off-services.png)](gallery/windows-doctor-switched-off-services.png)
 
-Not a mock-up. Those two services really are switched off on this laptop, which
-is why the advice is printed: a machine with nothing wrong sees none of it.
+The three above were taken with the test cable unplugged, so their `cable` line
+reads `Wi-Fi at 173 Mbps`. This one is 0.9.8 again with the cable in, and it is
+here for one line:
 
-Three releases are visible in one frame:
+    cable  Ethernet at 1000 Mbps, CAT 5e or CAT 6 (1 Gbps)
+    address  169.254.87.61
 
-- **0.9.6** is the `wifi adapter` block. It used to read
-  `none found, so this computer cannot make a network`, unconditionally, on
-  every Windows machine, while the wifi was connected at 173 Mbps. It had never
-  looked; the check only exists on Linux.
-- **0.9.7** is everything below `password made`. Windows says
-  *"We can't set up mobile hotspot"* and leaves the box empty, and never
-  mentions a service, so the laptop reads as broken when it is only switched
-  off.
-- **0.9.8** is what is **not** there: a third service, `WFDSConMgrSvc`, that
-  0.9.7 asked for on reasoning rather than evidence. It was tested with that
-  service deliberately left off, the hotspot started anyway, and the line came
-  out. Two commands, not three.
-
-`cable  Ethernet at 1000 Mbps` and the `169.254.87.61` address are worth a
-second look too: that is the Debian side's `set_broadcast(true)` fix working on
-Windows, and it is the line that had never once been correct anywhere.
+That is the Debian side's `set_broadcast(true)` fix working on Windows. The
+cable address had never once appeared on that screen on any system, on any
+release, because the probe used to find it was refused by the kernel every
+single time. It is the oldest fault this project has fixed and the least
+visible.
 
 ### The first screen, which names its own version
 
@@ -176,9 +200,13 @@ Four things and a sentence. The version in the heading has been there since
 of every support conversation, and nobody wants to be told to open a terminal
 to answer it.
 
-Both pictures were taken by `bench/screenshot-windows.ps1`, which captures the
-window rectangle only and never the desktop, so nothing else on the machine can
-end up in a published image.
+These were taken by `bench/screenshot-windows.ps1` and
+`bench/screenshot-windows-per-version.ps1`, which capture the window rectangle
+only and never the desktop, so nothing else on the machine can end up in a
+published image. Four things in them were not obvious and are commented at the
+point they matter; two of those were wrong diagnoses of the same symptom, kept
+because the symptom was a screenshot of the wrong version and that is precisely
+the failure this set exists to avoid.
 
 ## Still missing
 
