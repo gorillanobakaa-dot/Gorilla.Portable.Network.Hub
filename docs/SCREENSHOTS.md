@@ -134,10 +134,60 @@ The feature this release's field test produced, set to the channel that fixed
 the room. The allowed list on screen is read live from this radio and this
 country's rules; on another machine it reads differently, which is the point.
 
+## Windows, 8 September 2026 (0.9.6 to 0.9.8)
+
+These are the first pictures taken on the Windows side. The machine is a
+Windows 11 laptop with an Intel Wi-Fi 6 AX201, and it is a **tuned** machine:
+about 150 services set to Disabled by a previous owner, which is what makes the
+first picture worth having.
+
+### The screen 0.9.6, 0.9.7 and 0.9.8 all changed
+
+[![hub doctor on Windows, listing the version, processors, window size, then four lines about the wifi adapter, the gateway, two addresses, the cable at 1000 Mbps, the firewall, and beneath the list a page of plain text explaining that Windows Mobile Hotspot Service and Internet Connection Sharing have been switched off on this machine, with the exact Set-Service commands to switch them back on](gallery/windows-doctor-switched-off-services.png)](gallery/windows-doctor-switched-off-services.png)
+
+Not a mock-up. Those two services really are switched off on this laptop, which
+is why the advice is printed: a machine with nothing wrong sees none of it.
+
+Three releases are visible in one frame:
+
+- **0.9.6** is the `wifi adapter` block. It used to read
+  `none found, so this computer cannot make a network`, unconditionally, on
+  every Windows machine, while the wifi was connected at 173 Mbps. It had never
+  looked; the check only exists on Linux.
+- **0.9.7** is everything below `password made`. Windows says
+  *"We can't set up mobile hotspot"* and leaves the box empty, and never
+  mentions a service, so the laptop reads as broken when it is only switched
+  off.
+- **0.9.8** is what is **not** there: a third service, `WFDSConMgrSvc`, that
+  0.9.7 asked for on reasoning rather than evidence. It was tested with that
+  service deliberately left off, the hotspot started anyway, and the line came
+  out. Two commands, not three.
+
+`cable  Ethernet at 1000 Mbps` and the `169.254.87.61` address are worth a
+second look too: that is the Debian side's `set_broadcast(true)` fix working on
+Windows, and it is the line that had never once been correct anywhere.
+
+### The first screen, which names its own version
+
+[![The Gorilla Portable Network Hub menu on Windows, headed Gorilla Portable Network Hub 0.9.8, offering hand out files to the class over wifi, send files down a cable to one other computer, get files from another computer, and check this computer, with the note that it works with no internet and no router](gallery/windows-first-screen-0.9.8.png)](gallery/windows-first-screen-0.9.8.png)
+
+Four things and a sentence. The version in the heading has been there since
+0.9.3 and exists because "which version are you running" is the first question
+of every support conversation, and nobody wants to be told to open a terminal
+to answer it.
+
+Both pictures were taken by `bench/screenshot-windows.ps1`, which captures the
+window rectangle only and never the desktop, so nothing else on the machine can
+end up in a published image.
+
 ## Still missing
 
 - **The paused page**, as it appears on the child's phone.
 - **Join by camera** (`j`), the QR code on a real terminal, ideally with a phone
   actually scanning it.
+- **The cable screens on Windows**: the sending screen with the far end
+  connected, and the receive list naming the other machine rather than its
+  address. Both need a second laptop on the cable at the moment the picture is
+  taken.
 
 They belong here as soon as somebody takes them.

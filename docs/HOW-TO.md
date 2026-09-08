@@ -516,6 +516,8 @@ and those two were among them.
 Windows never says that is the reason. It just fails, quietly, with an empty
 box, and the laptop looks broken.
 
+[![hub doctor on Windows, naming Windows Mobile Hotspot Service and Internet Connection Sharing as switched off and printing the two commands that switch them back on](screenshots/gallery/windows-doctor-switched-off-services.png)](screenshots/gallery/windows-doctor-switched-off-services.png)
+
 **To check:** run `hub doctor`. From 0.9.7 it names anything that has been
 switched off and prints the exact lines to type. If it says nothing about
 services, this is not your problem and something else is going on.
