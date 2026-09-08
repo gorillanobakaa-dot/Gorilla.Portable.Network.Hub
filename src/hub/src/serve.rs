@@ -1785,6 +1785,24 @@ mod bind_scope_tests {
     }
 }
 
+/// One lock for every test that touches the process-wide session state.
+///
+/// There used to be two: block_tests::ONE_AT_A_TIME and walk_tests::TICKS.
+/// Two locks are no lock at all here, because they do not exclude each other
+/// and both modules reach the same statics. walk_tests calls forget_session(),
+/// which clears BLOCKED among everything else, so it could wipe the block
+/// block_tests had just set and was in the middle of proving. Measured on this
+/// tree, 2026-09-08: 2 failures in 11 full runs, always
+/// a_paused_device_gets_nothing_and_a_freed_one_gets_it_back, and always at
+/// the POST rather than at the three GETs before it, because the wider the gap
+/// the more chance the sibling test lands in it. --test-threads=1 passed every
+/// time, which is the signature of this and not of a fault in the program.
+///
+/// Poisoning is ignored on purpose: one panicking test must not convert every
+/// later test into a failure that hides the original.
+#[cfg(test)]
+static SESSION_LOCK: Mutex<()> = Mutex::new(());
+
 #[cfg(test)]
 mod block_tests {
     use super::*;
@@ -1818,10 +1836,8 @@ mod block_tests {
     ///
     /// Poisoning is ignored on purpose: one panicking test must not convert
     /// every later test into a failure that hides the original.
-    static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
-
     fn serialised() -> std::sync::MutexGuard<'static, ()> {
-        let g = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+        let g = super::SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Start from a machine that has never heard of 127.0.0.1.
         //
         // The lock alone was not enough, and this is why. A block is filed
@@ -2146,7 +2162,10 @@ mod walk_tests {
     /// THIRD time this trap has bitten in a single day of work on this file:
     /// once on a note's text, once on a global counter, and now on the ticked
     /// set. Each time the test was wrong and the code was right.
-    static TICKS: Mutex<()> = Mutex::new(());
+    /// The same lock block_tests takes, not one of our own: see SESSION_LOCK.
+    /// This module's tests call forget_session(), which clears the blocks the
+    /// other module is proving, so the two have to exclude each other.
+    use super::SESSION_LOCK as TICKS;
 
     /// The leak this exists to stop.
     ///
