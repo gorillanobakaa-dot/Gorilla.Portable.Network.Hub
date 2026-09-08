@@ -44,12 +44,15 @@ back to about 2009. That is the whole requirement on their side.
 
 ## Install it
 
-> **A note on 0.9.6.** The Windows download is on the release page now. The
-> `.deb` and the Arch package have to be built on a Linux machine, and at the
-> time of writing that has not happened yet, so the newest ones on the page
-> are **0.9.5**. Nothing in 0.9.6 changes anything on Linux: the one fix in it
-> is a message that only ever appeared on Windows. So 0.9.5 is the right thing
-> to install there, and you are not missing anything by using it.
+> **A note on 0.9.6 and 0.9.7.** Both are Windows releases, and both are on
+> the release page. The `.deb` and the Arch package have to be built on a
+> Linux machine, and at the time of writing that has not happened, so the
+> newest ones there are **0.9.5**.
+>
+> **Neither release changes anything on Linux.** 0.9.6 corrects a sentence
+> that only ever appeared on Windows, and 0.9.7 adds a check for pieces of
+> Windows being switched off, which is not a thing that exists on Linux. So
+> 0.9.5 is the right thing to install there and you are not missing anything.
 
 ### On Debian, Ubuntu or Mint
 
@@ -93,15 +96,15 @@ makepkg -si
 
 ### On Windows
 
-1. Download `hub-0.9.6-windows-x86_64.zip` and unzip it anywhere.
+1. Download `hub-0.9.7-windows-x86_64.zip` and unzip it anywhere.
 2. Switch the hotspot on yourself: **Settings**, then **Network and internet**,
    then **Mobile hotspot**. Write down the network name and password Windows
    shows you.
 3. Double-click `hub.exe`.
 
 - **Pass:** a screen appears offering *Hand out files to the class*, with
-  `hub 0.9.6` written at the top of it. Right-click `hub.exe`, choose
-  **Properties**, then **Details**, and it says 0.9.6 there too.
+  `hub 0.9.7` written at the top of it. Right-click `hub.exe`, choose
+  **Properties**, then **Details**, and it says 0.9.7 there too.
 - **Fail:** Windows may warn that it does not recognise the program. That
   warning appears for any program without a paid signing certificate. Choose
   **More info**, then **Run anyway**, or do not run it. Both are reasonable.
@@ -479,6 +482,7 @@ within three minutes: the operating system holds that promise, not the program.
 | A name shows as a number like `10.42.0.251` | That device told the network nothing about itself. Laptops often do not | Fixed in 0.8.0, which reads it from the browser instead. Check `hub --version` |
 | Hand-in is off | The folder cannot be written to | Check the USB drive is plugged in, has room, and is not write-protected |
 | The window is too small | The screen needs room to draw | Make the terminal window bigger, or press `Esc` and use the printed password |
+| Windows says **We can't set up mobile hotspot** and the boxes are empty | Parts of Windows have been switched off on this laptop | See the section below. It is not the wifi card |
 
 If none of these match, run:
 
@@ -490,6 +494,66 @@ hub doctor
 
 It says what it found and what it did not. Send us that output and we can
 usually tell you what is happening.
+
+---
+
+### Windows says it cannot set up a mobile hotspot
+
+You press the switch and nothing happens. The red bar says **We can't set up
+mobile hotspot**, and underneath it the boxes for Name, Password and Band are
+blank rather than wrong.
+
+**It is almost never the wifi card.** It is two pieces of Windows that have
+been switched off.
+
+Second-hand laptops have usually been "speeded up" by somebody at some point.
+Nearly every list on the internet that promises to make Windows faster turns
+off *Internet Connection Sharing* and the *Mobile Hotspot Service*, because
+almost nobody shares a network connection and they look like free memory. On
+the laptop this was written on, 150 services had been switched off that way,
+and those two were among them.
+
+Windows never says that is the reason. It just fails, quietly, with an empty
+box, and the laptop looks broken.
+
+**To check:** run `hub doctor`. From 0.9.7 it names anything that has been
+switched off and prints the exact lines to type. If it says nothing about
+services, this is not your problem and something else is going on.
+
+**To fix it:** open Windows Terminal or PowerShell **as administrator**.
+Right-click the Start button and choose the entry with **(Admin)** after it.
+Then type these, one line at a time:
+
+```powershell
+Set-Service icssvc -StartupType Manual
+Set-Service SharedAccess -StartupType Manual
+Start-Service icssvc
+```
+
+Open **Settings**, **Network and internet**, **Mobile hotspot** again. The name
+and password boxes should now be filled in.
+
+**If it still refuses**, there is one more:
+
+```powershell
+Set-Service WFDSConMgrSvc -StartupType Manual
+```
+
+That is *Wi-Fi Direct Services Connection Manager*. Windows 11 builds its
+hotspot on Wi-Fi Direct, so it is the next thing to try. It is listed second
+because it is not formally required, and changing one thing at a time is how
+you find out what actually mattered.
+
+**Nothing is being installed and nothing is being removed.** `Manual` is the
+setting Windows ships with. This puts them back where they started; it does not
+switch them on permanently or leave them running.
+
+**If you are asked for an administrator password you do not have,** this laptop
+belongs to somebody else and they have to do it. That is a reasonable thing for
+a school or an employer to lock down. **Use a cable instead** - see *Send a
+folder down a cable* above. It needs none of this: no hotspot, no
+administrator, no services.
+
 
 ---
 

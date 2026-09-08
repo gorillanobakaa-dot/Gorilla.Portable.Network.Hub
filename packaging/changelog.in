@@ -1,5 +1,51 @@
 gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
 
+  * THE LAPTOP IS NOT BROKEN, IT HAS BEEN SWITCHED OFF. Windows Settings
+    answers a request for a mobile hotspot with "We can't set up mobile
+    hotspot" and an EMPTY properties box: no name, no password, no band.
+    Nothing on that screen mentions a service, so there is nothing to search
+    for, and the machine reads as faulty when it is only tuned.
+  * The cause is two services set to Disabled: icssvc, the Mobile Hotspot
+    Service, and SharedAccess, Internet Connection Sharing. Nearly every
+    "speed up Windows" list on the internet turns both off, because almost
+    nobody shares a network connection and they look like free memory.
+    Measured on the machine this was written on: 150 services disabled, these
+    two among them. This is the ordinary state of a second-hand laptop, which
+    is the only kind the rooms this is built for have.
+  * doctor now says so, names each one in plain words AND by its service name,
+    and prints the exact lines to type. Not "enable the services": the gap
+    between those two is the entire problem, because somebody who knew how to
+    enable a service would not have needed telling.
+  * The same text is attached to the hotspot error itself, which is the one
+    moment we know for certain somebody is about to walk to Settings and
+    press a switch that cannot work.
+  * READ AS A NUMBER, NOT AS A WORD. The check reads the Start value out of
+    reg query, where REG_DWORD is a type name and 4 is a number. sc.exe would
+    have been the obvious tool and prints "START_TYPE : 4 DISABLED", and both
+    of those words are translated on a Windows installed in any other
+    language. Same trap as connected_addresses() and the same answer.
+  * A service that cannot be read at all is reported as fine rather than as
+    broken. Being unable to answer is not evidence of a fault, and a
+    diagnostic that invents problems is worse than one that stays quiet.
+  * It also says what to do when the answer is "you are not allowed": a
+    managed laptop is a legitimate thing, the command needs Administrator so
+    nobody can follow this advice without already having the right to, and the
+    cable path needs none of it.
+  * docs/HOW-TO.md gets the same thing written for somebody who is not at a
+    terminal, and a row in the troubleshooting table.
+
+  NOTHING IN THIS RELEASE CHANGES ANYTHING ON LINUX. Services being switched
+  off in this particular way is not a thing that exists there; the check
+  returns an empty list and nothing is printed.
+
+  115 tests. Five are new and four of those are about the message rather than
+  the mechanism, because on a screen like this the message IS the feature.
+
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+
+
+gorilla-portable-network-hub (0.9.6) unstable; urgency=medium
+
   * DOCTOR TOLD EVERY WINDOWS LAPTOP IT HAD NO WIFI ADAPTER. The line read
     "wifi adapter   none found, so this computer cannot make a network".
     Measured on the machine while it was printing that: an Intel Wi-Fi 6

@@ -239,6 +239,19 @@ fn doctor() {
     } else {
         "yes"
     });
+
+    // Last, and only when it is true: why the hotspot switch in Settings will
+    // not work however many times it is pressed.
+    //
+    // At the BOTTOM on purpose. Everything above is one fact per line and is
+    // meant to be scanned, or read down a phone line to somebody who cannot
+    // see the screen. Dropping ten lines of prose into the middle of that
+    // breaks the scan for every machine that has the problem, which is exactly
+    // the machine whose owner most needs to reach the lines underneath. So the
+    // list stays a list, and the explanation comes after it.
+    if let Some(advice) = net::switched_off_advice(&net::disabled_hotspot_services()) {
+        println!("{advice}");
+    }
 }
 
 /// Hand a folder down a cable to one other computer.

@@ -1053,6 +1053,150 @@ pub fn wifi_interface() -> Option<String> {
     None
 }
 
+// -------------------------------------------------- switched-off machinery
+
+/// The Windows services this program's wifi path needs, and what they are
+/// called on the screen a person will be looking at.
+///
+/// WHY THIS EXISTS. The laptops this tool is for are second-hand, and a
+/// second-hand laptop has usually been "speeded up" by somebody. Every debloat
+/// list on the internet turns off Internet Connection Sharing and the Mobile
+/// Hotspot service, because almost nobody shares a connection and they look
+/// like free memory. Measured on the machine this was written on: 150 services
+/// set to Disabled, these two among them.
+///
+/// What that does to a teacher is specific and cruel. Settings does not say
+/// "a service is off". It says **We can't set up mobile hotspot**, and then
+/// shows an EMPTY properties box: no name, no password, no band. Nothing on
+/// the screen mentions a service, so there is nothing to search for, and the
+/// laptop looks broken rather than switched off. The same is true whether the
+/// machine was tuned by its owner, by the shop that sold it, or by whoever had
+/// it before the school did.
+///
+/// It is worth being plain about the third case. A managed or locked-down
+/// machine is a legitimate reason for these to be off, and this says what is
+/// off and what turning it on would do; it does not tell anybody to fight
+/// their own IT department. The command needs Administrator, so nobody can
+/// follow this advice without already having the right to.
+const HOTSPOT_SERVICES: [(&str, &str); 3] = [
+    ("icssvc", "Windows Mobile Hotspot Service"),
+    ("SharedAccess", "Internet Connection Sharing"),
+    // Not a declared dependency of either of the two above, and listed last
+    // for that reason. Windows 11 builds its hotspot on Wi-Fi Direct rather
+    // than the old hosted-network path, so this is the next thing to reach for
+    // when the first two are on and it still refuses.
+    ("WFDSConMgrSvc", "Wi-Fi Direct Services Connection Manager"),
+];
+
+/// The `Start` value out of one `reg query` result, or None.
+///
+/// A SEPARATE FUNCTION SO IT CAN BE TESTED, and because the parse is the only
+/// part that can be wrong.
+///
+/// This reads the NUMBER and ignores every word around it. `reg query` prints
+/// `    Start    REG_DWORD    0x4`, and `REG_DWORD` is a type name rather than
+/// a sentence, so it is the same on a Windows installed in any language. The
+/// value name and the number are the same everywhere too. Nothing here depends
+/// on English, which is the whole reason this uses `reg` and not `sc qc`:
+/// sc.exe prints `START_TYPE : 4 DISABLED`, and both of those words are
+/// translated.
+///
+/// 4 is Disabled, 3 is Manual, 2 is Automatic. Those are the numbers Windows
+/// itself writes; they are not this program's invention.
+#[cfg(not(target_os = "linux"))]
+fn start_value_from(text: &str) -> Option<u32> {
+    for line in text.lines() {
+        if !line.contains("REG_DWORD") {
+            continue;
+        }
+        let last = line.split_whitespace().last()?;
+        let hex = last.strip_prefix("0x").or_else(|| last.strip_prefix("0X"))?;
+        return u32::from_str_radix(hex, 16).ok();
+    }
+    None
+}
+
+/// Which of the hotspot services are set to Disabled on this machine.
+///
+/// Empty on a machine nobody has tuned, which is the common case and costs one
+/// `reg query` per name at the moment somebody asks for `doctor` or tries to
+/// start a hotspot. Never on any path that serves a file.
+///
+/// A service that cannot be read at all is reported as fine rather than as
+/// broken. Being unable to answer the question is not evidence of a fault, and
+/// a diagnostic that invents problems is worse than one that stays quiet.
+#[cfg(not(target_os = "linux"))]
+pub fn disabled_hotspot_services() -> Vec<(&'static str, &'static str)> {
+    let mut off = Vec::new();
+    for (service, human) in HOTSPOT_SERVICES {
+        let key = format!(r"HKLM\SYSTEM\CurrentControlSet\Services\{service}");
+        let out = std::process::Command::new("reg")
+            .args(["query", &key, "/v", "Start"])
+            .stdin(std::process::Stdio::null())
+            .output();
+        let Ok(out) = out else { continue };
+        if !out.status.success() {
+            continue;
+        }
+        if start_value_from(&String::from_utf8_lossy(&out.stdout)) == Some(4) {
+            off.push((service, human));
+        }
+    }
+    off
+}
+
+#[cfg(target_os = "linux")]
+pub fn disabled_hotspot_services() -> Vec<(&'static str, &'static str)> {
+    Vec::new()
+}
+
+/// What to tell somebody whose laptop has had these switched off.
+///
+/// Written to be read by a teacher and typed by a teacher: what is wrong, in
+/// one sentence, then the exact words to type, then how to know it worked. No
+/// jargon that is not immediately explained, and the reason it is being asked
+/// for rather than an instruction to trust.
+///
+/// The commands are given in full rather than as "enable the services",
+/// because the gap between those two is the whole problem: somebody who knew
+/// how to enable a service would not have needed the message.
+pub fn switched_off_advice(off: &[(&'static str, &'static str)]) -> Option<String> {
+    if off.is_empty() {
+        return None;
+    }
+    let mut s = String::new();
+    s.push_str(
+        "\nThis laptop cannot make a wifi network, and it is not the wifi card.\n\n\
+         Parts of Windows have been switched off on this machine. This is very\n\
+         common on a second-hand laptop: the lists that promise to speed Windows\n\
+         up nearly all switch these off, because almost nobody shares a network\n\
+         connection. Windows does not tell you that is why. It says it cannot set\n\
+         up a mobile hotspot and leaves the box empty, so the laptop looks broken\n\
+         when it is only switched off.\n\n\
+         Switched off here:\n",
+    );
+    for (service, human) in off {
+        s.push_str(&format!("  {human}  ({service})\n"));
+    }
+    s.push_str(
+        "\nTo switch them back on, open Windows Terminal or PowerShell AS\n\
+         ADMINISTRATOR. Right-click the Start button, and choose the entry with\n\
+         (Admin) after it. Then type these lines, one at a time:\n\n",
+    );
+    for (service, _) in off {
+        s.push_str(&format!("  Set-Service {service} -StartupType Manual\n"));
+    }
+    s.push_str("  Start-Service icssvc\n");
+    s.push_str(
+        "\nThen open Settings, Network and internet, Mobile hotspot. The boxes\n\
+         for name and password should now be filled in instead of blank.\n\n\
+         If it asks for an administrator password and you do not have one, this\n\
+         laptop is managed by somebody else and they have to do it. Use a cable\n\
+         instead: it needs none of this.\n",
+    );
+    Some(s)
+}
+
 /// Undo nmcli's terse-mode escaping.
 ///
 /// `nmcli -t` separates fields with a colon, so any colon or backslash INSIDE
@@ -1287,9 +1431,19 @@ pub fn hotspot_up(ssid: &str, password: &str, channel: Option<u16>) -> Result<Ho
 
 #[cfg(not(target_os = "linux"))]
 pub fn hotspot_up(_ssid: &str, _password: &str, _channel: Option<u16>) -> Result<Hotspot, String> {
-    Err("On this system, switch the hotspot on yourself first: \
+    let mut msg = String::from(
+        "On this system, switch the hotspot on yourself first: \
          Settings, Network and internet, Mobile hotspot. \
-         Then come back here and the files will be handed out over it.".into())
+         Then come back here and the files will be handed out over it.",
+    );
+    // If that switch is going to refuse, say so NOW rather than after somebody
+    // has been to Settings, failed, and concluded the laptop is broken. This is
+    // the one moment we know for certain they are about to go and press it.
+    if let Some(advice) = switched_off_advice(&disabled_hotspot_services()) {
+        msg.push('\n');
+        msg.push_str(&advice);
+    }
+    Err(msg)
 }
 
 /// nmcli's errors are written for administrators. This is for a teacher.
@@ -1759,5 +1913,125 @@ mod arp_tag_tests {
         let tag = device_tag(&ip).expect("an ARP entry we just read must produce a tag");
         assert_eq!(tag, short_hash(&mac), "the tag must come from that entry's hardware address");
         assert_eq!(tag.chars().count(), 4);
+    }
+}
+
+#[cfg(test)]
+mod switched_off_tests {
+    use super::*;
+
+    /// The parse reads the NUMBER and ignores every word around it.
+    ///
+    /// Real captured output from `reg query` on the machine this was written
+    /// on, where both services had been switched off by a debloat pass:
+    ///
+    ///     HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\icssvc
+    ///         Start    REG_DWORD    0x4
+    ///
+    /// The German case below is not decoration. `sc qc` prints
+    /// `START_TYPE : 4 DISABLED` and BOTH of those words are translated, which
+    /// is why this uses `reg` instead. `REG_DWORD` is a type name and is not.
+    /// The value name `Start` is not translated either. If a future version of
+    /// this ever starts matching on a word, this test is where it should fail.
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn the_start_value_is_read_as_a_number_and_not_as_a_word() {
+        let real = "\r\nHKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\icssvc\r\n    \
+                    Start    REG_DWORD    0x4\r\n\r\n";
+        assert_eq!(start_value_from(real), Some(4), "disabled, from real output");
+
+        assert_eq!(
+            start_value_from("    Start    REG_DWORD    0x3"),
+            Some(3),
+            "3 is Manual, which is the Windows default for both of these"
+        );
+        assert_eq!(start_value_from("    Start    REG_DWORD    0x2"), Some(2));
+
+        // A localised install. Only the surrounding prose can change; the type
+        // name, the value name and the number cannot.
+        let german = "\r\nHKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\icssvc\r\n    \
+                      Start    REG_DWORD    0x4\r\n";
+        assert_eq!(start_value_from(german), Some(4));
+
+        // Nothing to read is not the same as reading a zero. A machine we
+        // cannot ask about must not be reported as broken.
+        assert_eq!(start_value_from(""), None);
+        assert_eq!(start_value_from("ERROR: The system was unable to find the key"), None);
+        assert_eq!(start_value_from("    Start    REG_SZ    manual"), None);
+    }
+
+    /// A machine nobody has tuned gets no lecture.
+    ///
+    /// The advice is long, and printing it to somebody whose laptop is fine
+    /// would teach them to skip the whole screen, which is where the useful
+    /// lines are.
+    #[test]
+    fn a_machine_with_nothing_switched_off_is_told_nothing() {
+        assert!(switched_off_advice(&[]).is_none());
+    }
+
+    /// And a machine that IS switched off gets something it can act on.
+    ///
+    /// Every assertion here is a thing somebody needs in order to get from
+    /// "it does not work" to "it works", and the message is worthless without
+    /// all of them: what is wrong, that it is not the hardware, the exact words
+    /// to type, that those words need Administrator, how to know it worked, and
+    /// what to do when the answer is "you are not allowed".
+    #[test]
+    fn the_advice_names_the_service_and_the_exact_words_to_type() {
+        let off = [
+            ("icssvc", "Windows Mobile Hotspot Service"),
+            ("SharedAccess", "Internet Connection Sharing"),
+        ];
+        let s = switched_off_advice(&off).expect("something is off, so there must be advice");
+
+        assert!(s.contains("it is not the wifi card"), "does not clear the hardware:\n{s}");
+        assert!(s.contains("Windows Mobile Hotspot Service"), "no plain name:\n{s}");
+        assert!(s.contains("(icssvc)"), "no service name to search for:\n{s}");
+        assert!(
+            s.contains("Set-Service icssvc -StartupType Manual"),
+            "no command to type:\n{s}"
+        );
+        assert!(
+            s.contains("Set-Service SharedAccess -StartupType Manual"),
+            "the second service is named but not fixed:\n{s}"
+        );
+        assert!(s.contains("ADMINISTRATOR"), "does not say it needs admin:\n{s}");
+        assert!(s.contains("Mobile hotspot"), "does not say how to check it worked:\n{s}");
+        assert!(
+            s.contains("cable"),
+            "no way out for somebody who is not allowed to do this:\n{s}"
+        );
+    }
+
+    /// Only what is actually off is named.
+    ///
+    /// A message that lists three services on a machine where one is off sends
+    /// somebody to change two things that were already right, and the next
+    /// person to look at that laptop has no way of knowing which change
+    /// mattered.
+    #[test]
+    fn the_advice_does_not_name_services_that_are_fine() {
+        let off = [("icssvc", "Windows Mobile Hotspot Service")];
+        let s = switched_off_advice(&off).expect("advice");
+        assert!(!s.contains("SharedAccess"), "names a service that is on:\n{s}");
+        assert!(!s.contains("WFDSConMgrSvc"), "names a service that is on:\n{s}");
+    }
+
+    /// Asking a real machine must not panic, hang, or invent a fault.
+    ///
+    /// This runs against whatever this machine happens to be. It cannot assert
+    /// a result, because the answer is different on a tuned laptop and a fresh
+    /// one, and both answers are correct. What it CAN assert is that the thing
+    /// only ever reports names it was given, which is the failure that would
+    /// put an invented service in front of a teacher.
+    #[test]
+    fn asking_this_machine_returns_only_names_we_know() {
+        for (service, human) in disabled_hotspot_services() {
+            assert!(
+                HOTSPOT_SERVICES.iter().any(|(s, h)| *s == service && *h == human),
+                "reported a service that is not on the list: {service}"
+            );
+        }
     }
 }
