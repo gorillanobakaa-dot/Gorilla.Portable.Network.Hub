@@ -108,6 +108,52 @@ fn main() {
     }
 }
 
+/// The wifi lines of `doctor`, kept apart from the printing so they can be
+/// tested.
+///
+/// WHY THIS IS NOT ONE LINE ANY MORE. Until 0.9.5 doctor said, on Windows,
+/// every single time:
+///
+///     wifi adapter   none found, so this computer cannot make a network
+///
+/// Measured on the Windows laptop, 2026-09-08, while that line was printing:
+/// an Intel Wi-Fi 6 AX201, Up, connected to a network at 173.3 Mbps. There was
+/// nothing to find, because nothing looked: net::wifi_interface() shells out to
+/// nmcli and is compiled to a bare `None` anywhere that is not Linux. So the
+/// line was not a failed detection, it was an unconditional false statement
+/// about the machine, and the shape of it sends a teacher to hunt for a driver
+/// that is present and working.
+///
+/// The CONCLUSION was right and the reason was wrong, which is the worse of
+/// the two ways to be wrong: this program cannot make a wifi network on
+/// Windows, because hotspot_up() is nmcli and is an error on every other
+/// system. But a teacher can make one in Settings in about four taps, and then
+/// everything here works over it. That is what hotspot_up already says when
+/// you try, and doctor should not contradict it.
+///
+/// It does not claim to have looked, either. `netsh wlan show interfaces`
+/// would name the adapter, and its output is translated on a Windows installed
+/// in any other language, which is the same trap that made
+/// connected_addresses() test for membership rather than parse a label. There
+/// is nothing here worth a fragile parse: the advice is the same whether an
+/// adapter is present or not.
+fn wifi_lines() -> Vec<String> {
+    if cfg!(target_os = "linux") {
+        return match net::wifi_interface() {
+            Some(i) => vec![format!("  wifi adapter   {i}")],
+            None => vec![
+                "  wifi adapter   none found, so this computer cannot make a network".to_string(),
+            ],
+        };
+    }
+    vec![
+        "  wifi adapter   this program cannot turn one into a network by itself here".to_string(),
+        "                 to hand out over wifi, switch the hotspot on first:".to_string(),
+        "                 Settings, Network and internet, Mobile hotspot".to_string(),
+        "                 then come back and start handing out".to_string(),
+    ]
+}
+
 /// What this computer can do, in one screen, for when it will not work and
 /// there is nobody nearby to ask.
 ///
@@ -123,9 +169,8 @@ fn doctor() {
     println!("  devices at once (default)  {}", serve::default_helpers());
     let (rows, cols) = term::size();
     println!("  window         {rows} rows by {cols} columns");
-    match net::wifi_interface() {
-        Some(i) => println!("  wifi adapter   {i}"),
-        None => println!("  wifi adapter   none found, so this computer cannot make a network"),
+    for line in wifi_lines() {
+        println!("{line}");
     }
     match net::default_gateway() {
         // On Linux this is read from the kernel's routing table. Everywhere
@@ -603,5 +648,41 @@ mod packaging_tests {
                 .unwrap_or_else(|_| panic!("{f} must exist"));
             assert!(body.contains("AGPL"), "{f} does not name the AGPL");
         }
+    }
+}
+
+#[cfg(test)]
+mod doctor_tests {
+    use super::*;
+
+    /// doctor must not tell a Windows laptop it has no wifi adapter.
+    ///
+    /// It did, on every Windows machine, until 0.9.5: net::wifi_interface() is
+    /// nmcli and compiles to a bare None everywhere else, so the None arm was
+    /// not a failed search, it was a fixed sentence. Measured while it printed:
+    /// an Intel Wi-Fi 6 AX201, up and connected at 173.3 Mbps.
+    ///
+    /// Found by running `doctor` on real Windows, which is what the Debian
+    /// side asked for, and not by anything in here. This is the guard so it
+    /// cannot come back.
+    #[test]
+    fn doctor_does_not_claim_a_missing_wifi_adapter_on_a_system_it_never_looked_at() {
+        let lines = wifi_lines();
+        let all = lines.join("\n");
+        assert!(all.contains("wifi adapter"), "the line has gone entirely:\n{all}");
+        if cfg!(target_os = "linux") {
+            return;
+        }
+        assert!(
+            !all.contains("none found"),
+            "doctor claims a search it never made:\n{all}"
+        );
+        // And it still has to say the thing that is true and useful, which is
+        // where the hotspot switch lives. hotspot_up() sends people to the same
+        // place, and two screens disagreeing about that is its own bug.
+        assert!(
+            all.contains("Mobile hotspot"),
+            "no route to handing out over wifi is offered:\n{all}"
+        );
     }
 }
