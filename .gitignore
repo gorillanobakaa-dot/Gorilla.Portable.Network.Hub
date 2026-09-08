@@ -39,3 +39,6 @@ packaging/build/
 
 __pycache__/
 *.pyc
+
+# Live test output, per run and per machine.
+testing/results/
