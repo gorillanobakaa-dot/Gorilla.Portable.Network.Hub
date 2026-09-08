@@ -1987,7 +1987,7 @@ impl App {
         } else {
             self.hints(
                 f,
-                "  space ticks    c clears every tick    enter opens a folder    esc goes back",
+                "  space ticks   c clears all   enter opens a folder   esc goes back",
             );
         }
     }
@@ -3207,6 +3207,43 @@ mod tests {
             shown.contains(env!("CARGO_PKG_VERSION")),
             "the home screen does not name the version:\n{shown}"
         );
+    }
+
+    /// A hint line that runs off the edge of the window is a truncated one.
+    ///
+    /// Adding "c clears every tick" pushed the picker's hint to 77 columns.
+    /// The default terminal is 80 and the window in use was narrower, so the
+    /// line ended "esc goes" and the key for going back was simply not there.
+    /// Caught in a screenshot, not by anything here, which is why this exists.
+    ///
+    /// Checked at 72 columns and not only at 80. The first version of this
+    /// guard used 80, passed, and would have let the same fault through: 77
+    /// fits in 80. 72 is not a guess, it is the width of the window in the
+    /// screenshot, counted from the line that was cut: "  space ticks    c
+    /// clears every tick    enter opens a folder    esc goes" is 72 characters.
+    /// A terminal nobody has maximised is the one to design for.
+    #[test]
+    fn the_hint_line_fits_the_window_it_is_drawn_in() {
+        let d = crate::scratchdir::scratch("hint-width");
+        std::fs::create_dir_all(d.join("sub")).unwrap();
+        std::fs::write(d.join("a.txt"), b"x").unwrap();
+
+        for ticked in [false, true] {
+            let mut app = App::new();
+            app.pick_dir = d.clone();
+            app.picked = if ticked { vec![d.join("a.txt")] } else { Vec::new() };
+
+            for cols in [72, 80] {
+                let mut f = crate::term::Frame::new(24, cols);
+                app.draw_pick(&mut f);
+                let shown = f.text();
+                assert!(
+                    shown.contains("esc goes back"),
+                    "the hint is cut off at {cols} columns (ticked={ticked}):\n{shown}"
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     /// A tick made in another folder has to be visible from wherever you are.
