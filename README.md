@@ -214,6 +214,9 @@ it.
 | **0.9.2, the cable address, the port 80 message and the licence** | |
 | 0.9.2 built for Linux, static, with musl-gcc rather than zig | 992,592 |
 | the same 0.9.2 built for Windows | not measured yet |
+| **0.9.3, the first screen says which version it is** | |
+| 0.9.3 built for Linux, static, with musl-gcc rather than zig | 992,592 |
+| the same 0.9.3 built for Windows | not measured yet |
 
 The 0.9.0 rows above said 700,416 and 858,160 until 0.9.1. Both were measured
 before the icon was embedded and never updated, so the table understated the
@@ -222,6 +225,12 @@ quietly, because a table of costs that is not checked is worth less than no
 table: the numbers now match what the release page actually serves. 0.9.1 adds
 nothing to either binary, which is what a release touching only comments and
 test code should do, and is why the figures repeat.
+
+0.9.3 is byte for byte the same size as 0.9.2, and that is measured rather
+than assumed: both are 992,592. Putting the version on the first screen cost
+nothing because the version string was already in the binary for `--version`
+and the formatting it needed was already there too. A row that repeats is
+worth more than a row that is missing, so it is written down.
 
 The 0.9.2 Linux figure is measured but is NOT comparable with the rows above
 it, and is marked with its linker for that reason. Every earlier Linux binary
@@ -248,13 +257,13 @@ Built packages for all three are on the
 **Debian, Ubuntu, Mint:**
 
 ```
-sudo dpkg -i gorilla-portable-network-hub_0.9.2_amd64.deb
+sudo dpkg -i gorilla-portable-network-hub_0.9.3_amd64.deb
 ```
 
 **Arch, CachyOS, Manjaro:**
 
 ```
-sudo pacman -U gorilla-portable-network-hub-0.9.2-1-x86_64.pkg.tar.zst
+sudo pacman -U gorilla-portable-network-hub-0.9.3-1-x86_64.pkg.tar.zst
 ```
 
 Or from source with `makepkg -si` in `packaging/`. The Arch package is

@@ -30,7 +30,7 @@ import sys
 import tarfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-VERSION = "0.9.2"
+VERSION = "0.9.3"
 BIN = ROOT / "src" / "hub" / "target" / "x86_64-unknown-linux-musl" / "release" / "hub"
 README = ROOT / "packaging" / "linux-README.txt"
 OUT = ROOT / "dist" / f"hub-{VERSION}-linux-x86_64-static.tar.gz"

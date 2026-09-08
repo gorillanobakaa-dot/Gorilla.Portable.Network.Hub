@@ -1,5 +1,25 @@
 gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
 
+  * THE FIRST SCREEN SAYS WHICH VERSION IT IS. The menu is the way in for
+    most people and it was the one screen that never named the build, so
+    somebody reporting that something does not work was looking at it with
+    no way to answer "which version". The only route was to quit and run
+    `hub --version`, which means leaving the part of it they know how to
+    use. It sits on the title line rather than a line of its own, because
+    rows there are a fixed budget shared with the content.
+  * A test guards it. Until now nothing could assert on a screen at all:
+    Frame builds the display into a private field and only the code that
+    paints the terminal ever read it, which is part of why this went
+    unnoticed through nine releases. Frame gains a test-only way to read
+    back what was drawn, and the guard was checked by removing the version
+    again and confirming it fails.
+  * Costs nothing: 992,592 bytes, the same as 0.9.2 to the byte. The
+    version string was already in the binary for `--version`.
+
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+
+gorilla-portable-network-hub (0.9.2) unstable; urgency=medium
+
   * THE CABLE ADDRESS IS VISIBLE AGAIN. Sending down a cable said "no cable
     address yet. Wait half a minute and look again." forever, while holding
     a perfectly good address and serving on it. The probe that finds a cable
@@ -37,7 +57,7 @@ gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
     belongs. 0.9.0 and 0.9.1 have no entry here and none is invented; their
     notes are on the GitHub releases page.
 
- -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  Sun, 07 Sep 2026 17:00:00 +0100
 
 gorilla-portable-network-hub (0.8.0) unstable; urgency=medium
 

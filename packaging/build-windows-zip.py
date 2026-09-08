@@ -32,7 +32,7 @@ import sys
 import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-VERSION = "0.9.2"
+VERSION = "0.9.3"
 BIN = ROOT / "src" / "hub" / "target" / "release" / "hub.exe"
 OUT = ROOT / "dist" / f"hub-{VERSION}-windows-x86_64.zip"
 README = ROOT / "packaging" / "windows-README.txt"

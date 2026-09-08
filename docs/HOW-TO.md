@@ -46,12 +46,12 @@ back to about 2009. That is the whole requirement on their side.
 
 ### On Debian, Ubuntu or Mint
 
-1. Download `gorilla-portable-network-hub_0.9.2_amd64.deb` from the releases
+1. Download `gorilla-portable-network-hub_0.9.3_amd64.deb` from the releases
    page.
 2. Open a terminal in the folder you downloaded it to, and type:
 
 ```bash
-sudo dpkg -i gorilla-portable-network-hub_0.9.2_amd64.deb
+sudo dpkg -i gorilla-portable-network-hub_0.9.3_amd64.deb
 ```
 
 - **Pass:** the last line says `Setting up gorilla-portable-network-hub`.
@@ -64,14 +64,14 @@ sudo dpkg -i gorilla-portable-network-hub_0.9.2_amd64.deb
 hub --version
 ```
 
-- **Pass:** it prints `hub 0.9.2`.
+- **Pass:** it prints `hub 0.9.3`.
 
 ### On Arch, CachyOS or Manjaro
 
 Download the `.pkg.tar.zst` from the releases page and install it:
 
 ```bash
-sudo pacman -U gorilla-portable-network-hub-0.9.2-1-x86_64.pkg.tar.zst
+sudo pacman -U gorilla-portable-network-hub-0.9.3-1-x86_64.pkg.tar.zst
 ```
 
 Or build it yourself, which needs the `rust` package:
@@ -82,11 +82,11 @@ cd Gorilla.Portable.Network.Hub/packaging
 makepkg -si
 ```
 
-- **Pass:** `hub --version` prints `hub 0.9.2`.
+- **Pass:** `hub --version` prints `hub 0.9.3`.
 
 ### On Windows
 
-1. Download `hub-0.9.2-windows-x86_64.zip` and unzip it anywhere.
+1. Download `hub-0.9.3-windows-x86_64.zip` and unzip it anywhere.
 2. Switch the hotspot on yourself: **Settings**, then **Network and internet**,
    then **Mobile hotspot**. Write down the network name and password Windows
    shows you.
