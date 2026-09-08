@@ -219,9 +219,10 @@ it.
 | the same 0.9.3 built for Windows | not measured yet |
 | **0.9.5, a hint that fits the window** | |
 | 0.9.5 built for Linux, static, with musl-gcc rather than zig | 1,000,784 |
+| **0.9.5 built for Windows, as published** | **838,656** |
 | **0.9.4, names instead of addresses, and a code for a camera** | |
 | 0.9.4 built for Linux, static, with musl-gcc rather than zig | 1,000,784 |
-| the same 0.9.4 cross-built for Windows, with mingw rather than MSVC | 844,800 |
+| 0.9.4 cross-built for Windows on Linux, never published | 844,800 |
 
 The 0.9.0 rows above said 700,416 and 858,160 until 0.9.1. Both were measured
 before the icon was embedded and never updated, so the table understated the
@@ -233,6 +234,23 @@ test code should do, and is why the figures repeat.
 
 0.9.5 is the same size as 0.9.4 to the byte, at 1,000,784: it removes ten
 characters from one hint line and adds a test.
+
+The published Windows figure is 838,656 and was measured on the machine that
+built it, with rustc 1.98.1 on the x86_64-pc-windows-gnu host, which is mingw
+rather than MSVC: the same family as the 844,800 cross-build, and not the same
+number. The 6,144 bytes between them are the linker's, not this program's, and
+that is the point of saying which toolchain produced each row. 1,024 of the
+838,656 are the version resource added in this release, so the code itself came
+to 837,632.
+
+Right-clicking hub.exe and opening Details now shows 0.9.5, the name of the
+program and the licence. Before this release that pane was empty. The menu
+screen has named the version since 0.9.3, which is no help at all to somebody
+holding a copy that arrived on a memory stick: they are looking at it in
+Explorer, and an executable with no publisher and no version is exactly the
+shape of the thing an IT department tells people to delete. It costs 1,024
+bytes and is built by the same windres already there for the icon, so it adds
+no dependency.
 
 0.9.4 costs 8,192 bytes over 0.9.3, measured. That is the whole of it: asking
 a machine what it is called, refusing to promise a name another machine already
