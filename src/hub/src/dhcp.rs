@@ -429,31 +429,54 @@ pub fn supervise(
     let out = Arc::clone(&note);
 
     thread::spawn(move || {
-        let mut serving = false;
+        // The flag the address handout and the name server run on. Their
+        // own, not `stop`, so that they can be switched off while the rest of
+        // the session carries on.
+        //
+        // WHY. This loop used to look only while it was waiting. Once it had
+        // started it never looked again, so a laptop that went back on to a
+        // wifi network with a router, the program still open, handed out
+        // addresses to that network and answered every name on it with
+        // itself. The same fault the 0.9.0 notes describe, still present in
+        // 0.9.8 through this path. Found reading the code, 2026-09-23.
+        let mut serving: Option<Arc<AtomicBool>> = None;
         while !stop.load(Ordering::Relaxed) {
-            if !serving {
-                // Connected addresses, not merely configured ones. Windows
-                // keeps an address on an adapter after it disconnects, and a
-                // socket still picks it, so local_addresses() reports a network
-                // that is not there and the guard refuses for no reason.
-                let addresses = crate::net::connected_addresses();
-                // Checked against the neighbour table: a gateway nothing
-                // answers for is a leftover, not a router.
-                let gateway = crate::net::live_default_gateway();
+            // Connected addresses, not merely configured ones. Windows
+            // keeps an address on an adapter after it disconnects, and a
+            // socket still picks it, so local_addresses() reports a network
+            // that is not there and the guard refuses for no reason.
+            let addresses = crate::net::connected_addresses();
+            // Checked against the neighbour table: a gateway nothing
+            // answers for is a leftover, not a router.
+            let gateway = crate::net::live_default_gateway();
+            let allowed = anyway || safe_to_offer(&addresses, gateway);
+            if let Some(flag) = &serving {
+                if !allowed {
+                    // The way stopped being clear. Stop at once; the sockets
+                    // close within half a second and start again by
+                    // themselves if the other network goes away.
+                    flag.store(true, Ordering::Relaxed);
+                    serving = None;
+                    let mut n = note.lock().unwrap_or_else(|e| e.into_inner());
+                    *n = "stopped giving out addresses: this computer is on                           another network now. Starts again by itself when it leaves."
+                        .into();
+                }
+            }
+            if serving.is_none() {
                 let ours = addresses
                     .iter()
                     .copied()
                     .find(|a| a.is_link_local())
                     .unwrap_or(Ipv4Addr::new(169, 254, 1, 1));
 
-                let allowed = anyway || safe_to_offer(&addresses, gateway);
                 if allowed {
+                    let flag = Arc::new(AtomicBool::new(false));
                     // Names first, because the lease has to say whether a
                     // resolver is running and it only knows once one has tried.
-                    let naming = crate::dns::start(ours, Arc::clone(&stop)).is_ok();
-                    match start(ours, &addresses, gateway, naming, anyway, Arc::clone(&stop)) {
+                    let naming = crate::dns::start(ours, Arc::clone(&flag)).is_ok();
+                    match start(ours, &addresses, gateway, naming, anyway, Arc::clone(&flag)) {
                         Ok(_) => {
-                            serving = true;
+                            serving = Some(flag);
                             let mut n = note.lock().unwrap_or_else(|e| e.into_inner());
                             *n = if naming {
                                 "giving the other computer an address, and answering names".into()
@@ -462,6 +485,8 @@ pub fn supervise(
                             };
                         }
                         Err(e) => {
+                            // Whatever did start (the name server) stops too.
+                            flag.store(true, Ordering::Relaxed);
                             let mut n = note.lock().unwrap_or_else(|e| e.into_inner());
                             *n = e.to_string();
                         }
@@ -517,6 +542,9 @@ pub fn supervise(
             // like it did something, slow enough to be nothing on a 2012
             // processor drawing a screen four times a second.
             thread::sleep(Duration::from_secs(3));
+        }
+        if let Some(flag) = serving {
+            flag.store(true, Ordering::Relaxed);
         }
     });
 

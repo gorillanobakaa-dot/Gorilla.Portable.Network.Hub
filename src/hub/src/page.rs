@@ -159,6 +159,11 @@ fn token_already_used(peer_ip: &str, token: &str) -> bool {
     false
 }
 
+/// The list of chosen files with a REMOVE button each. DataTransfer is how a
+/// page may set a file input's files; where it is missing (old browsers) the
+/// script does nothing and the plain file button and START AGAIN still work.
+const PICK_LIST_SCRIPT: &str = "<script>(function(){var p=document.getElementById('pick'),box=document.getElementById('chosen');if(!p||!box||!window.DataTransfer)return;var kept=[];function size(n){return n>1e6?(n/1e6).toFixed(1)+' MB':Math.max(1,Math.round(n/1e3))+' KB';}function sync(){var dt=new DataTransfer();kept.forEach(function(f){dt.items.add(f);});p.files=dt.files;show();}function show(){box.innerHTML='';kept.forEach(function(f,i){var d=document.createElement('div');d.className='pickrow';var n=document.createElement('span');n.textContent=f.name+'  ('+size(f.size)+')';d.appendChild(n);var x=document.createElement('button');x.type='button';x.className='remove';x.textContent='REMOVE';x.onclick=function(){kept.splice(i,1);sync();};d.appendChild(x);box.appendChild(d);});if(kept.length){var c=document.createElement('div');c.className='count';c.textContent=kept.length+(kept.length==1?' file':' files')+' will be sent.';box.appendChild(c);}}p.addEventListener('change',function(){for(var i=0;i<p.files.length;i++){var f=p.files[i];if(!kept.some(function(k){return k.name==f.name&&k.size==f.size;}))kept.push(f);}sync();});p.form.addEventListener('reset',function(){kept=[];setTimeout(show,0);});})();</script>\n";
+
 /// The whole page. `done` names a just-finished action so the reloaded page
 /// can say so (the POST answered with a redirect here; refresh never
 /// resubmits).
@@ -186,6 +191,10 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, 
          .escapebtn{background:#b34700;font-size:1.15em;display:block;text-align:center;margin:10px 0}\
          .escapealt{background:#555;display:block;text-align:center;margin:6px 0}\
          iframe{width:100%;border:0;min-height:340px}\
+         .pickrow{display:flex;justify-content:space-between;align-items:center;border:1px solid #ccc;border-radius:6px;padding:6px 8px;margin:6px 0;word-break:break-all}\
+         button.remove{background:#a11;padding:8px 12px;font-size:.95em;margin:0 0 0 8px}\
+         button.again{background:#555}\
+         .count{margin:6px 0;font-weight:bold}\
          </style></head><body>\n<h1>Class files</h1>\n",
     );
     // WHO ARE YOU comes before everything else. Thirty identical phones make
@@ -237,10 +246,20 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, 
             "<form method=\"post\" action=\"/handin\" enctype=\"multipart/form-data\">\
              <b>Hand in your work</b><br>\
              <input type=\"hidden\" name=\"token\" value=\"{token}\">\
-             <input type=\"file\" name=\"work\" multiple><br>\
-             <small>You can pick more than one.</small><br>\
-             <button type=\"submit\">SEND IT TO YOUR TEACHER</button></form>\n"
+             <input type=\"file\" name=\"work\" id=\"pick\" multiple><br>\
+             <div id=\"chosen\"></div>\
+             <small>You can pick more than one, and pick again to add more.</small><br>\
+             <button type=\"submit\">SEND IT TO YOUR TEACHER</button>\
+             <button type=\"reset\" class=\"again\">START AGAIN</button></form>\n"
         ));
+        // A chosen file could not be taken back. The browser's own file
+        // button shows "3 files" and nothing else: no list, no way to take
+        // one off, and picking again REPLACED the choice instead of adding
+        // to it. Reported by the owner, 2026-09-23, after picking the wrong
+        // picture on a phone. So the choice is listed, each with REMOVE, and
+        // picking again adds. START AGAIN is a plain reset button, which
+        // clears the choice even on a phone too old to run the script.
+        s.push_str(PICK_LIST_SCRIPT);
         // The escape hatch: a BUTTON, not an address to type.
         //
         // Printing "go to 10.42.0.1" was useless in the field. Mobile
@@ -631,7 +650,44 @@ fn truncate_chars(s: &str, max: usize) -> String {
 /// know the teacher can reach and usually write; refused, because kid A's
 /// homework must never be downloadable by kid B. The refusal has its own test.
 pub fn handed_in_dir(root: &Path) -> PathBuf {
+    if let Some(dir) = RECEIVE_DIR.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        return dir;
+    }
     root.join("handed-in")
+}
+
+/// Where received work goes, when the person has been told (the screen does).
+///
+/// WHY. It used to go into a "handed-in" folder inside whatever folder was
+/// being handed out, and nothing on any screen said so. On 2026-09-23 a
+/// screenshot sent from a phone was found, after a search of the whole
+/// profile, in a handed-in folder inside a personal folder on the Desktop,
+/// because that was the folder shared that time; earlier sessions had left
+/// "handed-in" folders in three other places. One fixed, named place, shown on the screen with a
+/// key that opens it, and changeable from the start screen. Being outside
+/// the handed-out folder it can never be handed back out, which is what the
+/// old location had to be refused specially to achieve.
+static RECEIVE_DIR: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+pub fn set_receive_dir(dir: Option<PathBuf>) {
+    *RECEIVE_DIR.lock().unwrap_or_else(|e| e.into_inner()) = dir;
+}
+
+pub fn receive_dir_is_set() -> bool {
+    RECEIVE_DIR.lock().unwrap_or_else(|e| e.into_inner()).is_some()
+}
+
+/// The place received files go unless the person chooses another:
+/// Documents\Gorilla Hub received (a folder name a person can find by
+/// looking, and search for by the program's name).
+pub fn default_receive_dir() -> PathBuf {
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let docs = home.join("Documents");
+    let base = if docs.is_dir() { docs } else { home };
+    base.join("Gorilla Hub received")
 }
 
 /// Strip a filename to something safe: no paths, no traversal, no leading
@@ -1233,6 +1289,8 @@ mod tests {
 
     #[test]
     fn a_browser_upload_lands_byte_for_byte() {
+        // The received folder is process-wide: see tui::tests::work_can_be_accepted_all_at_once_or_per_person.
+        let _g = crate::serve::SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tmpdir();
         // Content deliberately contains CR LF and dashes, the bytes most
         // likely to be mistaken for a boundary.
@@ -1245,6 +1303,8 @@ mod tests {
 
     #[test]
     fn the_same_upload_twice_lands_once() {
+        // The received folder is process-wide: see tui::tests::work_can_be_accepted_all_at_once_or_per_person.
+        let _g = crate::serve::SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tmpdir();
         let content = b"same bytes".to_vec();
         assert_eq!(upload(&dir, "10.42.0.91", "hw.txt", &content).tag, "handin");
@@ -1255,6 +1315,8 @@ mod tests {
 
     #[test]
     fn a_changed_resubmission_becomes_a_second_version() {
+        // The received folder is process-wide: see tui::tests::work_can_be_accepted_all_at_once_or_per_person.
+        let _g = crate::serve::SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tmpdir();
         upload(&dir, "10.42.0.92", "essay.txt", b"first go");
         let out = upload(&dir, "10.42.0.92", "essay.txt", b"fixed it");
@@ -1267,6 +1329,8 @@ mod tests {
 
     #[test]
     fn a_hostile_filename_cannot_leave_the_folder() {
+        // The received folder is process-wide: see tui::tests::work_can_be_accepted_all_at_once_or_per_person.
+        let _g = crate::serve::SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tmpdir();
         let out = upload(&dir, "10.42.0.93", "../../../../etc/passwd", b"nope");
         assert_eq!(out.tag, "handin");
@@ -1304,6 +1368,8 @@ mod tests {
 
     #[test]
     fn a_note_is_idempotent_and_budgeted() {
+        // The received folder is process-wide: see tui::tests::work_can_be_accepted_all_at_once_or_per_person.
+        let _g = crate::serve::SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tmpdir();
         let ip = "10.42.0.94";
         // Same token twice: one note.
@@ -1355,6 +1421,8 @@ mod tests {
 
     #[test]
     fn a_note_from_a_named_device_is_attributable_in_the_permanent_record() {
+        // The received folder is process-wide: see tui::tests::work_can_be_accepted_all_at_once_or_per_person.
+        let _g = crate::serve::SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tmpdir();
         claim_name("10.42.0.203", "who=Johnny");
         crate::serve::set_device_name("10.42.0.203", "Xiaomi-11-Lite-5G-NE");
@@ -1366,6 +1434,8 @@ mod tests {
 
     #[test]
     fn a_named_device_hands_in_under_its_name() {
+        // The received folder is process-wide: see tui::tests::work_can_be_accepted_all_at_once_or_per_person.
+        let _g = crate::serve::SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tmpdir();
         claim_name("10.42.0.204", "who=Amina");
         let out = upload(&dir, "10.42.0.204", "essay.docx", b"real work");
@@ -1394,6 +1464,8 @@ mod tests {
     /// spreadsheet and three photographs of the work.
     #[test]
     fn several_files_in_one_send_all_arrive() {
+        // The received folder is process-wide: see tui::tests::work_can_be_accepted_all_at_once_or_per_person.
+        let _g = crate::serve::SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tmpdir();
         let b = "----WebKitFormBoundaryMulti";
         let mut body = Vec::new();
@@ -1425,6 +1497,8 @@ mod tests {
     /// class, until she says so.
     #[test]
     fn work_waits_until_accepted_and_a_refusal_is_kept() {
+        // The received folder is process-wide: see tui::tests::work_can_be_accepted_all_at_once_or_per_person.
+        let _g = crate::serve::SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tmpdir();
         upload(&dir, "10.42.0.98", "good.txt", b"real work");
         upload(&dir, "10.42.0.98", "bad.jpg", b"not real work");

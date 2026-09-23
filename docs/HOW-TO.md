@@ -96,15 +96,17 @@ makepkg -si
 
 ### On Windows
 
-1. Download `hub-0.9.8-windows-x86_64.zip` and unzip it anywhere.
-2. Switch the hotspot on yourself: **Settings**, then **Network and internet**,
-   then **Mobile hotspot**. Write down the network name and password Windows
-   shows you.
-3. Double-click `hub.exe`.
+1. Download `hub-0.9.9-windows-x86_64.zip` and unzip it anywhere.
+2. Double-click `hub.exe`. You do not need to switch the hotspot on in
+   Settings any more: from 0.9.9 the hub does it when you start handing out.
+3. If the first screen says **THIS COMPUTER IS NOT READY YET**, choose
+   **Fix problems with this computer**, then **Turn on the parts of Windows the
+   hub needs**, and say Yes when Windows asks for permission.
 
 - **Pass:** a screen appears offering *Hand out files to the class*, with
-  `hub 0.9.8` written at the top of it. Right-click `hub.exe`, choose
-  **Properties**, then **Details**, and it says 0.9.8 there too.
+  `hub 0.9.9` and the date it was built written at the top of it. Right-click
+  `hub.exe`, choose **Properties**, then **Details**, and it says 0.9.9 there
+  too.
 - **Fail:** Windows may warn that it does not recognise the program. That
   warning appears for any program without a paid signing certificate. Choose
   **More info**, then **Run anyway**, or do not run it. Both are reasonable.
@@ -518,9 +520,15 @@ box, and the laptop looks broken.
 
 [![hub doctor on Windows, naming Windows Mobile Hotspot Service and Internet Connection Sharing as switched off and printing the two commands that switch them back on](screenshots/gallery/windows-doctor-switched-off-services.png)](screenshots/gallery/windows-doctor-switched-off-services.png)
 
-**To check:** run `hub doctor`. From 0.9.7 it names anything that has been
-switched off and prints the exact lines to type. If it says nothing about
-services, this is not your problem and something else is going on.
+**From 0.9.9 the hub fixes this for you.** Its first screen checks as soon as
+it opens and says **THIS COMPUTER IS NOT READY YET** if something is off.
+Choose **Fix problems with this computer**, then **Turn on the parts of Windows
+the hub needs**, and say Yes when Windows asks. It writes down how things were
+first, so `hub services --put-back` can put them back exactly.
+
+**To check by hand:** run `hub doctor` or `hub services`. They name anything
+that has been switched off. If they say nothing about services, this is not
+your problem and something else is going on.
 
 **This has been tested, not just reasoned about.** On the laptop these
 instructions were written on, the two lines below turned an empty, refusing
@@ -528,7 +536,7 @@ Mobile hotspot page into a working one with a name and password filled in,
 and the hotspot then switched on. Undoing them brought the fault straight
 back, which is how we know it was the cause and not a coincidence.
 
-**To fix it:** open Windows Terminal or PowerShell **as administrator**.
+**To fix it by hand instead:** open Windows Terminal or PowerShell **as administrator**.
 Right-click the Start button and choose the entry with **(Admin)** after it.
 Then type these, one line at a time:
 

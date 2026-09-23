@@ -1,5 +1,51 @@
 gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
 
+  * WINDOWS MAKES ITS OWN WIFI NETWORK NOW. Choosing "Hand out files over
+    wifi" switches Mobile Hotspot on through the WinRT tethering manager, run
+    via PowerShell (-EncodedCommand; name, password and band in environment
+    variables). No administrator rights, and it starts with no internet at
+    all, from the unplugged Ethernet profile. Measured before it was built.
+  * 2.4 GHz UNLESS YOU CHOOSE 5. Left on Auto, a laptop joined to nothing
+    broadcast on 5 GHz channel 149 and two phones saw nothing while Windows
+    said On. Measured with WlanQueryInterface: Auto -> 149, 2.4 -> 6. The
+    start screen has a "Wifi band" row; the sending screen shows the channel
+    the card is really on; the fix screen and hub doctor say what the card
+    can do (this one: no 6 GHz, one network, no MLO).
+  * IT STAYS UP. A guard restarts the hotspot and the wifi radio when Windows
+    drops them (it does as the last device leaves), retrying every 2 s; a 40 s
+    outage came from the guard waiting 10 s after refused attempts. Closing
+    the window with X, or a crash, now switches the network off through a
+    watchman process. Every outage and Windows' answers go to network.log.
+  * THE QR CODES WORK. Every code ever drawn had its format field written
+    backwards, so no camera could read one, on Linux as on Windows. Found with
+    OpenCV; the round-trip test shared the mistake. A new test checks the
+    field against the standard's own table.
+  * THE SIGN-IN PAGE OPENS BY ITSELF ON WINDOWS. The hub answers the phones'
+    connectivity probes on 192.168.137.1:53, ahead of Windows' own proxy,
+    and passes other names to the real router read from the route table.
+  * STOP REALLY STOPS. The name answering, address handout and beacon ran on
+    after Stop, and the web server went on serving the whole previous folder.
+    The address handout also never re-checked for a router once started.
+  * gorilla.local is answered on the hotspot, only to its own network, with
+    announce and goodbye packets.
+  * TWEAKED LAPTOPS. "Fix problems with this computer" finds Windows services
+    the hub needs switched off (registry numbers, dependencies read from the
+    registry) and switches them back on with one permission prompt; the first
+    screen says when the computer is not ready; hub services --put-back.
+  * FILES. The lists fill the window in columns, page, and show one folder at a
+    time; ticking a big folder asks first. Received work goes to Documents\Gorilla
+    Hub received, shown on screen, o opens it. The phone page lists chosen
+    files with REMOVE and START AGAIN. e accepts all waiting work, p all from
+    one person.
+  * The build date is on the first screen; crashes go to crash.log; hub doctor
+    no longer says things that are untrue on Windows.
+  * Windows only. No Linux packages with this release: the Linux hotspot paths
+    have not been run on hardware since these changes.
+
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+
+gorilla-portable-network-hub (0.9.8) unstable; urgency=medium
+
   * ONE FEWER THING TO TYPE, BECAUSE IT WAS MEASURED. 0.9.7 named three
     switched-off services and asked for three Set-Service lines. The third,
     WFDSConMgrSvc, the Wi-Fi Direct Services Connection Manager, was in the

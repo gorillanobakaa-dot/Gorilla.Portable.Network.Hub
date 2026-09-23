@@ -66,6 +66,12 @@ pub fn run() {
         return;
     };
     let mut app = App::new();
+    // Looked at straight away, in the background, so the first screen can say
+    // whether this computer is ready without making anyone wait for it.
+    app.refresh_services();
+    std::thread::spawn(|| {
+        let _ = net::wifi_card_summary();
+    });
     let keys = Keys::new();
     loop {
         let (rows, cols) = term::size();
@@ -111,6 +117,10 @@ enum Screen {
     /// commonest cause of "it does not work": a firewall quietly dropping
     /// every incoming connection while everything else looks healthy.
     Checkup,
+    /// Parts of Windows the hub needs are switched off, found on the way into
+    /// wifi or cable: say so there and offer the fix, rather than let the
+    /// person meet the failure later in front of the class.
+    FixOffer,
     Note(String),
 }
 
@@ -146,8 +156,14 @@ struct App {
 
     // the send form
     folder: String,
+    /// What `services::check` found, filled in by a background thread at start
+    /// and after every fix. None while still looking, or off Windows.
+    services: Arc<Mutex<Option<Vec<crate::services::Found>>>>,
     ssid: String,
     password: String,
+    /// The password field was typed into, so it is theirs and is never
+    /// swapped for the one saved with the network name.
+    password_typed: bool,
     /// Which of the thirteen 2.4 GHz lanes to broadcast on. Empty means the
     /// system chooses, which is usually fine and occasionally costs the whole
     /// room 30%: see hotspot_up for the measured case.
@@ -209,6 +225,10 @@ struct App {
     chosen: Option<std::collections::HashSet<String>>,
     /// Whether .local is being announced. Independent of the guard.
     mdns: bool,
+    /// The same, for a hotspot whose address arrives after the screen has
+    /// started: set by the waiting thread in dns::start_mdns_when_ready.
+    mdns_live: Arc<std::sync::atomic::AtomicBool>,
+    taken_live: Arc<std::sync::atomic::AtomicBool>,
     /// Whether we are answering names as well as handing out addresses. When
     /// true the other end can type a word instead of an address, and its own
     /// operating system should offer to open the page. When false, port 53 was
@@ -221,6 +241,21 @@ struct App {
     names: net::NameCache,
     /// (name, size, ticked) for the tick screen.
     tick: Vec<(String, u64, bool)>,
+    /// Where received work goes. Shown on the start and sending screens.
+    receive_dir: PathBuf,
+    /// The picker is choosing where received work goes, not what to send.
+    picking_receive: bool,
+    /// Windows: make the network on 5 GHz instead of 2.4 GHz.
+    band5: bool,
+    /// The folder being looked at on the tick screen, relative to what is
+    /// handed out, "" for the top. The list shows one folder at a time.
+    tick_dir: String,
+    /// First column on screen in the tick list.
+    tick_first: usize,
+    /// A big folder (or "all here") waiting for space to be pressed again.
+    tick_confirm: Option<String>,
+    /// What the last tick did, said in words under the list.
+    tick_said: String,
     /// The notice editor borrows the same editing buffer as the form fields;
     /// this flag says which thing a commit belongs to.
     editing_notice: bool,
@@ -371,12 +406,20 @@ impl App {
             row: 0,
             editing: None,
             folder: here.to_string_lossy().into_owned(),
-            ssid: String::new(),
+            // On Windows the hub now makes the network itself, and in the places
+            // this is for there is no other network to use. So a name is ready
+            // and nobody has to invent one. Cleared, it serves over whatever
+            // network the computer is already on, as before.
+            ssid: if cfg!(windows) { "Gorilla Hub".to_string() } else { String::new() },
             channel: String::new(),
             // Offered, not imposed. A suggested password is the difference
             // between a teacher setting one and a teacher leaving the network
             // open because inventing a password is one more thing to do.
             password: net::suggest_password(),
+            password_typed: false,
+            services: Arc::new(Mutex::new(None)),
+            mdns_live: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            taken_live: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             helpers: serve::default_helpers(),
             hotspot: None,
             cable: false,
@@ -401,6 +444,13 @@ impl App {
             joined_at: None,
             names: net::NameCache::default(),
             tick: Vec::new(),
+            receive_dir: crate::page::default_receive_dir(),
+            picking_receive: false,
+            band5: false,
+            tick_dir: String::new(),
+            tick_first: 0,
+            tick_confirm: None,
+            tick_said: String::new(),
             editing_notice: false,
             new_password: String::new(),
             tab_hint: None,
@@ -432,10 +482,20 @@ impl App {
         self.chosen = None;
         self.tick.clear();
         self.cable_note.clear();
+        // Actually stop them. Dropping cable_watch only dropped the screen's
+        // copy of a status line: the flag the beacon, the .local answerer, the
+        // address handout and the name server all wait on was never raised,
+        // so every one of them ran on after Stop until the program closed,
+        // answering gorilla.local with the old address. A second start then
+        // added a second set beside the first.
+        self.cable_stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        serve::halt();
         self.cable_watch = None;
         self.naming = false;
         self.mdns = false;
         self.name_taken = false;
+        self.mdns_live = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.taken_live = Arc::new(std::sync::atomic::AtomicBool::new(false));
         serve::forget_session();
     }
 
@@ -493,6 +553,7 @@ impl App {
             Screen::Receiving => self.draw_receiving(&mut f),
             Screen::Pick => self.draw_pick(&mut f),
             Screen::Checkup => self.draw_checkup(&mut f),
+            Screen::FixOffer => self.draw_fixoffer(&mut f),
             Screen::Note(_) => self.draw_note(&mut f),
         }
         f.draw();
@@ -513,6 +574,27 @@ impl App {
         f.push_dim(s);
     }
 
+    /// Look at the Windows services again, off the drawing thread. Half a
+    /// second on the development laptop; an old one may take a few.
+    fn refresh_services(&self) {
+        if !cfg!(windows) {
+            return;
+        }
+        let slot = Arc::clone(&self.services);
+        *slot.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        std::thread::spawn(move || {
+            let found = crate::services::check();
+            *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(found);
+        });
+    }
+
+    /// Names of what is switched off. None: still looking, or not Windows.
+    fn services_off(&self) -> Option<Vec<String>> {
+        let guard = self.services.lock().unwrap_or_else(|e| e.into_inner());
+        let found = guard.as_ref()?;
+        Some(found.iter().filter(|f| f.switched_off()).map(|f| f.label.clone()).collect())
+    }
+
     fn draw_home(&self, f: &mut Frame) {
         // The version belongs on this screen, not only behind --version.
         //
@@ -528,13 +610,13 @@ impl App {
         // already exists costs nothing to extend.
         self.title(
             f,
-            &format!("Gorilla Portable Network Hub {}", env!("CARGO_PKG_VERSION")),
+            &format!("Gorilla Portable Network Hub {}{}", env!("CARGO_PKG_VERSION"), crate::built()),
         );
         let items: Vec<String> = [
             "Hand out files to the class over wifi",
             "Send files down a cable to one other computer",
             "Get files from another computer",
-            "Check this computer",
+            "Fix problems with this computer (wifi, cable, firewall)",
         ]
         .iter()
         .map(|it| format!("  {it}"))
@@ -548,8 +630,48 @@ impl App {
             }
         }
         f.blank();
-        f.push_dim("  This works with no internet and no router.");
-        f.push_dim("  A cable is the fastest way to move a lot at once.");
+        // Said on the FIRST screen, and not as a one-liner. A laptop that
+        // has been "sped up" looks perfectly fine: nothing tells its owner
+        // that the hotspot or the cable will fail, and the person who ran
+        // the tweak script is the least likely to suspect it. So the check
+        // is asked for plainly, and when it has found something, louder.
+        match self.services_off() {
+            Some(off) if !off.is_empty() => {
+                f.push("  !! THIS COMPUTER IS NOT READY YET.");
+                f.push("     Parts of Windows the hub needs are switched off here:");
+                f.push(&format!("     {}.", off.join(", ")));
+                f.push("     Choose \"Fix problems with this computer\" before anything else.");
+                f.push("     It takes a few seconds. Windows will ask permission: say Yes.");
+            }
+            Some(_) => {
+                f.push("  This computer is ready: everything the hub needs is switched on.");
+                f.push_dim("  This works with no internet and no router.");
+            }
+            None if cfg!(windows) => {
+                f.push_dim("  Checking whether this computer is ready...");
+            }
+            None => {
+                f.push_dim("  This works with no internet and no router.");
+                f.push_dim("  A cable is the fastest way to move a lot at once.");
+            }
+        }
+        f.blank();
+        // Full brightness unless this computer is already known to be fine:
+        // grey text is text people skip, and this is the one they must not.
+        let ready = self.services_off().is_some_and(|off| off.is_empty());
+        for line in [
+            "  On a new computer, run \"Fix problems with this computer\" once,",
+            "  even if everything seems fine. Many laptops have had parts of",
+            "  Windows switched off to \"speed them up\", by a tweak list, a script",
+            "  or a friend. Nothing looks wrong until the wifi network or the cable",
+            "  fails in front of the people waiting for the files.",
+        ] {
+            if ready {
+                f.push_dim(line);
+            } else {
+                f.push(line);
+            }
+        }
         self.hints(f, "  up and down to choose    enter to open    q to quit");
     }
 
@@ -603,6 +725,7 @@ impl App {
                     },
                 ),
                 ("Connections to serve at once".into(), self.helpers.to_string()),
+                ("Received files go to".into(), self.receive_dir.display().to_string()),
             ];
         }
         vec![
@@ -631,7 +754,16 @@ impl App {
             // and this tool's own downloads use four. Thirty phones is nearer
             // 180 connections than 30, so a teacher reading "64 devices" and
             // counting heads was reassured by the wrong number.
-            (
+            if cfg!(windows) {
+                (
+                    "Wifi band".into(),
+                    if self.band5 {
+                        "5 GHz (faster; some phones will not see it)".into()
+                    } else {
+                        "2.4 GHz (every phone sees it)".into()
+                    },
+                )
+            } else { (
                 "Wifi channel".into(),
                 if self.ssid.is_empty() {
                     // Not a verdict, an instruction. This first read "not ours
@@ -646,8 +778,9 @@ impl App {
                 } else {
                     self.channel.clone()
                 },
-            ),
+            ) },
             ("Connections to serve at once".into(), self.helpers.to_string()),
+            ("Received files go to".into(), self.receive_dir.display().to_string())
         ]
     }
 
@@ -719,7 +852,17 @@ impl App {
             f.push_dim("  acts when this computer is on nothing but the cable.");
             f.blank();
         }
+        if cfg!(windows) && !self.cable && self.row == 3 && self.editing.is_none() {
+            f.push_dim("  Enter switches between 2.4 GHz and 5 GHz. 2.4 GHz reaches every");
+            f.push_dim("  phone and goes through walls better; 5 GHz is faster, but some");
+            f.push_dim("  phones cannot see it. If phones cannot find the network, use 2.4.");
+            f.push_dim("  Windows picks the channel itself; the screen shows which one.");
+        }
         if self.row == fields.len() - 1 && self.editing.is_none() {
+            f.push_dim("  Everything people send you lands in this one folder. Press");
+            f.push_dim("  enter to choose another. On the next screen, o opens it.");
+        }
+        if self.row == fields.len() - 2 && self.editing.is_none() {
             // Only while the teacher is on that row, so the screen is not
             // carrying an explanation nobody is reading.
             f.push_dim("  One device holds several connections at a time: a phone's browser");
@@ -727,7 +870,9 @@ impl App {
             f.push_dim("  phones is nearer 180 connections than 30.");
             f.blank();
         }
-        if !self.cable && self.row == 3 && !self.ssid.is_empty() {
+        // Linux only: there the hub sets the channel. On Windows this row is
+        // the band, and Windows picks the channel.
+        if !cfg!(windows) && !self.cable && self.row == 3 && !self.ssid.is_empty() {
             let allowed = net::allowed_channels();
             f.push_dim("  Channels are lanes on the same road. If the room is slow, another");
             if allowed.is_empty() {
@@ -758,6 +903,9 @@ impl App {
         } else if self.ssid.is_empty() {
             f.push_dim("  Leave the network name empty if the class is already");
             f.push_dim("  on the same wifi as this computer.");
+        } else if cfg!(windows) {
+            f.push_dim("  The hub switches this laptop's wifi network on by itself,");
+            f.push_dim("  and off again when you stop. Nothing to set up in Windows.");
         } else {
             f.push_dim("  Making a network replaces this computer's own wifi");
             f.push_dim("  until you stop. It is put back when you do.");
@@ -771,37 +919,174 @@ impl App {
 
     fn draw_tick(&self, f: &mut Frame, pre: bool) {
         self.title(f, "What gets handed out");
+        if self.tick_dir.is_empty() {
+            f.push_dim("  In: the folder you chose (top level)");
+        } else {
+            f.push_dim(&format!("  In: {}/", self.tick_dir));
+        }
+        f.blank();
         if self.tick.is_empty() {
             f.push("  The folder has no files in it.");
         }
-        let lines: Vec<String> = self
-            .tick
-            .iter()
-            .map(|(n, sz, t)| format!("  [{}] {:<34}{:>10}", if *t { "x" } else { " " }, term::truncate(n, 32), human(*sz)))
-            .collect();
-        let w = term::group_width(&lines);
-        let room = f.rows.saturating_sub(f.used() + 5);
-        for (i, line) in lines.iter().enumerate().take(room) {
-            if i == self.row {
-                f.push_selected_within(line, w);
+
+        let fixed = self.tick_fixed();
+        let ticked = self.tick.iter().filter(|(_, _, t)| *t).count();
+        let action = if !pre {
+            "  BACK TO THE LESSON".to_string()
+        } else {
+            format!("  CONTINUE: HAND OUT THE {} TICKED", count(ticked))
+        };
+        let mut head: Vec<String> = vec![action];
+        if fixed == 2 {
+            head.push("  ..  go up one folder".to_string());
+        }
+        let hw = term::group_width(&head);
+        for (i, h) in head.iter().enumerate() {
+            if self.row == i {
+                f.push_selected_within(h, hw);
             } else {
-                f.push(line);
+                f.push(h);
             }
         }
-        if lines.len() > room {
-            f.push_dim(&format!("  and {} more not shown, the window is too short", lines.len() - room));
+
+        let entries = self.tick_entries();
+        let cells: Vec<String> = entries.iter().map(|e| self.tick_cell(e)).collect();
+        let (rows, cols) = (f.rows, f.cols);
+        let g = self.tick_grid(&cells, rows, cols);
+        let sel = self.row.checked_sub(fixed);
+        for line in g.lines(&cells, sel) {
+            f.push_raw(&line);
         }
         f.blank();
-        let ticked = self.tick.iter().filter(|(_, _, t)| *t).count();
-        f.push(&format!("  {ticked} of {} will be visible to the class.", self.tick.len()));
+
+        if let Some(what) = &self.tick_confirm {
+            let (files, bytes, name) = self.tick_confirm_size(what);
+            f.push(&format!(
+                "  !! Space again ticks ALL {} files {} ({}),",
+                count(files), name, human(bytes)
+            ));
+            f.push("     every folder inside included. Some may be files you did not know");
+            f.push("     were there, and the class will be able to see every one of them.");
+            f.push("     Space again: tick them all.   Enter: go inside and choose instead.");
+        } else if !self.tick_said.is_empty() {
+            f.push_dim(&format!("  {}", self.tick_said));
+        }
+        if let Some(s) = g.status() {
+            f.push_dim(&format!("  {s}"));
+        }
+        let bytes: u64 = self.tick.iter().filter(|(_, _, t)| *t).map(|(_, s, _)| *s).sum();
+        f.push(&format!(
+            "  {} of {} files will be visible to the class ({}).",
+            count(ticked), count(self.tick.len()), human(bytes)
+        ));
         if !pre {
             f.push_dim("  Ticking a file hands it out NOW; unticking withdraws it.");
         }
-        self.hints(f, "  space to tick    a all    n none    enter to continue    esc to go back");
+        self.hints(f, "  space ticks   enter opens   a all here   n none here   esc back");
+    }
+
+    /// Rows above the list: the action, and ".." inside a folder.
+    fn tick_fixed(&self) -> usize {
+        if self.tick_dir.is_empty() { 1 } else { 2 }
+    }
+
+    /// What is in the folder being looked at: its subfolders, each with how
+    /// many files are in it at any depth and how many of those are ticked,
+    /// then its own files. Built from the flat list, which stays the one
+    /// record of what is ticked.
+    fn tick_entries(&self) -> Vec<TickEntry> {
+        let prefix = if self.tick_dir.is_empty() { String::new() } else { format!("{}/", self.tick_dir) };
+        let mut folders: std::collections::BTreeMap<String, (String, usize, usize, u64)> =
+            std::collections::BTreeMap::new();
+        let mut files: Vec<usize> = Vec::new();
+        for (i, (rel, size, t)) in self.tick.iter().enumerate() {
+            let Some(rest) = rel.strip_prefix(&prefix) else { continue };
+            match rest.split_once('/') {
+                Some((dir, _)) => {
+                    let e = folders.entry(dir.to_lowercase()).or_insert((dir.to_string(), 0, 0, 0));
+                    e.1 += 1;
+                    e.2 += usize::from(*t);
+                    e.3 += *size;
+                }
+                None => files.push(i),
+            }
+        }
+        files.sort_by_key(|i| self.tick[*i].0.to_lowercase());
+        let mut out: Vec<TickEntry> = folders
+            .into_values()
+            .map(|(name, files, ticked, bytes)| TickEntry::Folder { name, files, ticked, bytes })
+            .collect();
+        out.extend(files.into_iter().map(TickEntry::File));
+        out
+    }
+
+    fn tick_cell(&self, e: &TickEntry) -> String {
+        match e {
+            TickEntry::Folder { name, files, ticked, .. } => {
+                let m = if *ticked == 0 { " " } else if ticked == files { "x" } else { "~" };
+                let word = if *files == 1 { "file" } else { "files" };
+                format!("[{m}] {name}/  ({} {word})", count(*files))
+            }
+            TickEntry::File(i) => {
+                let (rel, size, t) = &self.tick[*i];
+                let name = rel.rsplit('/').next().unwrap_or(rel);
+                format!("[{}] {name}  {}", if *t { "x" } else { " " }, human(*size))
+            }
+        }
+    }
+
+    /// The list's layout for a window `rows` by `cols`, following the cursor.
+    /// The same numbers for drawing and for moving, so a key never moves to a
+    /// place the screen did not show.
+    fn tick_grid(&self, cells: &[String], rows: usize, cols: usize) -> crate::grid::Grid {
+        // Title 2, "In:" 2, fixed rows, and below: blank, up to 4 warning
+        // lines, status, count, the mid-lesson line and the hint row.
+        let room = rows.saturating_sub(4 + self.tick_fixed() + 10).max(3);
+        let widest = cells.iter().map(|c| term::width(c)).max().unwrap_or(10);
+        let sel = self.row.saturating_sub(self.tick_fixed());
+        crate::grid::Grid::lay(cells.len(), widest, cols, room, sel, self.tick_first)
+    }
+
+    /// Files and bytes a pending confirmation would tick, and how to name it.
+    fn tick_confirm_size(&self, what: &str) -> (usize, u64, String) {
+        let (prefix, name) = match what.strip_prefix('\u{0}') {
+            // "all here": everything under the folder being looked at.
+            Some(dir) => (
+                if dir.is_empty() { String::new() } else { format!("{dir}/") },
+                if dir.is_empty() { "in everything you chose".to_string() } else { format!("inside {dir}/") },
+            ),
+            None => (format!("{what}/"), format!("inside {}/", what.rsplit('/').next().unwrap_or(what))),
+        };
+        let mut files = 0;
+        let mut bytes = 0;
+        for (rel, size, _) in &self.tick {
+            if rel.starts_with(&prefix) {
+                files += 1;
+                bytes += *size;
+            }
+        }
+        (files, bytes, name)
+    }
+
+    /// Tick or untick everything whose path starts with `prefix`.
+    fn tick_under(&mut self, prefix: &str, on: bool) -> usize {
+        let mut n = 0;
+        for e in &mut self.tick {
+            if e.0.starts_with(prefix) {
+                e.2 = on;
+                n += 1;
+            }
+        }
+        n
     }
 
     fn draw_waiting(&self, f: &mut Frame) {
         self.title(f, "Work waiting for you");
+        f.push_dim(&format!(
+            "  Accepted work goes to   {}",
+            crate::page::handed_in_dir(&PathBuf::from(shellexpand(&self.folder))).display()
+        ));
+        f.blank();
         let items = serve::pending();
         if items.is_empty() {
             f.push("  Nothing is waiting.");
@@ -814,11 +1099,27 @@ impl App {
         }
         let lines: Vec<String> = items
             .iter()
-            .map(|p| format!("  {:<30}{:<26}{:>9}", term::truncate(&p.from, 28), term::truncate(&p.original, 24), human(p.bytes)))
+            .map(|p| {
+                // The whole window, not 28 and 24 characters: the name of the
+                // work was cut to "Screenshot_2026-09-23-1~" five times over.
+                let room = f.cols.saturating_sub(16).max(40);
+                let who = room * 2 / 5;
+                let what = room - who;
+                format!(
+                    "  {:<who$}{:<what$}{:>9}",
+                    term::truncate(&p.from, who.saturating_sub(2)),
+                    term::truncate_middle(&p.original, what.saturating_sub(2)),
+                    human(p.bytes),
+                )
+            })
             .collect();
         let w = term::group_width(&lines);
-        let room = f.rows.saturating_sub(f.used() + 5);
-        for (i, line) in lines.iter().enumerate().take(room) {
+        let room = f.rows.saturating_sub(f.used() + 6).max(1);
+        // The page follows the cursor. This used to draw the first rows only,
+        // so work beyond the bottom of the window could be selected and
+        // accepted or refused without ever being seen.
+        let top = self.row.saturating_sub(room - 1).min(lines.len().saturating_sub(room));
+        for (i, line) in lines.iter().enumerate().skip(top).take(room) {
             if i == self.row {
                 f.push_selected_within(line, w);
             } else {
@@ -826,13 +1127,24 @@ impl App {
             }
         }
         if lines.len() > room {
-            f.push_dim(&format!("  and {} more not shown, the window is too short", lines.len() - room));
+            f.push_dim(&format!(
+                "  Showing {} to {} of {}. Press the down arrow to see more.",
+                top + 1,
+                (top + room).min(lines.len()),
+                lines.len()
+            ));
         }
         f.blank();
         if let Some(p) = items.get(self.row) {
             f.push_dim(&format!("  sent {}", p.at));
         }
-        self.hints(f, "  a accept    r refuse    o open and look    esc to go back");
+        f.blank();
+        f.push(&format!(
+            "  {} waiting. Press e to accept ALL of them at once, or p for all from",
+            items.len()
+        ));
+        f.push("  the person under the cursor. Accepted work goes to the folder above.");
+        self.hints(f, "  a accept  e ALL  p all from them  r refuse  o open  esc back");
     }
 
 }
@@ -967,7 +1279,32 @@ impl App {
     /// The address a phone should open, chosen the same way the screen chooses
     /// which one to print. On a cable that is the link-local one, because the
     /// wifi address is the one the other machine cannot reach.
+    /// The addresses to give people. Our own network's address when we made
+    /// one: this laptop is often on another network as well (a phone's, on
+    /// the test day), and that address is one nobody on the hotspot can reach.
+    fn addresses_to_give(&self) -> Vec<std::net::Ipv4Addr> {
+        // Our network, or nothing. Falling back to every address when the
+        // hotspot was down put the phone network's address on the screen
+        // beside the real one, on the test day, with no way to tell which.
+        if let Some(h) = &self.hotspot {
+            return h.address().into_iter().collect();
+        }
+        if self.cable {
+            let ll: Vec<_> = self.addresses.iter().copied().filter(|a| a.is_link_local()).collect();
+            if ll.is_empty() { self.addresses.clone() } else { ll }
+        } else {
+            self.addresses.clone()
+        }
+    }
+
     fn page_url(&self) -> Option<String> {
+        if let Some(a) = self.addresses_to_give().first() {
+            return Some(if crate::serve::on_port_80() {
+                format!("http://{a}")
+            } else {
+                format!("http://{a}:{}", port())
+            });
+        }
         let show: Vec<std::net::Ipv4Addr> = if self.cable {
             let ll: Vec<_> = self.addresses.iter().copied().filter(|a| a.is_link_local()).collect();
             if ll.is_empty() { self.addresses.clone() } else { ll }
@@ -980,6 +1317,42 @@ impl App {
         } else {
             format!("http://{a}:{}", port())
         })
+    }
+
+    /// "1. Scan to join the wifi" and "2. Then scan to open the page", drawn
+    /// side by side if they fit in what is left of the window.
+    fn draw_scan_codes(&self, f: &mut Frame, ssid: &str) {
+        // Two modules of border, not the standard's four: on the test day the
+        // codes were too big to fit a phone's camera frame without stepping
+        // well back. The terminal around them is dark, and phone cameras read
+        // a two-module border off a screen without trouble.
+        const QUIET: usize = 2;
+        let join = crate::qr::wifi_join(ssid, &self.password);
+        let page = self.page_url().and_then(|u| crate::qr::encode(u.as_bytes()));
+        let (Some(join), Some(page)) = (join, page) else { return };
+        let (jw, jh) = crate::qr::rendered_size(&join, QUIET);
+        let (pw, ph) = crate::qr::rendered_size(&page, QUIET);
+        let gap = 6;
+        let need_cols = 2 + jw + gap + pw;
+        // Headings, the codes, and a line under them; the hint row below.
+        let room = f.rows.saturating_sub(f.used() + 5);
+        f.blank();
+        if need_cols > f.cols || jh.max(ph) > room {
+            f.push("  PHONES: press j to show a code they can scan to join and open the page.");
+            f.push_dim("  (The window is too small to show it here. Making it bigger shows it.)");
+            return;
+        }
+        let head_a = "1. Scan to join the wifi";
+        let head_b = "2. Then scan to open the page";
+        f.push(&format!("  {head_a:<w$}{}{head_b}", " ".repeat(gap), w = jw));
+        let a = crate::qr::render(&join, QUIET);
+        let bl = crate::qr::render(&page, QUIET);
+        for i in 0..a.len().max(bl.len()) {
+            let left = a.get(i).cloned().unwrap_or_else(|| " ".repeat(jw));
+            let right = bl.get(i).cloned().unwrap_or_default();
+            f.push_raw(&format!("  {left}{}{right}", " ".repeat(gap)));
+        }
+        f.push_dim("  Point the phone's camera at the code and tap what appears.");
     }
 
     fn draw_joincode(&self, f: &mut Frame) {
@@ -1156,6 +1529,19 @@ impl App {
         if let Some(h) = &self.hotspot {
             f.push(&format!("  Wifi network      {}", h.ssid));
             f.push(&format!("  Password          {}", self.password));
+            if let Some(ch) = net::hotspot_channel() {
+                f.push(&format!("  Broadcasting on   {}", net::describe_channel(ch)));
+            } else if cfg!(windows) {
+                f.push_dim("  Broadcasting on   (measuring...)");
+            }
+            if let Some(problem) = net::hotspot_problem() {
+                f.blank();
+                let measure = f.cols.saturating_sub(6).min(72).max(24);
+                for line in wrap(&format!("!! {problem}"), measure) {
+                    f.push(&format!("  {line}"));
+                }
+                f.blank();
+            }
         }
         let port80 = serve::on_port_80();
         // On a cable, the cable's address is the one that matters and any
@@ -1163,12 +1549,10 @@ impl App {
         // on a cable transfer, which is the address the other laptop cannot
         // reach: the one thing on the screen a person is meant to read out,
         // and it was the wrong one.
-        let show: Vec<std::net::Ipv4Addr> = if self.cable {
-            let ll: Vec<_> = self.addresses.iter().copied().filter(|a| a.is_link_local()).collect();
-            if ll.is_empty() { self.addresses.clone() } else { ll }
-        } else {
-            self.addresses.clone()
-        };
+        let show = self.addresses_to_give();
+        if show.is_empty() && self.hotspot.is_some() {
+            f.push("  Address to type   (waiting for the wifi network to come up)");
+        }
         for a in &show {
             if port80 {
                 f.push(&format!("  Address to type   http://{a}"));
@@ -1176,12 +1560,17 @@ impl App {
                 f.push(&format!("  Address to type   http://{a}:{}", port()));
             }
         }
-        if self.cable {
-            // Whether the two things that let the other end find this without
-            // being told anything are actually running. Said here because this
-            // is the screen a person is looking at while wondering why nothing
-            // has appeared on the other laptop.
-            if self.mdns && self.name_taken {
+        // Whether the things that let the other end find this without being
+        // told anything are actually running. Said here because this is the
+        // screen a person is looking at while wondering why nothing has
+        // appeared on the other laptop. The .local line is on the hotspot too
+        // since 2026-09-23: before that nothing answered the name over wifi,
+        // so the only thing that could was a stale copy somewhere else.
+        {
+            use std::sync::atomic::Ordering::Relaxed;
+            let mdns = self.mdns || self.mdns_live.load(Relaxed);
+            let name_taken = self.name_taken || self.taken_live.load(Relaxed);
+            if mdns && name_taken {
                 // Say nothing encouraging about a name that will not reach us.
                 //
                 // Two machines both running this both answer to gorilla.local
@@ -1192,8 +1581,12 @@ impl App {
                 f.push_dim("  gorilla.local will NOT reach this computer: another");
                 f.push_dim("  computer here already answers to it. Use the address,");
                 f.push_dim("  or pick this machine by name on the other one.");
-            } else if self.mdns {
-                f.push("  Or they can type   gorilla.local");
+            } else if mdns {
+                if port80 {
+                    f.push("  Or they can type   gorilla.local");
+                } else {
+                    f.push(&format!("  Or they can type   gorilla.local:{}", port()));
+                }
             }
             if self.naming {
                 f.push("  Or just            gorilla/");
@@ -1206,7 +1599,11 @@ impl App {
             // person can follow back to the start of the next line, and that
             // is not "however wide somebody dragged the window".
             let measure = f.cols.saturating_sub(22).min(64).max(24);
-            for (i, chunk) in wrap(&self.cable_note, measure).into_iter().enumerate() {
+            let note = if self.cable { self.cable_note.as_str() } else { "" };
+            // wrap("") still gives one empty line, which drew a label with
+            // nothing after it on the wifi screen.
+            let chunks = if note.is_empty() { Vec::new() } else { wrap(note, measure) };
+            for (i, chunk) in chunks.into_iter().enumerate() {
                 if i == 0 {
                     f.push_dim(&format!("  addresses         {chunk}"));
                 } else {
@@ -1214,7 +1611,7 @@ impl App {
                 }
             }
         }
-        if self.hotspot.is_some() && port80 {
+        if self.hotspot.is_some() && port80 && cfg!(target_os = "linux") {
             // The dnsmasq drop-in answers these names on OUR hotspot only.
             // The slash is what stops a phone's browser treating the word as
             // a search; a colon is three keyboard layers deep, a slash is on
@@ -1232,6 +1629,15 @@ impl App {
             f.push("  ANOTHER PROGRAM owns the sign-in page on this computer.");
             f.push("  Phones that join will see that program, not this lesson.");
             f.push(&format!("  Close it, or tell the class to type the address WITH :{}", port()));
+        }
+        // Scan, do not type. The address is a string nobody in the room can
+        // type, on phones whose owners have never looked for a slash. So when
+        // this computer made the network, the two codes that do everything go
+        // right here, not behind a key: one joins the wifi (password and all),
+        // one opens the page. Side by side when the window is wide enough,
+        // otherwise one loud line saying which key shows them.
+        if let Some(h) = &self.hotspot {
+            self.draw_scan_codes(f, &h.ssid.clone());
         }
         // Two loud states a USB drive causes. The folder is often a flash
         // drive kept as the teacher's failsafe, and it gets unplugged, filled
@@ -1315,6 +1721,12 @@ impl App {
                 f.push_dim("  the address above.");
                 f.push_dim("  Give it half a minute after the cable goes in. Nothing can");
                 f.push_dim("  happen until both ends have settled on an address.");
+            } else if cfg!(windows) && self.hotspot.is_some() {
+                // Windows has no sign-in page to pop, so do not promise one.
+                f.push_dim("  Phones: switch WIFI ON (mobile data can stay off) and scan code 1.");
+                f.push_dim("  The page opens by itself; if it does not, scan code 2.");
+                f.push_dim("  Laptops: join the wifi network above; the page opens by itself,");
+                f.push_dim("  or type gorilla.local. This laptop's own wifi must stay on.");
             } else {
                 f.push_dim("  On a phone or any computer: join the wifi and the sign-in");
                 f.push_dim("  screen brings them here by itself. Or open a browser at the");
@@ -1327,7 +1739,12 @@ impl App {
                 "  {waiting} PIECE{} OF WORK WAITING FOR YOU. Press w to look.",
                 if waiting == 1 { "" } else { "S" }
             ));
-            f.push_dim("  Nothing lands in your folder until you accept it.");
+            f.push_dim("  Accepted work goes into the folder below.");
+            f.blank();
+        }
+        if !self.cable {
+            f.push(&format!("  Received files go to   {}", self.receive_dir.display()));
+            f.push_dim("  Press o to open that folder.");
             f.blank();
         }
         let paused = serve::blocked_count();
@@ -1364,7 +1781,7 @@ impl App {
                 f.push_dim(&format!("  {}: {}", term::truncate(who, 18), text));
             }
         }
-        self.hints(f, "  f files  n notice  w waiting  c who is on  j join code  q to stop");
+        self.hints(f, "  f files  n notice  w waiting  o received  c who is on  j code  q stop");
     }
 
     fn draw_receive(&self, f: &mut Frame) {
@@ -1607,6 +2024,7 @@ impl App {
             Screen::Home => self.home_key(k),
             Screen::Pick => self.pick_key(k),
             Screen::Checkup => self.checkup_key(k),
+            Screen::FixOffer => self.fixoffer_key(k),
             Screen::Send => self.send_key(k),
             Screen::Tick { pre } => self.tick_key(k, pre),
             Screen::Waiting => self.waiting_key(k),
@@ -1684,8 +2102,23 @@ impl App {
             },
             Screen::Send => match self.row {
                 0 => self.folder = buf,
-                1 => self.ssid = buf.trim().to_string(),
-                2 => self.password = buf.trim().to_string(),
+                1 => {
+                    self.ssid = buf.trim().to_string();
+                    // The same name keeps the same password. A new random one
+                    // every launch meant every laptop that had joined before
+                    // tried its saved key first, failed, waited and retried:
+                    // the "takes ages to connect" testers reported. A
+                    // password somebody typed themselves is never replaced.
+                    if !self.password_typed {
+                        if let Some(saved) = net::saved_hotspot_password(&self.ssid) {
+                            self.password = saved;
+                        }
+                    }
+                }
+                2 => {
+                    self.password = buf.trim().to_string();
+                    self.password_typed = true;
+                }
                 // Kept as text, validated at start: an empty field means "the
                 // system chooses" and has to stay expressible.
                 3 => self.channel = buf.trim().to_string(),
@@ -1746,6 +2179,13 @@ impl App {
                         self.screen = Screen::Receive;
                     }
                     _ => self.screen = Screen::Checkup,
+                }
+                // On the way into wifi or cable, with something switched off:
+                // stop here and say so, with the fix one key away.
+                if matches!(self.screen, Screen::Send)
+                    && self.services_off().is_some_and(|off| !off.is_empty())
+                {
+                    self.screen = Screen::FixOffer;
                 }
                 self.row = 0;
             }
@@ -1843,7 +2283,10 @@ impl App {
 
     /// How many list rows fit, given the fixed furniture above and below.
     fn pick_page(&self, rows: usize) -> usize {
-        rows.saturating_sub(11).max(3)
+        // Three more lines of furniture while a folder is ticked: the note
+        // that says a folder means everything inside it.
+        let note = if self.picked.iter().any(|p| p.is_dir()) { 3 } else { 0 };
+        rows.saturating_sub(11 + note).max(3)
     }
 
     /// The rows above the scrolling list: the action, and ".. go up one".
@@ -1877,49 +2320,68 @@ impl App {
         }
     }
 
+    /// The picker's list cells: subfolders, then files.
+    fn pick_cells(&self) -> Vec<String> {
+        // Choosing a place: folders only, and no boxes to tick.
+        if self.picking_receive {
+            return self.pick_kids.iter().map(|n| format!("{n}/")).collect();
+        }
+        let mut cells = Vec::with_capacity(self.pick_kids.len() + self.pick_files.len());
+        for n in &self.pick_kids {
+            let t = if self.pick_is_ticked(&self.pick_dir.join(n)) { "[x]" } else { "[ ]" };
+            cells.push(format!("{t} {n}/"));
+        }
+        for (n, size) in &self.pick_files {
+            let t = if self.pick_is_ticked(&self.pick_dir.join(n)) { "[x]" } else { "[ ]" };
+            cells.push(format!("{t} {n}  {}", human(*size)));
+        }
+        cells
+    }
+
+    /// Layout for drawing and moving alike, so they always agree.
+    fn pick_grid(&self, cells: &[String], rows: usize, cols: usize) -> crate::grid::Grid {
+        let page = self.pick_page(rows);
+        let widest = cells.iter().map(|c| term::width(c)).max().unwrap_or(10);
+        let sel = self.row.saturating_sub(self.pick_fixed());
+        crate::grid::Grid::lay(cells.len(), widest, cols, page, sel, self.pick_top)
+    }
+
     fn draw_pick(&self, f: &mut Frame) {
-        self.title(f, "What do you want to send?");
+        self.title(
+            f,
+            if self.picking_receive { "Where should received files go?" } else { "What do you want to send?" },
+        );
         // The path is shown but never typed. A person recognises where they
         // are from it even when they could not have written it down.
         f.push(&format!("  {}", self.pick_dir.display()));
         f.blank();
 
         let has_parent = self.pick_dir.parent().is_some();
-        let action = if self.picked.is_empty() {
+        let action = if self.picking_receive {
+            "  PUT RECEIVED FILES IN THIS FOLDER".to_string()
+        } else if self.picked.is_empty() {
             "  SEND EVERYTHING IN THIS FOLDER".to_string()
         } else {
             format!("  SEND THE {} TICKED", self.picked.len())
         };
-        let mut items: Vec<String> = vec![action];
+        let mut head: Vec<String> = vec![action];
         if has_parent {
-            items.push("  ..  go up one".to_string());
+            head.push("  ..  go up one".to_string());
         }
-        for n in &self.pick_kids {
-            let t = if self.pick_is_ticked(&self.pick_dir.join(n)) { "[x]" } else { "[ ]" };
-            items.push(format!("  {t} {n}/"));
-        }
-        for (n, size) in &self.pick_files {
-            let t = if self.pick_is_ticked(&self.pick_dir.join(n)) { "[x]" } else { "[ ]" };
-            items.push(format!("  {t} {n}    {}", human(*size)));
-        }
-        let w = term::group_width(&items);
-
-        let (rows, _) = term::size();
-        let page = self.pick_page(rows);
-        let fixed = self.pick_fixed();
-
-        for (i, it) in items.iter().enumerate() {
-            if i >= fixed {
-                let idx = i - fixed;
-                if idx < self.pick_top || idx >= self.pick_top + page {
-                    continue;
-                }
-            }
+        let hw = term::group_width(&head);
+        for (i, h) in head.iter().enumerate() {
             if i == self.row {
-                f.push_selected_within(it, w);
+                f.push_selected_within(h, hw);
             } else {
-                f.push(it);
+                f.push(h);
             }
+        }
+        // The folder's contents in columns across the window: see grid.rs.
+        let cells = self.pick_cells();
+        let fixed = self.pick_fixed();
+        let g = self.pick_grid(&cells, f.rows, f.cols);
+        for line in g.lines(&cells, self.row.checked_sub(fixed)) {
+            f.push_raw(&line);
         }
 
         f.blank();
@@ -1929,12 +2391,20 @@ impl App {
         } else if self.pick_kids.is_empty() && self.pick_files.is_empty() {
             f.push_dim("  This folder is empty.");
         }
-        let listed = self.pick_kids.len() + self.pick_files.len();
-        let hidden = listed.saturating_sub(self.pick_top + page);
-        if hidden > 0 {
-            f.push_dim(&format!("  {hidden} more below. Keep pressing down."));
+        if let Some(s) = g.status() {
+            f.push_dim(&format!("  {s}"));
         }
-        if self.picked.is_empty() {
+        // A ticked folder is everything inside it, at any depth. Say so while
+        // it can still be undone, and say where the count will be shown.
+        if !self.picking_receive && self.picked.iter().any(|p| p.is_dir()) {
+            f.push("  A ticked folder sends EVERYTHING inside it, every folder within");
+            f.push("  included. The next screen shows how many files that is, and lets");
+            f.push("  you open it and untick any you do not want.");
+        }
+        if self.picking_receive {
+            f.push("  Go into the folder where received files should go, then");
+            f.push("  press enter on the line at the top.");
+        } else if self.picked.is_empty() {
             f.push_dim("  Tick things with space to send only those. Tick nothing and");
             f.push_dim("  the whole folder goes.");
         } else {
@@ -1979,7 +2449,9 @@ impl App {
         // Naming both keys, because they do different things and the
         // difference is the one that cost somebody their selection: space
         // takes a tick off, enter never does.
-        if self.picked.is_empty() {
+        if self.picking_receive {
+            self.hints(f, "  enter opens a folder    esc goes back without changing it");
+        } else if self.picked.is_empty() {
             self.hints(
                 f,
                 "  space ticks and unticks    enter opens a folder    esc goes back",
@@ -1995,20 +2467,34 @@ impl App {
     fn pick_key(&mut self, k: Key) -> bool {
         let has_parent = self.pick_dir.parent().is_some();
         let fixed = self.pick_fixed();
-        let n = fixed + self.pick_kids.len() + self.pick_files.len();
-        self.move_row(k, n);
+        let listed = if self.picking_receive {
+            self.pick_kids.len()
+        } else {
+            self.pick_kids.len() + self.pick_files.len()
+        };
 
-        // Keep the selected row on screen as the selection moves past the
-        // bottom of the window.
-        let (rows, _) = term::size();
-        let page = self.pick_page(rows);
-        if self.row >= fixed {
-            let idx = self.row - fixed;
-            if idx < self.pick_top {
-                self.pick_top = idx;
-            } else if idx >= self.pick_top + page {
-                self.pick_top = idx + 1 - page;
+        // Moving. pick_top is the grid's first column on screen.
+        let cells = self.pick_cells();
+        let (rows, cols) = term::size();
+        let g = self.pick_grid(&cells, rows, cols);
+        let moved = if self.row >= fixed {
+            let sel = self.row - fixed;
+            match (k, g.step(k, sel)) {
+                (Key::Up, _) if sel == 0 => Some(fixed - 1),
+                (_, Some(to)) => Some(fixed + to),
+                _ => None,
             }
+        } else {
+            match k {
+                Key::Up => Some(self.row.saturating_sub(1)),
+                Key::Down | Key::PageDown if self.row + 1 < fixed + listed => Some(self.row + 1),
+                _ => None,
+            }
+        };
+        if let Some(r) = moved {
+            self.row = r;
+            self.pick_top = self.pick_grid(&cells, rows, cols).first_col;
+            return false;
         }
 
         // What is under the cursor, if it is not one of the fixed rows.
@@ -2026,6 +2512,8 @@ impl App {
         };
 
         match k {
+            // Choosing a place, not things: nothing to tick.
+            Key::Char(' ') if self.picking_receive => {}
             Key::Char(' ') => {
                 if let Some(p) = under {
                     self.pick_toggle(p);
@@ -2041,7 +2529,12 @@ impl App {
                 self.picked.clear();
             }
             Key::Enter => {
-                if self.row == 0 {
+                if self.row == 0 && self.picking_receive {
+                    self.receive_dir = self.pick_dir.clone();
+                    self.picking_receive = false;
+                    self.screen = Screen::Send;
+                    self.row = self.send_fields().len() - 1;
+                } else if self.row == 0 {
                     self.finish_picking();
                 } else if has_parent && self.row == 1 {
                     if let Some(p) = self.pick_dir.parent().map(|p| p.to_path_buf()) {
@@ -2068,7 +2561,7 @@ impl App {
                     }
                 }
             }
-            Key::Left => {
+            Key::Left | Key::Backspace => {
                 if let Some(p) = self.pick_dir.parent().map(|p| p.to_path_buf()) {
                     self.pick_at(p);
                 }
@@ -2081,6 +2574,7 @@ impl App {
                 }
             }
             Key::Esc => {
+                self.picking_receive = false;
                 self.screen = Screen::Send;
                 self.row = 0;
             }
@@ -2160,12 +2654,31 @@ impl App {
                         self.open_picker();
                         return false;
                     }
+                    // The last row: where received files go. Chosen by looking,
+                    // like the folder to send, never by typing a path.
+                    if self.row == fields.len() - 1 {
+                        self.picking_receive = true;
+                        let start = self
+                            .receive_dir
+                            .ancestors()
+                            .find(|a| a.is_dir())
+                            .map(|a| a.to_path_buf())
+                            .unwrap_or_else(starting_folder);
+                        self.pick_at(start);
+                        self.screen = Screen::Pick;
+                        return false;
+                    }
                     // Row 1 in cable mode is the addresses toggle, handled
                     // below; nothing else here may read the wifi row numbers.
                     // Cable mode's middle row is a yes/no, not text, so
                     // enter flips it instead of opening an editor.
                     if self.cable && self.row == 1 {
                         self.anyway = !self.anyway;
+                        return false;
+                    }
+                    // Windows: the band row is a choice of two, not text.
+                    if cfg!(windows) && !self.cable && self.row == 3 {
+                        self.band5 = !self.band5;
                         return false;
                     }
                     self.editing = Some(if self.cable {
@@ -2181,7 +2694,8 @@ impl App {
                             0 => self.folder.clone(),
                             1 => self.ssid.clone(),
                             2 => self.password.clone(),
-                            3 => self.helpers.to_string(),
+                            3 => self.channel.clone(),
+                            4 => self.helpers.to_string(),
                             _ => fields[self.row].1.clone(),
                         }
                     });
@@ -2218,6 +2732,8 @@ impl App {
                 self.row = 0;
                 return false;
             }
+            // The folder received work goes to, opened like any folder.
+            Key::Char('o') => open_with_system(&self.receive_dir),
             Key::Char('j') => {
                 self.screen = Screen::JoinCode;
                 self.row = 0;
@@ -2364,39 +2880,123 @@ impl App {
     }
 
     fn tick_key(&mut self, k: Key, pre: bool) -> bool {
-        self.move_row(k, self.tick.len().max(1));
-        match k {
-            Key::Char(' ') => {
-                if let Some(e) = self.tick.get_mut(self.row) {
-                    e.2 = !e.2;
-                }
-                if !pre {
-                    self.apply_ticks();
-                }
+        let fixed = self.tick_fixed();
+        let entries = self.tick_entries();
+        let cells: Vec<String> = entries.iter().map(|e| self.tick_cell(e)).collect();
+        let (rows, cols) = term::size();
+        let g = self.tick_grid(&cells, rows, cols);
+        // Anything but a second space cancels a pending "tick all of this".
+        let confirming = self.tick_confirm.take();
+        if k != Key::Char(' ') && k != Key::Char('a') {
+            self.tick_said.clear();
+        }
+
+        // Moving. The fixed rows are a short list above the grid; up from the
+        // top of the grid goes back into them.
+        let in_grid = self.row >= fixed;
+        let moved = if in_grid {
+            let sel = self.row - fixed;
+            match (k, g.step(k, sel)) {
+                (Key::Up, _) if sel == 0 => Some(fixed - 1),
+                (_, Some(to)) => Some(fixed + to),
+                _ => None,
             }
-            Key::Char('a') => {
-                for e in &mut self.tick {
-                    e.2 = true;
+        } else {
+            match k {
+                Key::Up => Some(self.row.saturating_sub(1)),
+                Key::Down | Key::PageDown if !cells.is_empty() || self.row + 1 < fixed => {
+                    Some((self.row + 1).min(fixed + cells.len().saturating_sub(1)))
                 }
-                if !pre {
-                    self.apply_ticks();
+                _ => None,
+            }
+        };
+        if let Some(r) = moved {
+            self.row = r;
+            let g = self.tick_grid(&cells, rows, cols);
+            self.tick_first = g.first_col;
+            return false;
+        }
+
+        let under = if in_grid { entries.get(self.row - fixed).cloned() } else { None };
+        let mut changed = false;
+        match k {
+            Key::Char(' ') => match under {
+                Some(TickEntry::Folder { name, files, ticked, bytes }) => {
+                    let path = if self.tick_dir.is_empty() { name.clone() } else { format!("{}/{name}", self.tick_dir) };
+                    if ticked == files {
+                        self.tick_under(&format!("{path}/"), false);
+                        self.tick_said = format!("Unticked everything inside {name}/.");
+                        changed = true;
+                    } else if big(files, bytes) && confirming.as_deref() != Some(path.as_str()) {
+                        // One key can reach a hundred thousand files in a
+                        // source tree. Say so, with the number, before it
+                        // happens, and offer the way to choose instead.
+                        self.tick_confirm = Some(path);
+                    } else {
+                        let n = self.tick_under(&format!("{path}/"), true);
+                        self.tick_said = format!(
+                            "Ticked all {} files inside {name}/. Press enter on it to look inside and untick any.",
+                            count(n)
+                        );
+                        changed = true;
+                    }
+                }
+                Some(TickEntry::File(i)) => {
+                    self.tick[i].2 = !self.tick[i].2;
+                    changed = true;
+                }
+                None => {}
+            },
+            Key::Char('a') => {
+                let key = format!("\u{0}{}", self.tick_dir);
+                let prefix = if self.tick_dir.is_empty() { String::new() } else { format!("{}/", self.tick_dir) };
+                let (files, bytes, _) = self.tick_confirm_size(&key);
+                if big(files, bytes) && confirming.as_deref() != Some(key.as_str()) {
+                    self.tick_confirm = Some(key);
+                } else {
+                    let n = self.tick_under(&prefix, true);
+                    self.tick_said = format!("Ticked all {} files here, folders inside included.", count(n));
+                    changed = true;
                 }
             }
             Key::Char('n') => {
-                for e in &mut self.tick {
-                    e.2 = false;
-                }
-                if !pre {
-                    self.apply_ticks();
-                }
+                let prefix = if self.tick_dir.is_empty() { String::new() } else { format!("{}/", self.tick_dir) };
+                let n = self.tick_under(&prefix, false);
+                self.tick_said = format!("Unticked all {} files here.", count(n));
+                changed = true;
             }
             Key::Enter => {
-                self.apply_ticks();
-                if pre {
-                    self.begin_sending();
+                if self.row == 0 {
+                    self.apply_ticks();
+                    if pre {
+                        self.begin_sending();
+                    } else {
+                        self.screen = Screen::Sending;
+                        self.row = 0;
+                    }
+                    return false;
+                } else if fixed == 2 && self.row == 1 {
+                    self.tick_up();
                 } else {
-                    self.screen = Screen::Sending;
-                    self.row = 0;
+                    match under {
+                        Some(TickEntry::Folder { name, .. }) => self.tick_into(&name),
+                        // Enter adds and never removes, as in the picker:
+                        // the key pressed by reflex must not lose a choice.
+                        Some(TickEntry::File(i)) => {
+                            self.tick[i].2 = true;
+                            changed = true;
+                        }
+                        None => {}
+                    }
+                }
+            }
+            Key::Backspace => self.tick_up(),
+            // In a single column left and right are free: out of and into
+            // folders, as in the picker.
+            Key::Left => self.tick_up(),
+            Key::Right => {
+                if let Some(TickEntry::Folder { name, .. }) = under {
+                    self.tick_into(&name);
                 }
             }
             Key::Esc => {
@@ -2418,7 +3018,40 @@ impl App {
             Key::Quit => return true,
             _ => {}
         }
+        if changed && !pre {
+            self.apply_ticks();
+        }
         false
+    }
+
+    fn tick_into(&mut self, name: &str) {
+        self.tick_dir = if self.tick_dir.is_empty() { name.to_string() } else { format!("{}/{name}", self.tick_dir) };
+        self.tick_first = 0;
+        self.row = self.tick_fixed();
+    }
+
+    /// Up one folder, landing on the folder just left.
+    fn tick_up(&mut self) {
+        if self.tick_dir.is_empty() {
+            return;
+        }
+        let left = self.tick_dir.rsplit('/').next().unwrap_or("").to_string();
+        self.tick_dir = match self.tick_dir.rsplit_once('/') {
+            Some((up, _)) => up.to_string(),
+            None => String::new(),
+        };
+        self.tick_first = 0;
+        let fixed = self.tick_fixed();
+        let at = self
+            .tick_entries()
+            .iter()
+            .position(|e| matches!(e, TickEntry::Folder { name, .. } if *name == left))
+            .unwrap_or(0);
+        self.row = fixed + at;
+        let (rows, cols) = term::size();
+        let entries = self.tick_entries();
+        let cells: Vec<String> = entries.iter().map(|e| self.tick_cell(e)).collect();
+        self.tick_first = self.tick_grid(&cells, rows, cols).first_col;
     }
 
     fn waiting_key(&mut self, k: Key) -> bool {
@@ -2426,6 +3059,39 @@ impl App {
         self.move_row(k, items.len().max(1));
         let root = PathBuf::from(shellexpand(&self.folder));
         match k {
+            // Everything at once, or everything from one person.
+            //
+            // One key per file was the only way, and the owner did the sum:
+            // forty children sending six pieces each is two hundred and forty
+            // presses. Accepting only moves files into the received folder,
+            // nothing is deleted or shown, so doing many at once is safe; o on
+            // any one still opens it first for a teacher who wants to look.
+            Key::Char('e') | Key::Char('p') => {
+                let person = items.get(self.row).map(|p| p.from.clone());
+                let chosen: Vec<_> = items
+                    .iter()
+                    .filter(|p| k == Key::Char('e') || Some(&p.from) == person.as_ref())
+                    .collect();
+                let mut done = 0;
+                let mut failed: Vec<String> = Vec::new();
+                for p in &chosen {
+                    match serve::accept_pending(&root, &p.on_disk) {
+                        Ok(()) => done += 1,
+                        Err(e) => failed.push(format!("{}: {e}", p.original)),
+                    }
+                }
+                let word = if done == 1 { "piece" } else { "pieces" };
+                let mut msg = format!(
+                    "Accepted {done} {word} of work.\n\nThey are in\n{}\n\nPress o on the sending screen to open that folder.",
+                    crate::page::handed_in_dir(&root).display()
+                );
+                if !failed.is_empty() {
+                    msg.push_str(&format!("\n\nThese could not be moved:\n{}", failed.join("\n")));
+                }
+                self.row = 0;
+                self.note(&msg);
+                self.back = Screen::Waiting;
+            }
             Key::Char('a') => {
                 if let Some(p) = items.get(self.row) {
                     match serve::accept_pending(&root, &p.on_disk) {
@@ -2456,13 +3122,7 @@ impl App {
                 if let Some(p) = items.get(self.row) {
                     // Opened only when the teacher asks. Nothing a child sends
                     // is ever displayed unbidden on a screen a class can see.
-                    let path = crate::page::waiting_dir(&root).join(&p.on_disk);
-                    let _ = std::process::Command::new("xdg-open")
-                        .arg(path)
-                        .stdin(std::process::Stdio::null())
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .spawn();
+                    open_with_system(&crate::page::waiting_dir(&root).join(&p.on_disk));
                 }
             }
             Key::Esc => {
@@ -2606,6 +3266,10 @@ impl App {
                     .collect();
                 rows.sort_by(|a, b| a.0.cmp(&b.0));
                 self.tick = rows;
+                self.tick_dir.clear();
+                self.tick_first = 0;
+                self.tick_confirm = None;
+                self.tick_said.clear();
                 self.screen = Screen::Tick { pre };
                 self.row = 0;
                 return;
@@ -2636,6 +3300,10 @@ impl App {
             fresh.push((rel, size, ticked));
         }
         self.tick = fresh;
+        self.tick_dir.clear();
+        self.tick_first = 0;
+        self.tick_confirm = None;
+        self.tick_said.clear();
         self.screen = Screen::Tick { pre };
         self.row = 0;
     }
@@ -2656,6 +3324,9 @@ impl App {
             self.back = Screen::Send;
             return;
         }
+        // A fresh flag for everything this session starts, so Stop can end
+        // exactly this session's helpers and nothing else.
+        self.cable_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         // The network before the port. Binding a port on a network the class
         // cannot reach looks like success and is not.
         if !self.ssid.is_empty() {
@@ -2677,6 +3348,15 @@ impl App {
                     }
                 },
             };
+            // The same name keeps the same password, so laptops that joined
+            // last time join again without being asked. Only when the person
+            // did not type one themselves.
+            if !self.password_typed {
+                if let Some(saved) = net::saved_hotspot_password(&self.ssid) {
+                    self.password = saved;
+                }
+            }
+            net::set_wifi_band_5(self.band5);
             match net::hotspot_up(&self.ssid, &self.password, channel) {
                 Ok(h) => {
                     // Armed BEFORE anything else can go wrong. systemd owns
@@ -2693,6 +3373,10 @@ impl App {
                 }
             }
         }
+        // Received work goes to the named folder, made now so it is there to
+        // be opened from the first minute.
+        let _ = std::fs::create_dir_all(&self.receive_dir);
+        crate::page::set_receive_dir(Some(self.receive_dir.clone()));
         let addr = format!("0.0.0.0:{}", port());
         if let Err(e) = serve::start(&folder, &addr, self.helpers) {
             if let Some(h) = self.hotspot.take() {
@@ -2711,8 +3395,44 @@ impl App {
         // for the other end to find this computer, and an address for it to
         // use. Both are started only in cable mode, and both stop when the
         // serving stops.
+        // gorilla.local on a hotspot this program made, or on Windows' own
+        // Mobile Hotspot (always 192.168.137.1). Before 2026-09-23 the name
+        // was answered only down a cable, so on wifi the only thing that
+        // could answer it was a stale copy somewhere else, and testers typing
+        // it landed on old lessons.
+        if !self.cable {
+            self.mdns_live = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            self.taken_live = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let stop = Arc::clone(&self.cable_stop);
+            let (live, taken) = (Arc::clone(&self.mdns_live), Arc::clone(&self.taken_live));
+            match &self.hotspot {
+                // Ours: its address may still be on its way, so wait for it.
+                Some(h) => {
+                    // On Windows, also the names the phones ask, so the sign-in
+                    // page opens by itself: see dns::start_hotspot_names.
+                    if cfg!(windows) {
+                        let iface = h.iface.clone();
+                        crate::dns::start_hotspot_names(
+                            move || net::hotspot_address_of(&iface),
+                            Arc::clone(&self.cable_stop),
+                        );
+                    }
+                    let iface = h.iface.clone();
+                    crate::dns::start_mdns_when_ready(
+                        move || net::hotspot_address_of(&iface),
+                        stop,
+                        live,
+                        taken,
+                    );
+                }
+                // Windows' own hotspot, switched on by hand: only if it is up.
+                None if cfg!(windows) && net::hotspot_address_of("").is_some() => {
+                    crate::dns::start_mdns_when_ready(move || net::hotspot_address_of(""), stop, live, taken);
+                }
+                None => {}
+            }
+        }
         if self.cable {
-            self.cable_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let short = PathBuf::from(shellexpand(&self.folder))
                 .file_name()
                 .map(|f| f.to_string_lossy().to_string())
@@ -2763,65 +3483,154 @@ impl App {
     /// it is blocking, every other line still reads perfectly and no phone in
     /// the room can reach the address on the board.
     fn draw_checkup(&self, f: &mut Frame) {
-        self.title(f, "Check this computer");
+        self.title(f, "Fix problems with this computer");
 
-        let w = tune::wire();
-        if w.measured {
-            f.push(&format!("  cable          {} at {} Mbps", w.adapter, w.megabits));
-            f.push(&format!("  which is       {}", w.cable));
-        } else {
-            f.push("  cable          nothing plugged in, or the speed cannot be read");
+        // One line per thing that can stop the hub, each saying plainly
+        // whether it is fine. Labels are never repeated: this screen once
+        // said "cable" twice about two different things, and called a wifi
+        // link a cable.
+        match self.services_off() {
+            Some(off) if !off.is_empty() => {
+                f.push(&format!("  Windows parts    {} SWITCHED OFF:", off.len()));
+                for name in &off {
+                    f.push(&format!("                     {name}"));
+                }
+            }
+            Some(_) => f.push("  Windows parts    all switched on"),
+            None if cfg!(windows) => f.push("  Windows parts    checking..."),
+            None => {}
         }
-        f.push(&format!("  sending in     pieces of {} KB", w.chunk / 1024));
-        f.blank();
-
         match tune::reachable() {
-            Some(true) => f.push("  reachable      yes, other devices can get in"),
-            Some(false) => f.push("  reachable      NO. Nothing can reach this computer."),
-            None => f.push("  reachable      cannot tell on this system; try it and see"),
+            Some(true) => f.push("  Firewall         open for the hub"),
+            // Only that OUR rule is missing, not that nothing can get in:
+            // Windows may still allow the program by name.
+            Some(false) => f.push("  Firewall         not opened for the hub yet: others may be blocked"),
+            None => {}
+        }
+        if let Some(card) = net::wifi_card_summary() {
+            let measure = f.cols.saturating_sub(21).min(70).max(24);
+            for (i, chunk) in wrap(&card, measure).into_iter().enumerate() {
+                if i == 0 {
+                    f.push(&format!("  Wifi card        {chunk}"));
+                } else {
+                    f.push(&format!("                   {chunk}"));
+                }
+            }
+        }
+        let w = tune::wire();
+        let name = w.adapter.to_ascii_lowercase();
+        let wifi = ["wi-fi", "wifi", "wlan", "wireless"].iter().any(|k| name.contains(k));
+        if !w.measured {
+            f.push("  Connection       none, or its speed cannot be read");
+        } else if wifi {
+            f.push(&format!("  Connection       wifi ({}) at {} Mbps", w.adapter, w.megabits));
+        } else {
+            f.push(&format!("  Connection       cable ({}) at {} Mbps", w.adapter, w.megabits));
         }
         if dhcp::safe_to_offer(&net::local_addresses(), net::default_gateway()) {
-            f.push("  cable          ready: this looks like a bare cable");
+            f.push("  Cable            plugged in, straight to another computer");
         } else {
-            f.push("  cable          nothing plugged in, or this network has a router");
+            f.push_dim("  Cable            none plugged in (only needed to send down a cable)");
         }
-        f.blank();
-
         let addrs = net::local_addresses();
         if addrs.is_empty() {
-            f.push("  address        none, so nobody can reach this computer");
+            f.push("  Address          none, so nobody can reach this computer");
         }
         for a in &addrs {
-            let what = if a.is_link_local() { "  (a cable)" } else { "" };
-            f.push(&format!("  address        {a}{what}"));
+            let what = if a.is_link_local() { "  (the cable)" } else { "" };
+            f.push(&format!("  Address          {a}{what}"));
         }
         f.blank();
 
-        let items = ["Let other devices reach this computer"];
+        let items = self.checkup_items();
         let gw = term::group_width(&items.iter().map(|i| format!("  {i}")).collect::<Vec<_>>());
-        let line = format!("  {}", items[0]);
-        if self.row == 0 {
-            f.push_selected_within(&line, gw);
-        } else {
-            f.push(&line);
+        for (i, item) in items.iter().enumerate() {
+            let line = format!("  {item}");
+            if self.row == i {
+                f.push_selected_within(&line, gw);
+            } else {
+                f.push(&line);
+            }
         }
         f.blank();
-        f.push_dim("  Only needed once, and only if nothing can reach this computer.");
-        f.push_dim("  On Windows it will ask for permission. That is expected.");
+        f.push_dim("  Do both once on every computer, even if it seems to work fine.");
+        f.push_dim("  Laptops that have been \"sped up\" by a tweak list or a script look");
+        f.push_dim("  normal until the wifi network or the cable fails in front of people.");
+        f.push_dim("  Windows will ask for permission. That is expected: say Yes.");
         self.hints(f, "  enter to do it    esc to go back");
     }
 
+    /// The buttons on the fix screen, most important first.
+    fn checkup_items(&self) -> Vec<&'static str> {
+        if cfg!(windows) {
+            vec![
+                "Turn on the parts of Windows the hub needs",
+                "Let other devices reach this computer (firewall)",
+            ]
+        } else {
+            vec!["Let other devices reach this computer (firewall)"]
+        }
+    }
+
+    fn draw_fixoffer(&self, f: &mut Frame) {
+        self.title(f, "This computer is not ready yet");
+        f.push("  Parts of Windows the hub needs are switched off here:");
+        f.blank();
+        for name in self.services_off().unwrap_or_default() {
+            f.push(&format!("    {name}"));
+        }
+        f.blank();
+        f.push("  Without them the wifi network or the cable will not work, and");
+        f.push("  Windows will not say why. This is common on laptops that have been");
+        f.push("  \"sped up\" by a tweak list or a script. Nothing is broken.");
+        f.blank();
+        f.push("  Press enter to switch them back on. Windows will ask for");
+        f.push("  permission: say Yes. It takes a few seconds.");
+        self.hints(f, "  enter to switch them on    esc to carry on without");
+    }
+
+    fn fixoffer_key(&mut self, k: Key) -> bool {
+        match k {
+            Key::Enter => {
+                let msg = crate::services::fix();
+                self.refresh_services();
+                self.screen = Screen::Send;
+                self.note(&msg);
+                self.back = Screen::Send;
+            }
+            Key::Esc | Key::Char('q') => {
+                self.screen = Screen::Send;
+                self.row = 0;
+            }
+            Key::Quit => return true,
+            _ => {}
+        }
+        false
+    }
+
     fn checkup_key(&mut self, k: Key) -> bool {
-        self.move_row(k, 1);
+        let count = self.checkup_items().len();
+        self.move_row(k, count);
         match k {
             Key::Enter => {
                 // The answer goes in a box on this screen. It must not be
                 // printed: this program owns the whole terminal, so anything
                 // written straight to stdout is drawn over by the next frame
                 // a quarter of a second later.
-                let msg = match tune::open_ports() {
-                    Ok(m) => m,
-                    Err(m) => m,
+                //
+                // Row 1 waits on Windows' permission prompt and on the
+                // services starting, a few seconds in all. The screen stands
+                // still meanwhile, which is right: the prompt is in front.
+                let services_row = cfg!(windows) && self.row == 0;
+                let msg = if services_row {
+                    let m = crate::services::fix();
+                    self.refresh_services();
+                    m
+                } else {
+                    match tune::open_ports() {
+                        Ok(m) => m,
+                        Err(m) => m,
+                    }
                 };
                 self.note(&msg);
                 self.back = Screen::Home;
@@ -3068,6 +3877,54 @@ fn bar(fraction: f64, width: usize) -> String {
     format!("{}{}", "#".repeat(n), "-".repeat(width - n))
 }
 
+/// Open a file or folder the way double-clicking it would.
+///
+/// This was `xdg-open` everywhere, which exists only on Linux, so on Windows
+/// "o open and look" did nothing at all.
+fn open_with_system(path: &Path) {
+    let program = if cfg!(windows) {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let _ = std::process::Command::new(program)
+        .arg(path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
+/// One entry in the folder being looked at on the tick screen.
+#[derive(Clone, Debug)]
+enum TickEntry {
+    Folder { name: String, files: usize, ticked: usize, bytes: u64 },
+    /// An index into the flat tick list.
+    File(usize),
+}
+
+/// Big enough that ticking it with one key deserves a warning with the
+/// number in it first. Twenty files is past what a person holds in their
+/// head; 100 MB is past what goes unnoticed on a classroom network.
+fn big(files: usize, bytes: u64) -> bool {
+    files >= 20 || bytes >= 100_000_000
+}
+
+/// 64210 as "64,210": a count people read in a warning has to be readable.
+fn count(n: usize) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
 fn human(bytes: u64) -> String {
     const K: f64 = 1000.0;
     let b = bytes as f64;
@@ -3207,6 +4064,184 @@ mod tests {
             shown.contains(env!("CARGO_PKG_VERSION")),
             "the home screen does not name the version:\n{shown}"
         );
+    }
+
+    fn switched_off_here() -> Vec<crate::services::Found> {
+        vec![crate::services::Found {
+            name: "icssvc".into(),
+            label: "Windows Mobile Hotspot Service".into(),
+            start: Some(4),
+            running: false,
+            want: 3,
+            named: true,
+        }]
+    }
+
+    /// The owner, a long-time Debian user, could not find the fix when it
+    /// sat one level down under "Check this computer". So the first screen
+    /// says the computer is not ready, names what is off and where to go,
+    /// in full at 72 columns, the narrowest window seen in use.
+    #[test]
+    fn the_first_screen_says_plainly_when_this_computer_is_not_ready() {
+        let app = App::new();
+        *app.services.lock().unwrap() = Some(switched_off_here());
+        let mut f = crate::term::Frame::new(24, 72);
+        app.draw_home(&mut f);
+        let shown = f.text();
+        for must in [
+            "NOT READY",
+            "Windows Mobile Hotspot Service",
+            "Fix problems with this computer (wifi, cable, firewall)",
+            "before anything else.",
+            "Windows will ask permission: say Yes.",
+            "fails in front of the people waiting for the files.",
+        ] {
+            assert!(shown.contains(must), "missing {must:?}:
+{shown}");
+        }
+    }
+
+    /// Choosing wifi or cable with something switched off stops at the
+    /// offer to fix it, instead of letting the failure happen later.
+    #[test]
+    fn going_into_wifi_or_cable_offers_the_fix_first() {
+        for row in [0, 1] {
+            let mut app = App::new();
+            *app.services.lock().unwrap() = Some(switched_off_here());
+            app.row = row;
+            app.home_key(Key::Enter);
+            assert!(matches!(app.screen, Screen::FixOffer), "row {row} went past the offer");
+            app.fixoffer_key(Key::Esc);
+            assert!(matches!(app.screen, Screen::Send), "esc must carry on to the form");
+        }
+        let mut app = App::new();
+        *app.services.lock().unwrap() = Some(Vec::new());
+        app.home_key(Key::Enter);
+        assert!(matches!(app.screen, Screen::Send), "nothing off, nothing in the way");
+    }
+
+    fn a_tree(app: &mut App, big_folder: usize) {
+        let mut t: Vec<(String, u64, bool)> = vec![
+            ("readme.txt".into(), 1000, false),
+            ("photos/beach.jpg".into(), 3_000_000, false),
+            ("photos/note.txt".into(), 29, false),
+        ];
+        for i in 0..big_folder {
+            t.push((format!("kernel/drivers/net/file-{i:05}.c"), 4000, false));
+        }
+        app.tick = t;
+        app.tick_dir.clear();
+        app.row = 0;
+    }
+
+    /// One folder at a time, each folder saying how many files are in it.
+    #[test]
+    fn the_tick_list_shows_folders_with_their_counts() {
+        let mut app = App::new();
+        a_tree(&mut app, 30);
+        let cells: Vec<String> = app.tick_entries().iter().map(|e| app.tick_cell(e)).collect();
+        assert_eq!(cells, ["[ ] kernel/  (30 files)", "[ ] photos/  (2 files)", "[ ] readme.txt  1 KB"]);
+    }
+
+    /// The owner's point: one key on a source tree can reach a hundred
+    /// thousand files. The first space says how many and waits; the second
+    /// ticks them; a small folder ticks at once.
+    #[test]
+    fn ticking_a_big_folder_says_how_many_first() {
+        let mut app = App::new();
+        a_tree(&mut app, 30);
+        app.row = 1; // kernel/
+        app.tick_key(Key::Char(' '), true);
+        assert!(app.tick_confirm.is_some(), "a 30-file folder must ask first");
+        assert_eq!(app.tick.iter().filter(|t| t.2).count(), 0, "nothing ticked yet");
+        let mut f = crate::term::Frame::new(40, 100);
+        app.draw_tick(&mut f, true);
+        assert!(f.text().contains("ALL 30 files inside kernel/"), "{}", f.text());
+        app.tick_key(Key::Char(' '), true);
+        assert_eq!(app.tick.iter().filter(|t| t.2).count(), 30);
+
+        app.row = 2; // photos/, two files: no question
+        app.tick_key(Key::Char(' '), true);
+        assert!(app.tick_confirm.is_none());
+        assert_eq!(app.tick.iter().filter(|t| t.2).count(), 32);
+    }
+
+    /// Any other key cancels the question, so a stray space later does not
+    /// tick thirty thousand files.
+    #[test]
+    fn the_question_is_forgotten_on_any_other_key() {
+        let mut app = App::new();
+        a_tree(&mut app, 30);
+        app.row = 1;
+        app.tick_key(Key::Char(' '), true);
+        app.tick_key(Key::Down, true);
+        app.tick_key(Key::Up, true);
+        app.tick_key(Key::Char(' '), true);
+        assert_eq!(app.tick.iter().filter(|t| t.2).count(), 0, "must ask again");
+    }
+
+    /// Tick a whole folder, go inside, take one file out: the folder then
+    /// shows as partly ticked from the level above.
+    #[test]
+    fn inside_a_ticked_folder_single_files_can_be_taken_out() {
+        let mut app = App::new();
+        a_tree(&mut app, 0);
+        app.row = 1; // photos/
+        app.tick_key(Key::Char(' '), true);
+        app.tick_key(Key::Enter, true);
+        assert_eq!(app.tick_dir, "photos");
+        assert_eq!(app.row, 2, "lands on the first file, below the two fixed rows");
+        app.tick_key(Key::Char(' '), true);
+        assert_eq!(app.tick.iter().filter(|t| t.2).count(), 1);
+        app.tick_key(Key::Backspace, true);
+        assert_eq!(app.tick_dir, "");
+        let cells: Vec<String> = app.tick_entries().iter().map(|e| app.tick_cell(e)).collect();
+        assert!(cells[0].starts_with("[~] photos/"), "{cells:?}");
+        assert_eq!(app.row, 1, "back on the folder just left");
+    }
+
+    /// The reported window: 78 files, 240 wide. Everything on one screen.
+    #[test]
+    fn a_wide_window_shows_every_entry() {
+        let mut app = App::new();
+        app.tick = (0..78).map(|i| (format!("some-longish-file-name-{i:03}.txt"), 1000, false)).collect();
+        let mut f = crate::term::Frame::new(45, 240);
+        app.draw_tick(&mut f, true);
+        let shown = f.text();
+        assert!(shown.contains("some-longish-file-name-000.txt"));
+        assert!(shown.contains("some-longish-file-name-077.txt"), "{shown}");
+        assert!(!shown.contains("Showing"), "nothing should be hidden:
+{shown}");
+    }
+
+    /// Forty children sending six pieces each was 240 presses. e takes all
+    /// of it, p takes everything from the person under the cursor, and the
+    /// files really move into the received folder.
+    #[test]
+    fn work_can_be_accepted_all_at_once_or_per_person() {
+        let _g = crate::serve::SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = crate::scratchdir::scratch("accept-all");
+        let recv = root.join("received");
+        crate::page::set_receive_dir(Some(recv.clone()));
+        let waiting = crate::page::waiting_dir(&root);
+        std::fs::create_dir_all(&waiting).unwrap();
+        for (ip, name) in [("10.9.0.1", "a1.txt"), ("10.9.0.1", "a2.txt"), ("10.9.0.2", "b1.txt")] {
+            std::fs::write(waiting.join(name), name).unwrap();
+            crate::serve::note_pending(ip, name, name, 5);
+        }
+        let mut app = App::new();
+        app.folder = root.to_string_lossy().into_owned();
+        app.screen = Screen::Waiting;
+        app.row = 0;
+        app.waiting_key(Key::Char('p'));
+        assert!(recv.join("a1.txt").exists() && recv.join("a2.txt").exists(), "p took this person's work");
+        assert!(waiting.join("b1.txt").exists(), "p left somebody else's alone");
+        assert_eq!(crate::serve::pending_count(), 1);
+        app.screen = Screen::Waiting;
+        app.waiting_key(Key::Char('e'));
+        assert!(recv.join("b1.txt").exists(), "e took everything left");
+        assert_eq!(crate::serve::pending_count(), 0);
+        crate::page::set_receive_dir(None);
     }
 
     /// A hint line that runs off the edge of the window is a truncated one.

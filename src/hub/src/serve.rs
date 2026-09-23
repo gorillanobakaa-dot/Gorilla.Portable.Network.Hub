@@ -61,6 +61,29 @@ static RUNNING: AtomicBool = AtomicBool::new(false);
 /// the whole terminal.
 static QUIET: AtomicBool = AtomicBool::new(false);
 
+/// Set by Stop. The listeners cannot be unbound without ending the process,
+/// so after Stop they stay bound and turn every visitor away instead.
+///
+/// Before this, Stop reset the ticked-file list to "nothing chosen", which
+/// is_allowed reads as "everything", and the server kept answering. So once a
+/// lesson was stopped, anyone who could still reach the laptop saw the whole
+/// previous folder, including files the teacher had unticked. Found reading
+/// the code for the 2026-09-23 wifi audit.
+static HALTED: AtomicBool = AtomicBool::new(false);
+
+/// The folder the screen's server is handing out now. Kept here rather than
+/// in the accept loop so that starting again after Stop hands out the NEW
+/// folder on the listeners that are already bound, instead of failing to bind
+/// and telling the teacher to close the program.
+static CURRENT_ROOT: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Stop handing anything out. Connections already open are dropped at their
+/// next request; new ones are closed on arrival.
+pub fn halt() {
+    HALTED.store(true, Ordering::Relaxed);
+    *CURRENT_ROOT.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
 /// One device, mid-download, as the teacher sees it.
 #[derive(Clone)]
 pub struct Transfer {
@@ -127,7 +150,11 @@ fn tidy_empty_handin() {
         let dir = crate::page::handed_in_dir(&root);
         let _ = fs::remove_dir(crate::page::waiting_dir(&root));
         let _ = fs::remove_dir(dir.join("refused"));
-        let _ = fs::remove_dir(dir);
+        // The named receive folder stays, empty or not: it is the place a
+        // person was told to look, and it must be there when they do.
+        if !crate::page::receive_dir_is_set() {
+            let _ = fs::remove_dir(dir);
+        }
     }
 }
 
@@ -497,7 +524,10 @@ fn describe_agent(ua: &str) -> Option<String> {
         return Some("a Mac".into());
     }
     if u.contains("linux") || u.contains("x11") || u.contains("bsd") {
-        return Some("a Linux laptop".into());
+        // Also what a phone browser says in "desktop site" mode, which some
+        // (Edge on Android, 2026-09-23) use by default: a phone was listed as
+        // a Linux laptop. Said as the either-or it is.
+        return Some("Linux, or a phone in desktop mode".into());
     }
     None
 }
@@ -829,11 +859,22 @@ fn note_dir(peer: &str, file: &str, delta: u64, total: u64, handing_in: bool, fo
 /// screen has already said the network is ready.
 pub fn start(root: &Path, addr: &str, helpers: usize) -> std::io::Result<()> {
     let root = root.canonicalize()?;
+    // Already listening from an earlier lesson in this same run: point it at
+    // the new folder and open the doors again. The screen always asks for the
+    // same port, so the listeners that are bound are the right ones.
+    if RUNNING.load(Ordering::Relaxed) {
+        probe_handin(&root);
+        *CURRENT_ROOT.lock().unwrap_or_else(|e| e.into_inner()) = Some(root);
+        HALTED.store(false, Ordering::Relaxed);
+        return Ok(());
+    }
     let listeners = bind_all(addr)?;
     probe_handin(&root);
     QUIET.store(true, Ordering::Relaxed);
+    *CURRENT_ROOT.lock().unwrap_or_else(|e| e.into_inner()) = Some(root.clone());
+    HALTED.store(false, Ordering::Relaxed);
     thread::spawn(move || {
-        accept_loop(listeners, root, helpers);
+        accept_loop(listeners, root, helpers, true);
     });
     RUNNING.store(true, Ordering::Relaxed);
     Ok(())
@@ -936,7 +977,20 @@ pub fn port80_why() -> u8 {
     PORT80_WHY.load(Ordering::Relaxed)
 }
 
-fn accept_loop(listeners: Vec<TcpListener>, root: PathBuf, helpers: usize) {
+/// Whether a managed server (the screen's) may answer right now, and from
+/// which folder. The command line and the tests run unmanaged loops, which
+/// always answer from the folder they were given.
+fn gate(managed: bool, root: &Path) -> Option<PathBuf> {
+    if !managed {
+        return Some(root.to_path_buf());
+    }
+    if HALTED.load(Ordering::Relaxed) {
+        return None;
+    }
+    CURRENT_ROOT.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+fn accept_loop(listeners: Vec<TcpListener>, root: PathBuf, helpers: usize, managed: bool) {
     let (tx, rx) = mpsc::channel::<TcpStream>();
     let rx = Arc::new(Mutex::new(rx));
     for _ in 0..helpers {
@@ -946,8 +1000,11 @@ fn accept_loop(listeners: Vec<TcpListener>, root: PathBuf, helpers: usize) {
             let sock = { rx.lock().unwrap().recv() };
             match sock {
                 Ok(s) => {
+                    // Closed without a word when stopped: dropping the socket
+                    // is the whole answer.
+                    let Some(now) = gate(managed, &root) else { continue };
                     LIVE.fetch_add(1, Ordering::Relaxed);
-                    let _ = handle(s, &root);
+                    let _ = handle(s, &now, managed);
                     LIVE.fetch_sub(1, Ordering::Relaxed);
                 }
                 Err(_) => break,
@@ -983,6 +1040,7 @@ hub serve  -  hand out the files in a folder to every device in the room
   --name <network>      create a wifi network with this name and serve over it
   --notice <text>       a message shown at the top of every kid's page
   --password <word>     password for that network (at least 8 characters)
+  --band <2.4|5>        Windows: which band to make it on (2.4 unless 5)
   --channel <1-13>      which wifi channel to broadcast on (default: automatic)
   --helpers <number>    how many devices to serve at once (default: 8 per core)
   --port <number>       which port to listen on (default 8080)
@@ -1031,6 +1089,8 @@ hub serve  -  hand out the files in a folder to every device in the room
                 i += 2;
             }
             "--password" => { password = value(); i += 2; }
+            // Windows: 5 for 5 GHz; anything else, or nothing, is 2.4 GHz.
+            "--band" => { crate::net::set_wifi_band_5(value().as_deref() == Some("5")); i += 2; }
             "--channel" => {
                 // Whether the number is a channel this radio may use is
                 // hotspot_up's judgement, against the kernel's list.
@@ -1088,16 +1148,72 @@ hub serve  -  hand out the files in a folder to every device in the room
         }
     };
 
+    // Received work to the one named place, as the screen does (page.rs).
+    // Not on a cable: there is no class there to hand anything in.
+    if crate::page::sender().is_empty() {
+        let dir = crate::page::default_receive_dir();
+        let _ = fs::create_dir_all(&dir);
+        crate::page::set_receive_dir(Some(dir));
+    }
     probe_handin(&root);
+    if crate::page::sender().is_empty() {
+        println!("received files go to  {}", crate::page::handed_in_dir(&root).display());
+    }
     if let Some(h) = &hotspot {
         println!("network \"{}\" is up on {}", h.ssid, h.iface);
+        if let Some(ch) = crate::net::hotspot_channel() {
+            println!("broadcasting on {}", crate::net::describe_channel(ch));
+        }
+    }
+    // gorilla.local on the hotspot, as the screen does: see tui.rs. Our own
+    // hotspot, or Windows' Mobile Hotspot switched on by hand. Waited for,
+    // because the hotspot's address can still be on its way.
+    let hotspot_iface = hotspot.as_ref().map(|h| h.iface.clone());
+    let on_hotspot = hotspot_iface.is_some() || (cfg!(windows) && crate::net::hotspot_address_of("").is_some());
+    let (live, taken) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
+    if cfg!(windows) && hotspot_iface.is_some() {
+        let iface = hotspot_iface.clone().unwrap_or_default();
+        crate::dns::start_hotspot_names(
+            move || crate::net::hotspot_address_of(&iface),
+            Arc::new(AtomicBool::new(false)),
+        );
+    }
+    if on_hotspot {
+        let iface = hotspot_iface.clone().unwrap_or_default();
+        crate::dns::start_mdns_when_ready(
+            move || crate::net::hotspot_address_of(&iface),
+            Arc::new(AtomicBool::new(false)),
+            Arc::clone(&live),
+            Arc::clone(&taken),
+        );
+        for _ in 0..40 {
+            if live.load(Ordering::Relaxed) || taken.load(Ordering::Relaxed) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+        if taken.load(Ordering::Relaxed) {
+            println!("  gorilla.local is NOT offered: another computer here answers to it");
+        } else if live.load(Ordering::Relaxed) {
+            if on_port_80() {
+                println!("  or they can type  http://gorilla.local");
+            } else {
+                println!("  or they can type  http://gorilla.local:{port}");
+            }
+        }
     }
     // Down a cable there is no class, and only one address is reachable from
     // the other end. Listing the wifi one first, labelled for a classroom, is
     // the wrong line to read out and the wrong words to read it in.
     let cable = !crate::page::sender().is_empty();
     let who = if cable { "tell the other computer" } else { "tell the class to open  " };
-    for ip in crate::net::local_addresses() {
+    let to_tell: Vec<std::net::Ipv4Addr> = match hotspot.as_ref().and_then(|h| h.address()) {
+        // Only the hotspot's: this laptop may be on another network too, one
+        // nobody on the hotspot can reach.
+        Some(a) => vec![a],
+        None => crate::net::local_addresses(),
+    };
+    for ip in to_tell {
         if cable && !ip.is_link_local() {
             continue;
         }
@@ -1159,7 +1275,7 @@ hub serve  -  hand out the files in a folder to every device in the room
         crate::net::start_heartbeat();
     }
 
-    accept_loop(listeners, root, helpers);
+    accept_loop(listeners, root, helpers, false);
 }
 
 /// Serving files is I/O-bound: a helper spends most of its life blocked on a
@@ -1212,7 +1328,7 @@ const IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// actually starts arriving.
 const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-fn handle(sock: TcpStream, root: &Path) -> std::io::Result<()> {
+fn handle(sock: TcpStream, root: &Path, managed: bool) -> std::io::Result<()> {
     sock.set_read_timeout(Some(IO_TIMEOUT))?;
     sock.set_write_timeout(Some(IO_TIMEOUT))?;
     let peer = sock.peer_addr().map(|a| a.to_string()).unwrap_or_default();
@@ -1228,6 +1344,11 @@ fn handle(sock: TcpStream, root: &Path) -> std::io::Result<()> {
         // same connection is speculative and must not squat on a worker.
         if !first {
             sock.set_read_timeout(Some(IDLE_TIMEOUT))?;
+            // A kept-alive connection from before Stop must not carry on
+            // being served after it.
+            if gate(managed, root).as_deref() != Some(root) {
+                return Ok(());
+            }
         }
         first = false;
         match serve_one(&mut reader, &sock, root, &peer) {
@@ -1801,7 +1922,7 @@ mod bind_scope_tests {
 /// Poisoning is ignored on purpose: one panicking test must not convert every
 /// later test into a failure that hides the original.
 #[cfg(test)]
-static SESSION_LOCK: Mutex<()> = Mutex::new(());
+pub(crate) static SESSION_LOCK: Mutex<()> = Mutex::new(());
 
 #[cfg(test)]
 mod block_tests {
@@ -1866,7 +1987,7 @@ mod block_tests {
     fn serve_loopback(root: PathBuf) -> u16 {
         let listeners = bind_all("127.0.0.1:0").expect("loopback bind");
         let port = listeners[0].local_addr().expect("port").port();
-        thread::spawn(move || accept_loop(listeners, root, 2));
+        thread::spawn(move || accept_loop(listeners, root, 2, false));
         port
     }
 
@@ -1970,8 +2091,8 @@ mod block_tests {
             ("Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36", "a Chromebook"),
             ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/119", "a Windows laptop"),
             ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15", "a Mac"),
-            ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/119", "a Linux laptop"),
-            ("Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0", "a Linux laptop"),
+            ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/119", "Linux, or a phone in desktop mode"),
+            ("Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0", "Linux, or a phone in desktop mode"),
         ];
         for (ua, want) in cases {
             assert_eq!(describe_agent(ua).as_deref(), Some(want), "for {ua}");
@@ -2280,5 +2401,43 @@ mod walk_tests {
         assert_eq!(served, vec!["subject/week1/worksheet.txt".to_string()],
                    "the network must see only what was ticked: {served:?}");
         let _ = fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod halt_tests {
+    use super::*;
+    use std::io::{Read as _, Write as _};
+
+    fn ask(port: u16) -> String {
+        let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        let _ = write!(s, "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+        let mut out = Vec::new();
+        let _ = s.read_to_end(&mut out);
+        String::from_utf8_lossy(&out).to_string()
+    }
+
+    /// Stop closes the doors, and starting again opens them on the new folder.
+    /// Before 2026-09-23 Stop left the server answering from the old folder
+    /// with every file allowed.
+    #[test]
+    fn a_stopped_server_answers_nobody_until_started_again() {
+        let _g = super::SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = crate::scratchdir::scratch("halt").canonicalize().unwrap();
+        let listeners = bind_all("127.0.0.1:0").expect("loopback bind");
+        let port = listeners[0].local_addr().unwrap().port();
+        *CURRENT_ROOT.lock().unwrap() = Some(root.clone());
+        HALTED.store(false, Ordering::Relaxed);
+        let r = root.clone();
+        thread::spawn(move || accept_loop(listeners, r, 2, true));
+
+        assert!(ask(port).starts_with("HTTP/1.1"), "a running server answers");
+        halt();
+        assert_eq!(ask(port), "", "a stopped server must say nothing at all");
+        *CURRENT_ROOT.lock().unwrap() = Some(root);
+        HALTED.store(false, Ordering::Relaxed);
+        assert!(ask(port).starts_with("HTTP/1.1"), "starting again opens the doors");
+        halt();
     }
 }

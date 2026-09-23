@@ -342,7 +342,16 @@ impl Grid {
         let bits = format_bits(mask);
         let size = self.size;
         for i in 0..15 {
-            let on = bits >> i & 1 == 1;
+            // Most significant bit FIRST. The positions below run in the
+            // order the standard reads them, and it reads the format field's
+            // top bit first. This took the lowest bit first, so every code
+            // told its reader the wrong mask and level, and no camera could
+            // read any of them. Caught 2026-09-23 when a phone would not scan
+            // the codes and an independent decoder (OpenCV) refused both;
+            // with only this reversed, both decoded exactly. The round-trip
+            // test below read the field back in the same wrong order, which is
+            // why it passed: wrong twice looks right.
+            let on = bits >> (14 - i) & 1 == 1;
             // Copy one, wrapped around the top-left finder.
             let (r, c) = match i {
                 0..=5 => (8, i),
@@ -508,6 +517,25 @@ pub fn rendered_size(code: &Code, quiet: usize) -> (usize, usize) {
 mod tests {
     use super::*;
 
+    /// The format field as a camera reads it, against the standard's own
+    /// table (ISO/IEC 18004, level L, masks 0 to 7), written out here rather
+    /// than computed, so it cannot share a mistake with the encoder. Read
+    /// along row 8 from the left edge, the order a reader takes it in.
+    #[test]
+    fn the_format_field_reads_as_the_standard_says() {
+        const L: [&str; 8] = [
+            "111011111000100", "111001011110011", "111110110101010", "111100010011101",
+            "110011000101111", "110001100011000", "110110001000001", "110100101110110",
+        ];
+        for payload in [&b"http://192.168.137.1"[..], &b"WIFI:T:WPA;S:Gorilla Hub;P:classroom7;;"[..]] {
+            let code = encode(payload).unwrap();
+            let pos = [(8, 0), (8, 1), (8, 2), (8, 3), (8, 4), (8, 5), (8, 7), (8, 8),
+                       (7, 8), (5, 8), (4, 8), (3, 8), (2, 8), (1, 8), (0, 8)];
+            let read: String = pos.iter().map(|&(r, c)| if code.dark(r, c) { '1' } else { '0' }).collect();
+            assert!(L.contains(&read.as_str()), "format field {read} is not a level-L entry of the standard's table");
+        }
+    }
+
     /// The format information, against the published table.
     ///
     /// These eight strings are not this code's output written down: they are
@@ -612,14 +640,14 @@ mod tests {
                 _ => (14 - i, 8),
             };
             if code.dark(r, c) {
-                raw |= 1 << i;
+                raw |= 1 << (14 - i);
             }
         }
         let mut second = 0u16;
         for i in 0..15 {
             let (r, c) = if i < 7 { (size - 1 - i, 8) } else { (8, size - 15 + i) };
             if code.dark(r, c) {
-                second |= 1 << i;
+                second |= 1 << (14 - i);
             }
         }
         assert_eq!(raw, second, "the two copies of the format field disagree");

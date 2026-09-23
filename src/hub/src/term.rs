@@ -286,6 +286,13 @@ pub enum Key {
     Esc,
     Backspace,
     Tab,
+    /// Page Up / Page Down / Home / End. Swallowed as noise until the long
+    /// lists grew columns: a list of hundreds needs a way to move a page at a
+    /// time, and these are the keys a person already expects to do that.
+    PageUp,
+    PageDown,
+    Home,
+    End,
     Char(char),
     Quit,
     None,
@@ -346,15 +353,28 @@ impl Keys {
                 Ok(b'B') => Key::Down,
                 Ok(b'C') => Key::Right,
                 Ok(b'D') => Key::Left,
-                // Consume the tail of longer sequences (Home, F-keys, mouse)
-                // rather than letting the digits fall through as typed text.
+                Ok(b'H') => Key::Home,
+                Ok(b'F') => Key::End,
+                // ESC [ 5 ~ and friends. The whole tail is always consumed,
+                // so F-keys and mouse reports still never fall through as
+                // typed text; only the four page keys mean anything.
                 Ok(c) if c.is_ascii_digit() => {
+                    let mut digits = vec![c];
+                    let mut end = 0u8;
                     while let Ok(t) = self.rx.recv_timeout(gap) {
                         if t.is_ascii_alphabetic() || t == b'~' {
+                            end = t;
                             break;
                         }
+                        digits.push(t);
                     }
-                    Key::None
+                    match (digits.as_slice(), end) {
+                        (b"5", b'~') => Key::PageUp,
+                        (b"6", b'~') => Key::PageDown,
+                        (b"1", b'~') | (b"7", b'~') => Key::Home,
+                        (b"4", b'~') | (b"8", b'~') => Key::End,
+                        _ => Key::None,
+                    }
                 }
                 _ => Key::None,
             },
@@ -442,6 +462,47 @@ pub fn truncate(s: &str, cols: usize) -> String {
     }
     out.push('~');
     out
+}
+
+/// Cut to `cols` by taking the MIDDLE out, keeping both ends.
+///
+/// The end of a path is the part that tells files apart: every line under
+/// Lessons/Year 7/science/ began the same way, so cutting the tail left a
+/// column of identical `Lessons/Year 7/science/~` with the file names gone.
+/// The start says where it is, the end says what it is; the middle is what
+/// can go.
+pub fn truncate_middle(s: &str, cols: usize) -> String {
+    if width(s) <= cols {
+        return s.to_string();
+    }
+    if cols < 5 {
+        return truncate(s, cols);
+    }
+    let keep = cols - 1;
+    let head_w = keep / 3;
+    let tail_w = keep - head_w;
+    let mut head = String::new();
+    let mut used = 0;
+    for ch in s.chars() {
+        let w = char_width(ch);
+        if used + w > head_w {
+            break;
+        }
+        head.push(ch);
+        used += w;
+    }
+    let mut tail: Vec<char> = Vec::new();
+    let mut used = 0;
+    for ch in s.chars().rev() {
+        let w = char_width(ch);
+        if used + w > tail_w {
+            break;
+        }
+        tail.push(ch);
+        used += w;
+    }
+    tail.reverse();
+    format!("{head}~{}", tail.into_iter().collect::<String>())
 }
 
 // ---------------------------------------------------------------- frame

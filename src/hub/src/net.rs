@@ -940,7 +940,10 @@ pub fn suggest_password() -> String {
 
 /// The wifi connection to put back, reachable from the heartbeat thread as
 /// well as from the guard. Set once, when a hotspot is actually created.
-static PREVIOUS_WIFI: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+// Replaced on every lesson, not set once: a OnceLock kept the wifi from before
+// the FIRST lesson, so a later lesson started from a different network was
+// restored to the wrong one.
+static PREVIOUS_WIFI: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 /// How long the restore timer waits, and how often it is pushed back.
 ///
@@ -951,11 +954,31 @@ static PREVIOUS_WIFI: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 pub const RESTORE_FUSE: u64 = 180;
 pub const HEARTBEAT: u64 = 60;
 
-/// Keep pushing the restore back for as long as this program is alive.
+/// Whether a hotspot is up and its restore should be kept pushed back.
+///
+/// A lock rather than a flag, so the heartbeat cannot read "armed", lose the
+/// processor to a clean Stop that disarms, and then re-arm straight after it.
+///
+/// WHY. The heartbeat never stopped. After a clean Stop it re-armed the
+/// restore within a minute, and one thread was added per lesson. Close the
+/// program later and three minutes on the laptop rejoined the wifi it had
+/// before the FIRST lesson, pulling down any hotspot running at that moment.
+/// Found reading the code, 2026-09-23.
+static RESTORE_ARMED: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+
+/// Keep pushing the restore back for as long as a hotspot is up. One thread
+/// for the life of the program, however many lessons are started.
 pub fn start_heartbeat() {
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if STARTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
     std::thread::spawn(|| loop {
         std::thread::sleep(std::time::Duration::from_secs(HEARTBEAT));
-        rearm_restore(RESTORE_FUSE);
+        let armed = RESTORE_ARMED.lock().unwrap_or_else(|e| e.into_inner());
+        if *armed {
+            rearm_restore(RESTORE_FUSE);
+        }
     });
 }
 
@@ -966,7 +989,8 @@ pub fn start_heartbeat() {
 /// still exists and the wifi comes back on its own.
 #[cfg(target_os = "linux")]
 pub fn rearm_restore(seconds: u64) {
-    let Some(prev) = PREVIOUS_WIFI.get() else { return };
+    let Some(prev) = PREVIOUS_WIFI.lock().unwrap_or_else(|e| e.into_inner()).clone() else { return };
+    let prev = &prev;
     // NOT a timer. A transient timer's deadline cannot be moved: re-running
     // systemd-run with the same unit name fails silently while one is
     // pending, so the ORIGINAL deadline stood and the "safety" restore fired
@@ -1128,8 +1152,7 @@ const HOTSPOT_SERVICES: [(&str, &str); 2] = [
 ///
 /// 4 is Disabled, 3 is Manual, 2 is Automatic. Those are the numbers Windows
 /// itself writes; they are not this program's invention.
-#[cfg(not(target_os = "linux"))]
-fn start_value_from(text: &str) -> Option<u32> {
+pub(crate) fn start_value_from(text: &str) -> Option<u32> {
     for line in text.lines() {
         if !line.contains("REG_DWORD") {
             continue;
@@ -1204,7 +1227,12 @@ pub fn switched_off_advice(off: &[(&'static str, &'static str)]) -> Option<Strin
         s.push_str(&format!("  {human}  ({service})\n"));
     }
     s.push_str(
-        "\nTo switch them back on, open Windows Terminal or PowerShell AS\n\
+        "\nThe hub can switch them back on for you. On its first screen choose\n\
+         Check this computer, then Turn on the parts of Windows the hub needs.\n\
+         Windows asks for permission once. Or type:  hub services --fix\n",
+    );
+    s.push_str(
+        "\nOr by hand: open Windows Terminal or PowerShell AS\n\
          ADMINISTRATOR. Right-click the Start button, and choose the entry with\n\
          (Admin) after it. Then type these lines, one at a time:\n\n",
     );
@@ -1439,9 +1467,7 @@ pub fn hotspot_up(ssid: &str, password: &str, channel: Option<u16>) -> Result<Ho
         let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
         return Err(explain_nmcli(&err));
     }
-    if let Some(p) = &previous {
-        let _ = PREVIOUS_WIFI.set(p.clone());
-    }
+    *PREVIOUS_WIFI.lock().unwrap_or_else(|e| e.into_inner()) = previous.clone();
     // Read back which profile nmcli actually used. Asked for, never assumed:
     // see active_profile_on.
     let profile = active_profile_on(&iface);
@@ -1454,7 +1480,577 @@ pub fn hotspot_up(ssid: &str, password: &str, channel: Option<u16>) -> Result<Ho
     })
 }
 
-#[cfg(not(target_os = "linux"))]
+// ------------------------------------------------ Windows Mobile Hotspot
+//
+// WHY THE HUB SWITCHES IT ON ITSELF NOW. Until 0.9.9 the Windows screen said
+// "switch the hotspot on yourself first: Settings, Network and internet,
+// Mobile hotspot", and the owner's verdict was that nobody this is for gets
+// through that. Measured on the Windows laptop, 2026-09-23, from an ordinary
+// process with no administrator rights:
+//
+//   switched on                  Success, in 314 ms
+//   read the name and password   yes
+//   set a new name and password  yes, and put the old ones back
+//   with NO internet             yes: made from the unplugged Ethernet
+//                                profile, it came up on 192.168.137.1
+//
+// So the hub does it. The Windows Runtime call is reached through
+// PowerShell, which every Windows 10 and 11 has, because calling WinRT from
+// Rust directly would need a crate or a thousand lines of COM. The script
+// goes as -EncodedCommand so no quoting can mangle it, and the name and
+// password travel in environment variables, never on a command line.
+
+#[cfg(windows)]
+const WIN_HOTSPOT: &str = r#"
+$ErrorActionPreference = 'Stop'
+try {
+  Add-Type -AssemblyName System.Runtime.WindowsRuntime
+  $ext = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 }
+  $opT = $ext | Where-Object { $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' } | Select-Object -First 1
+  $actT = $ext | Where-Object { $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncAction' } | Select-Object -First 1
+  $null = [Windows.Networking.Connectivity.NetworkInformation,Windows.Networking.Connectivity,ContentType=WindowsRuntime]
+  $null = [Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager,Windows.Networking,ContentType=WindowsRuntime]
+  $Res = [Windows.Networking.NetworkOperators.NetworkOperatorTetheringOperationResult]
+  $NI = [Windows.Networking.Connectivity.NetworkInformation]
+  $TM = [Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager]
+  function Op($o) { $t = $opT.MakeGenericMethod($Res).Invoke($null, @($o)); $null = $t.Wait(30000); $t.Result }
+  function Act($o) { $t = $actT.Invoke($null, @($o)); $null = $t.Wait(30000) }
+  # The internet connection if there is one; otherwise any connection
+  # Windows will share from, which in the bush is the unplugged Ethernet.
+  $mgr = $null
+  $p = $NI::GetInternetConnectionProfile()
+  if ($p) { try { $mgr = $TM::CreateFromConnectionProfile($p) } catch { $first = $_.Exception.Message } }
+  if (-not $mgr) {
+    foreach ($q in $NI::GetConnectionProfiles()) { try { $mgr = $TM::CreateFromConnectionProfile($q); break } catch { if (-not $first) { $first = $_.Exception.Message } } }
+  }
+  if (-not $mgr) { "HUB_ERR $first"; exit 2 }
+  $cfg = $mgr.GetCurrentAccessPointConfiguration()
+  switch ($env:HUB_ACTION) {
+    'read' { "HUB_SSID $($cfg.Ssid)"; "HUB_PASS $($cfg.Passphrase)"; "HUB_STATE $($mgr.TetheringOperationalState)" }
+    'start' {
+      # The hotspot is broadcast BY the wifi card: with wifi switched off
+      # there is nothing to broadcast from. Measured 2026-09-23: switching the
+      # laptop's wifi off killed the network, and an ordinary program may
+      # switch the radio back on (RequestAccessAsync: Allowed).
+      try {
+        $null = [Windows.Devices.Radios.Radio,Windows.System.Devices,ContentType=WindowsRuntime]
+        $radT = $opT.MakeGenericMethod([System.Collections.Generic.IReadOnlyList[Windows.Devices.Radios.Radio]])
+        $accT = $opT.MakeGenericMethod([Windows.Devices.Radios.RadioAccessStatus])
+        $t = $accT.Invoke($null, @([Windows.Devices.Radios.Radio]::RequestAccessAsync())); $null = $t.Wait(15000)
+        $t = $radT.Invoke($null, @([Windows.Devices.Radios.Radio]::GetRadiosAsync())); $null = $t.Wait(15000)
+        $wifi = $t.Result | Where-Object { $_.Kind -eq 'WiFi' } | Select-Object -First 1
+        if ($wifi -and $wifi.State -ne 'On') {
+          $t = $accT.Invoke($null, @($wifi.SetStateAsync('On'))); $null = $t.Wait(15000)
+          "HUB_RADIO $($t.Result)"
+          Start-Sleep -Seconds 2
+        }
+      } catch { "HUB_RADIO failed $($_.Exception.Message)" }
+      # 2.4 GHz, always. Left on Auto, a laptop joined to nothing let
+      # Windows pick 5 GHz, and the card reported the network On while no
+      # phone could see it: two phones, 2026-09-23, 17:46 to 17:49, nothing.
+      # Many cards may not transmit on 5 GHz until a nearby router has told
+      # them the country, and in the bush there is no router. Every phone
+      # sees 2.4 GHz, and it is allowed everywhere.
+      $band = $cfg.Band
+      $want = if ($env:HUB_BAND -eq '5') { 'FiveGigahertz' } else { 'TwoPointFourGigahertz' }
+      try { if ($cfg.IsBandSupported($want)) { $band = $want } } catch { }
+      $changed = ($cfg.Ssid -ne $env:HUB_SSID) -or ($cfg.Passphrase -ne $env:HUB_PASS) -or ([string]$cfg.Band -ne [string]$band)
+      if ($changed -and $mgr.TetheringOperationalState -ne 'Off') { $null = Op ($mgr.StopTetheringAsync()) }
+      if ($changed) { $cfg.Ssid = $env:HUB_SSID; $cfg.Passphrase = $env:HUB_PASS; try { $cfg.Band = $band } catch { }; Act ($mgr.ConfigureAccessPointAsync($cfg)) }
+      "HUB_BAND $($mgr.GetCurrentAccessPointConfiguration().Band)"
+      if ($mgr.TetheringOperationalState -ne 'On') {
+        $r = Op ($mgr.StartTetheringAsync())
+        "HUB_START $($r.Status) $($r.AdditionalErrorMessage)"
+      } else { 'HUB_START Success' }
+      "HUB_STATE $($mgr.TetheringOperationalState)"
+    }
+    'channel' {
+      # The channel the card is really broadcasting on, asked of the card
+      # itself on the hotspot's own adapter: the one holding 192.168.137.1.
+      $ip = Get-NetIPAddress -IPAddress 192.168.137.1 -ErrorAction SilentlyContinue | Select-Object -First 1
+      if (-not $ip) { 'HUB_CHANNEL none'; break }
+      $g = (Get-NetAdapter -InterfaceIndex $ip.InterfaceIndex -IncludeHidden).InterfaceGuid
+      Add-Type -TypeDefinition @'
+using System; using System.Runtime.InteropServices;
+public static class HubWlan {
+  [DllImport("wlanapi.dll")] static extern int WlanOpenHandle(uint v, IntPtr r, out uint n, out IntPtr h);
+  [DllImport("wlanapi.dll")] static extern int WlanCloseHandle(IntPtr h, IntPtr r);
+  [DllImport("wlanapi.dll")] static extern int WlanQueryInterface(IntPtr h, ref Guid g, int op, IntPtr r, out int s, out IntPtr d, IntPtr t);
+  [DllImport("wlanapi.dll")] static extern void WlanFreeMemory(IntPtr p);
+  public static int Channel(Guid g) {
+    uint n; IntPtr h; if (WlanOpenHandle(2, IntPtr.Zero, out n, out h) != 0) return 0;
+    try { int s; IntPtr d; if (WlanQueryInterface(h, ref g, 8, IntPtr.Zero, out s, out d, IntPtr.Zero) != 0) return 0;
+          int c = Marshal.ReadInt32(d); WlanFreeMemory(d); return c; }
+    finally { WlanCloseHandle(h, IntPtr.Zero); }
+  }
+}
+'@
+      "HUB_CHANNEL $([HubWlan]::Channel([Guid]$g))"
+    }
+    'stop' {
+      # Whichever profile it was started from: stop every one that is on.
+      foreach ($q in $NI::GetConnectionProfiles()) {
+        try { $m = $TM::CreateFromConnectionProfile($q) } catch { continue }
+        if ($m.TetheringOperationalState -ne 'Off') { $r = Op ($m.StopTetheringAsync()); "HUB_STOP $($r.Status)" }
+      }
+      "HUB_STATE $($mgr.TetheringOperationalState)"
+    }
+  }
+} catch { "HUB_ERR $($_.Exception.Message)"; exit 1 }
+"#;
+
+/// The router this laptop really uses, read from Windows' route table.
+///
+/// default_gateway() on Windows is a guess, ".1 of our subnet", and on the
+/// test day the phone that was the router sat at .74, so names passed on from
+/// the hotspot went nowhere. `route print` lines are numbers in every
+/// language: destination 0.0.0.0, mask 0.0.0.0, then the gateway. The lowest
+/// metric wins. Kept for thirty seconds, because the hotspot asks per name.
+#[cfg(windows)]
+pub fn route_gateway() -> Option<Ipv4Addr> {
+    static CACHE: std::sync::Mutex<Option<(std::time::Instant, Option<Ipv4Addr>)>> = std::sync::Mutex::new(None);
+    let mut c = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, gw)) = *c {
+        if at.elapsed() < std::time::Duration::from_secs(30) {
+            return gw;
+        }
+    }
+    let out = std::process::Command::new("route")
+        .args(["print", "-4", "0.0.0.0"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    let gw = gateway_from_route_print(&String::from_utf8_lossy(&out.stdout));
+    *c = Some((std::time::Instant::now(), gw));
+    gw
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn gateway_from_route_print(text: &str) -> Option<Ipv4Addr> {
+    let mut best: Option<(u32, Ipv4Addr)> = None;
+    for line in text.lines() {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        if f.len() < 5 || f[0] != "0.0.0.0" || f[1] != "0.0.0.0" {
+            continue;
+        }
+        let (Ok(gw), Ok(metric)) = (f[2].parse::<Ipv4Addr>(), f[4].parse::<u32>()) else { continue };
+        if best.is_none_or(|(m, _)| metric < m) {
+            best = Some((metric, gw));
+        }
+    }
+    best.map(|(_, g)| g)
+}
+
+/// Standard base64, for PowerShell's -EncodedCommand. Twelve lines rather
+/// than a crate.
+#[cfg(windows)]
+fn base64(data: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut s = String::with_capacity(data.len().div_ceil(3) * 4);
+    for c in data.chunks(3) {
+        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        s.push(T[(n >> 18) as usize & 63] as char);
+        s.push(T[(n >> 12) as usize & 63] as char);
+        s.push(if c.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
+        s.push(if c.len() > 2 { T[n as usize & 63] as char } else { '=' });
+    }
+    s
+}
+
+/// 5 GHz when the person chose it on the start screen; 2.4 GHz otherwise.
+/// Kept here so the guard restarts the network on the same band.
+static WIFI_BAND_5: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_wifi_band_5(five: bool) {
+    WIFI_BAND_5.store(five, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The channel the card was last measured broadcasting on. None: not
+/// measured yet, or the network is not up.
+static HOTSPOT_CHANNEL: std::sync::Mutex<Option<u32>> = std::sync::Mutex::new(None);
+
+pub fn hotspot_channel() -> Option<u32> {
+    *HOTSPOT_CHANNEL.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// "2.4 GHz, channel 6" for the screen.
+pub fn describe_channel(ch: u32) -> String {
+    let band = if ch <= 14 { "2.4 GHz" } else if ch <= 177 { "5 GHz" } else { "6 GHz" };
+    format!("{band}, channel {ch}")
+}
+
+/// Ask the card which channel the hotspot is on. A second or two of
+/// PowerShell, so it is done after a start and then now and again, never
+/// while drawing.
+#[cfg(windows)]
+fn measure_channel() {
+    let ch = win_hotspot("channel", "", "")
+        .ok()
+        .and_then(|l| win_get(&l, "CHANNEL").and_then(|c| c.parse::<u32>().ok()))
+        .filter(|c| *c > 0);
+    *HOTSPOT_CHANNEL.lock().unwrap_or_else(|e| e.into_inner()) = ch;
+}
+
+/// What this laptop's wifi card can do as a hotspot, in one line, read from
+/// the card's own report once. Written for the fix screen, so nobody hunts
+/// for a feature the hardware does not have (asked about: several bands at
+/// once, 6 GHz, choosing the channel).
+///
+/// netsh words its report in the language Windows is installed in; where
+/// the English labels are not found, this says nothing rather than guess.
+pub fn wifi_card_summary() -> Option<String> {
+    static CACHE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| {
+        if !cfg!(windows) {
+            return None;
+        }
+        let run = |args: &[&str]| {
+            std::process::Command::new("netsh")
+                .args(args)
+                .stdin(std::process::Stdio::null())
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        };
+        let drivers = run(&["wlan", "show", "drivers"])?;
+        let caps = run(&["wlan", "show", "wirelesscapabilities"]).unwrap_or_default();
+        card_summary_from(&drivers, &caps)
+    })
+    .clone()
+}
+
+pub(crate) fn card_summary_from(drivers: &str, caps: &str) -> Option<String> {
+    let field = |text: &str, label: &str| {
+        text.lines()
+            .find(|l| l.trim_start().starts_with(label))
+            .and_then(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
+    };
+    let name = field(drivers, "Driver")?;
+    let five = field(caps, "P2P GO on 5 GHz").map(|v| v.starts_with("Supported"));
+    let six = field(caps, "P2P GO on 6 GHz").map(|v| v.starts_with("Supported"));
+    let mlo = field(caps, "Number of MLO Connections Supported").and_then(|v| v.parse::<u32>().ok());
+    let ports = field(caps, "P2P GO ports count").and_then(|v| v.parse::<u32>().ok());
+    let mut bands = vec!["2.4 GHz"];
+    if five == Some(true) {
+        bands.push("5 GHz");
+    }
+    if six == Some(true) {
+        bands.push("6 GHz");
+    }
+    let mut s = format!("{name}: a network on {}", bands.join(" or "));
+    if six == Some(false) {
+        s.push_str(", not 6 GHz");
+    }
+    if ports == Some(1) {
+        s.push_str("; one network at a time");
+    }
+    if mlo == Some(0) {
+        s.push_str("; no multi-band (MLO)");
+    }
+    s.push_str("; Windows picks the channel.");
+    Some(s)
+}
+
+/// Run the hotspot script and return its `HUB_*` lines as (key, rest).
+#[cfg(windows)]
+fn win_hotspot(action: &str, ssid: &str, password: &str) -> Result<Vec<(String, String)>, String> {
+    let utf16: Vec<u8> = WIN_HOTSPOT.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    let out = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", &base64(&utf16)])
+        .env("HUB_ACTION", action)
+        .env("HUB_SSID", ssid)
+        .env("HUB_PASS", password)
+        .env("HUB_BAND", if WIFI_BAND_5.load(std::sync::atomic::Ordering::Relaxed) { "5" } else { "2.4" })
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("Could not ask Windows to switch the hotspot: {e}"))?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<(String, String)> = text
+        .lines()
+        .filter_map(|l| {
+            let l = l.trim();
+            let rest = l.strip_prefix("HUB_")?;
+            let (k, v) = rest.split_once(' ').unwrap_or((rest, ""));
+            Some((k.to_string(), v.trim().to_string()))
+        })
+        .collect();
+    Ok(lines)
+}
+
+/// The hidden helper that switches the hotspot off when this program ends.
+///
+/// WHY. Closing the window with its X ended the hub without it running a
+/// line of its own, and the hotspot it had switched on stayed on: a laptop
+/// broadcasting a network nobody was serving, draining its battery, until
+/// someone found the switch in Settings. The owner asked for this before
+/// anything else. The same goes for Ctrl-C on the command line, a crash, and
+/// Task Manager, none of which let a program tidy up after itself.
+///
+/// So the tidying does not live in this program. A second, windowless
+/// process waits for this one to end, however it ends, and then switches the
+/// hotspot off: the Windows twin of the systemd timer the Linux side uses.
+/// It is given its own hidden console and its own process group, so closing
+/// the hub's window or pressing Ctrl-C in it does not take the watchman with
+/// it. A clean Stop sends it home first (disarm_restore).
+#[cfg(windows)]
+static WATCHMAN: std::sync::Mutex<Option<std::process::Child>> = std::sync::Mutex::new(None);
+
+#[cfg(windows)]
+fn arm_watchman() {
+    use std::os::windows::process::CommandExt;
+    let mut w = WATCHMAN.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(child) = w.as_mut() {
+        if matches!(child.try_wait(), Ok(None)) {
+            return; // already watching
+        }
+    }
+    let script = format!(
+        "Wait-Process -Id {} -ErrorAction SilentlyContinue\n{}",
+        std::process::id(),
+        WIN_HOTSPOT
+    );
+    let utf16: Vec<u8> = script.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    let encoded = base64(&utf16);
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+    let spawn = |flags: u32| {
+        std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", &encoded])
+            .env("HUB_ACTION", "stop")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .creation_flags(flags)
+            .spawn()
+    };
+    // Out of the terminal's job if it has one, so closing the terminal does
+    // not end the watchman along with everything else in it. A job that
+    // forbids that refuses the spawn, and then it goes without.
+    let base = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP;
+    *w = spawn(base | CREATE_BREAKAWAY_FROM_JOB).or_else(|_| spawn(base)).ok();
+}
+
+/// The name and password the hotspot should have, while the hub wants it
+/// up. None once it has been stopped on purpose.
+#[cfg(windows)]
+static HOTSPOT_WANTED: std::sync::Mutex<Option<(String, String)>> = std::sync::Mutex::new(None);
+/// One start or stop at a time, so the guard can never switch the network
+/// back on just after a Stop switched it off.
+#[cfg(windows)]
+static HOTSPOT_OP: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// What the guard last found, in words for the screen. Empty: all well.
+static HOTSPOT_PROBLEM: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+/// Something wrong with the network this program made, said plainly, or
+/// None when it is up as it should be.
+pub fn hotspot_problem() -> Option<String> {
+    let p = HOTSPOT_PROBLEM.lock().unwrap_or_else(|e| e.into_inner());
+    (!p.is_empty()).then(|| p.clone())
+}
+
+#[cfg(windows)]
+fn set_problem(s: &str) {
+    *HOTSPOT_PROBLEM.lock().unwrap_or_else(|e| e.into_inner()) = s.to_string();
+}
+
+/// Keep the hotspot up for as long as it is wanted.
+///
+/// WHY. Tested with a phone on 2026-09-23: the laptop's wifi was switched
+/// off, which took the hotspot with it, and the screen went on showing the
+/// codes to scan for a network that was no longer there. Windows also
+/// switches the hotspot off by itself after five minutes with nobody on it,
+/// on a default setting. A network that silently disappears is the worst
+/// thing this can do in a room. So every few seconds the guard looks, and if
+/// the network is gone it switches the radio and the network back on, and
+/// says so on the screen while it does.
+#[cfg(windows)]
+fn guard_hotspot() {
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if STARTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    std::thread::spawn(|| {
+        let mut misses = 0;
+        let mut beats = 0u32;
+        let mut down_since: Option<std::time::Instant> = None;
+        loop {
+            // Two seconds while the network is missing, three while it is up.
+            let pause = if misses > 0 { 2 } else { 3 };
+            std::thread::sleep(std::time::Duration::from_secs(pause));
+            beats += 1;
+            let wanted = HOTSPOT_WANTED.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            let Some((ssid, pass)) = wanted else {
+                set_problem("");
+                misses = 0;
+                down_since = None;
+                continue;
+            };
+            if hotspot_address_of("").is_some() {
+                if let Some(t) = down_since.take() {
+                    network_log(&format!("network back after {} s", t.elapsed().as_secs()));
+                }
+                set_problem("");
+                misses = 0;
+                // Every half minute, and at once if never measured.
+                if beats % 10 == 0 || hotspot_channel().is_none() {
+                    measure_channel();
+                }
+                continue;
+            }
+            *HOTSPOT_CHANNEL.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            // Twice in a row, so a moment's hiccup is not a restart.
+            misses += 1;
+            if misses == 1 {
+                down_since = Some(std::time::Instant::now());
+                network_log("network gone: the hotspot's address disappeared");
+                continue;
+            }
+            set_problem("The wifi network went off. Switching it back on...");
+            let _op = HOTSPOT_OP.lock().unwrap_or_else(|e| e.into_inner());
+            // Stopped on purpose while we waited for the lock: leave it off.
+            if HOTSPOT_WANTED.lock().unwrap_or_else(|e| e.into_inner()).is_none() {
+                continue;
+            }
+            let lines = win_hotspot("start", &ssid, &pass).unwrap_or_default();
+            let said: Vec<String> = lines.iter().map(|(k, v)| format!("{k} {v}")).collect();
+            network_log(&format!("switching back on; Windows said: {}", said.join(" | ")));
+            let radio_refused = win_get(&lines, "RADIO").is_some_and(|r| r != "Allowed");
+            // WHY THE WAIT IS CONDITIONAL. The guard used to wait ten seconds
+            // for the address after every attempt, including attempts Windows
+            // had already refused. Measured 2026-09-23, 18:50: Windows switched
+            // the hotspot off itself as the last phone left, refused the first
+            // tries, and with 3 + 10 s per try the network was gone for 40 s.
+            // Only a start Windows accepted is worth waiting for; a refusal is
+            // tried again two seconds later.
+            let accepted = win_get(&lines, "STATE") == Some("On")
+                || win_get(&lines, "START").is_some_and(|s| s.starts_with("Success"));
+            let mut up = false;
+            if accepted {
+                for _ in 0..40 {
+                    if hotspot_address_of("").is_some() {
+                        up = true;
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
+            }
+            if up {
+                if let Some(t) = down_since.take() {
+                    network_log(&format!("network back after {} s", t.elapsed().as_secs()));
+                }
+                set_problem("");
+                misses = 0;
+                measure_channel();
+            } else if radio_refused {
+                set_problem(
+                    "THE WIFI NETWORK IS OFF: this laptop's wifi is switched off and \
+                     Windows would not let the hub switch it on. Switch wifi ON (it does \
+                     not need to join anything). The network comes back by itself.",
+                );
+            } else {
+                set_problem(
+                    "THE WIFI NETWORK IS OFF and did not come back yet. Make sure this \
+                     laptop's wifi is switched ON (aeroplane mode off). The hub keeps trying.",
+                );
+            }
+        }
+    });
+}
+
+/// One line in %LOCALAPPDATA%\PortableNetworkHub\network.log.
+///
+/// The network's comings and goings, and what Windows answered each time the
+/// hub asked for it back, written as they happen. Asked for by the owner after
+/// a day of reconstructing outages from screenshots; the monitor script does
+/// the same from outside, this is the hub's own account.
+#[cfg(windows)]
+fn network_log(line: &str) {
+    let base = std::env::var_os("LOCALAPPDATA")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let dir = base.join("PortableNetworkHub");
+    let _ = std::fs::create_dir_all(&dir);
+    use std::io::Write as _;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("network.log")) {
+        let _ = writeln!(f, "{}  {line}", timestamp());
+    }
+}
+
+#[cfg(windows)]
+fn win_get<'a>(lines: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    lines.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+}
+
+#[cfg(windows)]
+pub fn hotspot_up(ssid: &str, password: &str, _channel: Option<u16>) -> Result<Hotspot, String> {
+    if password.chars().count() < 8 {
+        return Err("A wifi password has to be at least 8 characters. That is a rule of WPA2, not ours.".into());
+    }
+    if ssid.is_empty() || ssid.len() > 32 {
+        return Err("The network name has to be between 1 and 32 letters long.".into());
+    }
+    // Switched off by a tweak list: say so, with the fix, before trying.
+    let off = disabled_hotspot_services();
+    if let Some(advice) = switched_off_advice(&off) {
+        return Err(format!("This laptop cannot make a wifi network yet.\n{advice}"));
+    }
+    let _op = HOTSPOT_OP.lock().unwrap_or_else(|e| e.into_inner());
+    let lines = win_hotspot("start", ssid, password)?;
+    let state = win_get(&lines, "STATE").unwrap_or("");
+    if state != "On" {
+        let why = win_get(&lines, "ERR")
+            .or_else(|| win_get(&lines, "START"))
+            .unwrap_or("no answer from Windows");
+        // 0x83120001 is what Windows says when the hotspot services are off,
+        // measured 2026-09-08, and the thing Settings shows as an empty box.
+        return Err(if why.contains("0x83120001") {
+            "Windows would not make the wifi network: parts of Windows it needs are \
+             switched off. Choose \"Fix problems with this computer\" on the first \
+             screen, then try again."
+                .to_string()
+        } else {
+            format!(
+                "Windows would not switch the wifi network on.\n\n{why}\n\n\
+                 Check that wifi is switched on (the aeroplane mode button is off), \
+                 then try again."
+            )
+        });
+    }
+    // Wait until the hotspot's own address is there AND stays there. When the
+    // name or password changes Windows switches the network off and on, and
+    // for a moment the OLD address is still present: measured 2026-09-23,
+    // gone and back about four seconds in. A single look saw the old one and
+    // reported ready too early. A second and a half of steady answers does
+    // not. Fifteen seconds at most, then the screen follows on its own.
+    let mut steady = 0;
+    for _ in 0..60 {
+        if hotspot_address_of("").is_some() {
+            steady += 1;
+            if steady >= 6 {
+                break;
+            }
+        } else {
+            steady = 0;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    *HOTSPOT_WANTED.lock().unwrap_or_else(|e| e.into_inner()) =
+        Some((ssid.to_string(), password.to_string()));
+    measure_channel();
+    network_log(&format!("network '{ssid}' switched on{}", hotspot_channel().map(|c| format!(", {}", describe_channel(c))).unwrap_or_default()));
+    guard_hotspot();
+    Ok(Hotspot {
+        ssid: ssid.to_string(),
+        iface: "Mobile hotspot".to_string(),
+        previous: None,
+        profile: None,
+        password: password.to_string(),
+    })
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 pub fn hotspot_up(_ssid: &str, _password: &str, _channel: Option<u16>) -> Result<Hotspot, String> {
     let mut msg = String::from(
         "On this system, switch the hotspot on yourself first: \
@@ -1469,6 +2065,67 @@ pub fn hotspot_up(_ssid: &str, _password: &str, _channel: Option<u16>) -> Result
         msg.push_str(&advice);
     }
     Err(msg)
+}
+
+/// The password this machine last used for a hotspot called `ssid`.
+///
+/// Every laptop that has joined a network remembers its password. Handing
+/// the same name out with a new password means each of them tries the old one
+/// first, fails, waits and tries again before anyone is asked, which is what
+/// testers saw as "takes ages to connect". NetworkManager already keeps the
+/// profile from last time, so its password is read back from there.
+#[cfg(target_os = "linux")]
+pub fn saved_hotspot_password(ssid: &str) -> Option<String> {
+    if ssid.is_empty() {
+        return None;
+    }
+    let out = std::process::Command::new("nmcli")
+        .args(["-t", "-f", "NAME,TYPE", "connection", "show"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let Some((name, kind)) = line.rsplit_once(':') else { continue };
+        if !kind.contains("wireless") {
+            continue;
+        }
+        let name = unescape_terse(name);
+        let detail = std::process::Command::new("nmcli")
+            .args([
+                "-s", "-g",
+                "802-11-wireless.ssid,802-11-wireless.mode,802-11-wireless-security.psk",
+                "connection", "show", &name,
+            ])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&detail.stdout);
+        let mut lines = text.lines();
+        let (Some(s), Some(mode), Some(psk)) = (lines.next(), lines.next(), lines.next()) else {
+            continue;
+        };
+        // -g escapes colons the same way -t does.
+        let (s, psk) = (unescape_terse(s), unescape_terse(psk));
+        if s == ssid && mode == "ap" && psk.chars().count() >= 8 {
+            return Some(psk);
+        }
+    }
+    None
+}
+
+/// Windows keeps one hotspot name and password; if the name is this one,
+/// that password is the one every laptop already has saved.
+#[cfg(windows)]
+pub fn saved_hotspot_password(ssid: &str) -> Option<String> {
+    let lines = win_hotspot("read", "", "").ok()?;
+    let name = win_get(&lines, "SSID")?;
+    let pass = win_get(&lines, "PASS")?;
+    (name == ssid && pass.chars().count() >= 8).then(|| pass.to_string())
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+pub fn saved_hotspot_password(_ssid: &str) -> Option<String> {
+    None
 }
 
 /// nmcli's errors are written for administrators. This is for a teacher.
@@ -1523,7 +2180,19 @@ impl Hotspot {
         }
     }
 
-    #[cfg(not(target_os = "linux"))]
+    /// Switch Windows' hotspot back off. The name and password are left as
+    /// the hub set them, so the laptops that joined today join again next
+    /// time without being asked.
+    #[cfg(windows)]
+    pub fn down(&self) {
+        *HOTSPOT_WANTED.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        let _op = HOTSPOT_OP.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = win_hotspot("stop", "", "");
+        set_problem("");
+        network_log("network switched off: stopped in the hub");
+    }
+
+    #[cfg(not(any(target_os = "linux", windows)))]
     pub fn down(&self) {}
 
     /// Change the password and restart the network under it.
@@ -1588,7 +2257,28 @@ impl Hotspot {
         Ok(())
     }
 
-    #[cfg(not(target_os = "linux"))]
+    /// Windows re-forms the network under a new password the same way: the
+    /// script sees the change, stops, reconfigures and starts again, and
+    /// every device is dropped until it has the new one.
+    #[cfg(windows)]
+    pub fn change_password(&mut self, new: &str) -> Result<(), String> {
+        if new.chars().count() < 8 {
+            return Err("A wifi password has to be at least 8 characters. That is a rule of WPA2, not ours.".into());
+        }
+        let _op = HOTSPOT_OP.lock().unwrap_or_else(|e| e.into_inner());
+        let lines = win_hotspot("start", &self.ssid, new)?;
+        *HOTSPOT_WANTED.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some((self.ssid.clone(), new.to_string()));
+        if win_get(&lines, "STATE") != Some("On") {
+            return Err("The password was changed but the network did not come back up. \
+                        Stop and start handing out again."
+                .into());
+        }
+        self.password = new.to_string();
+        Ok(())
+    }
+
+    #[cfg(not(any(target_os = "linux", windows)))]
     pub fn change_password(&mut self, _new: &str) -> Result<(), String> {
         Err("On this system the password is changed where the hotspot was \
              switched on: Settings, Network and internet, Mobile hotspot."
@@ -1603,13 +2293,20 @@ impl Hotspot {
     /// somebody closes the terminal. Re-armed on a heartbeat while the lesson
     /// is running, so it only ever fires after the tool has actually stopped.
     pub fn arm_restore(&self, seconds: u64) {
+        let mut armed = RESTORE_ARMED.lock().unwrap_or_else(|e| e.into_inner());
+        *armed = true;
         rearm_restore(seconds);
+        #[cfg(windows)]
+        arm_watchman();
     }
 
     /// Cancel the safety net, on the way out of a clean shutdown that has
     /// already put the wifi back itself.
     #[cfg(target_os = "linux")]
     pub fn disarm_restore(&self) {
+        // Held while the units stop, so the heartbeat cannot re-arm between.
+        let mut armed = RESTORE_ARMED.lock().unwrap_or_else(|e| e.into_inner());
+        *armed = false;
         // Stopping the service kills its sleep before the nmcli runs, which
         // is what disarming means. The .timer name is the previous build's.
         for unit in ["hub-wifi-restore.service", "hub-wifi-restore.timer"] {
@@ -1619,7 +2316,18 @@ impl Hotspot {
         }
     }
 
-    #[cfg(not(target_os = "linux"))]
+    /// On Windows: send the watchman home. Called after a clean stop has
+    /// already switched the hotspot off itself.
+    #[cfg(windows)]
+    pub fn disarm_restore(&self) {
+        let mut w = WATCHMAN.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(mut child) = w.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+
+    #[cfg(not(any(target_os = "linux", windows)))]
     pub fn disarm_restore(&self) {}
 
     /// The address this machine holds ON THE HOTSPOT, asked for rather than
@@ -1630,10 +2338,19 @@ impl Hotspot {
     /// mode uses 10.42.0.1 in practice, but that is a default and not a
     /// promise, and a machine with a second interface can easily have another
     /// address that sorts first.
-    #[cfg(target_os = "linux")]
     pub fn address(&self) -> Option<Ipv4Addr> {
+        hotspot_address_of(&self.iface)
+    }
+}
+
+/// The address this machine holds on the hotspot on `iface`, and only once
+/// it really holds it. A free function so a waiting thread can ask without
+/// holding on to the Hotspot.
+#[cfg(target_os = "linux")]
+pub fn hotspot_address_of(iface: &str) -> Option<Ipv4Addr> {
+    {
         let out = std::process::Command::new("nmcli")
-            .args(["-g", "IP4.ADDRESS", "device", "show", &self.iface])
+            .args(["-g", "IP4.ADDRESS", "device", "show", iface])
             .stdin(std::process::Stdio::null())
             .output()
             .ok()?;
@@ -1647,10 +2364,86 @@ impl Hotspot {
         // usual shared-mode gateway.
         source_address_for(Ipv4Addr::new(10, 42, 0, 1))
     }
+}
 
-    #[cfg(not(target_os = "linux"))]
-    pub fn address(&self) -> Option<Ipv4Addr> {
-        source_address_for(Ipv4Addr::new(192, 168, 137, 1))
+/// Windows' hotspot is always 192.168.137.1, but asking "which address
+/// would I use to reach it" answers with whatever network the laptop is on
+/// until the hotspot's own address exists. Measured 2026-09-23: for about
+/// four seconds after switching on, that answer was the phone network's
+/// the other network's address, and gorilla.local was started there, on the
+/// wrong network.
+/// So it counts only when the answer is the hotspot's address itself.
+#[cfg(windows)]
+pub fn hotspot_address_of(_iface: &str) -> Option<Ipv4Addr> {
+    let ics = Ipv4Addr::new(192, 168, 137, 1);
+    (source_address_for(ics) == Some(ics)).then_some(ics)
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+pub fn hotspot_address_of(_iface: &str) -> Option<Ipv4Addr> {
+    source_address_for(Ipv4Addr::new(192, 168, 137, 1))
+}
+
+#[cfg(test)]
+mod card_tests {
+    use super::*;
+
+    /// This laptop's own report, 2026-09-23, reduced to the lines used.
+    #[test]
+    fn the_card_is_described_from_its_own_report() {
+        let drivers = "    Driver                    : Intel(R) Wi-Fi 6 AX201 160MHz\n    Vendor : Intel\n";
+        let caps = "    P2P GO on 5 GHz                             : Supported\n    P2P GO on 6 GHz                             : Not Supported\n    P2P GO ports count                          : 1\n    Number of MLO Connections Supported         : 0\n";
+        assert_eq!(
+            card_summary_from(drivers, caps).unwrap(),
+            "Intel(R) Wi-Fi 6 AX201 160MHz: a network on 2.4 GHz or 5 GHz, not 6 GHz; one network at a time; no multi-band (MLO); Windows picks the channel."
+        );
+        assert_eq!(card_summary_from("nothing useful", ""), None);
+        assert_eq!(describe_channel(6), "2.4 GHz, channel 6");
+        assert_eq!(describe_channel(149), "5 GHz, channel 149");
+    }
+}
+
+#[cfg(test)]
+mod route_tests {
+    use super::*;
+
+    /// The test day's route table, and a second default route with a worse
+    /// metric that must lose.
+    #[test]
+    fn the_router_is_read_from_the_route_table_not_guessed() {
+        let text = "IPv4 Route Table
+  Network Destination        Netmask          Gateway       Interface  Metric
+          0.0.0.0          0.0.0.0      10.0.5.74        10.0.5.96     35
+          0.0.0.0          0.0.0.0      10.0.0.1         10.0.0.5     50
+";
+        assert_eq!(gateway_from_route_print(text), Some(Ipv4Addr::new(10, 0, 5, 74)));
+        assert_eq!(gateway_from_route_print("no routes here"), None);
+    }
+}
+
+#[cfg(all(test, windows))]
+mod win_hotspot_tests {
+    use super::*;
+
+    #[test]
+    fn base64_matches_the_standard() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+    }
+
+    /// Reading needs nothing switched on and changes nothing, so it can run
+    /// on any Windows machine: the script must at least come back with the
+    /// hotspot's state, or with an error line, never with silence.
+    #[test]
+    fn the_script_runs_and_answers() {
+        let lines = win_hotspot("read", "", "").expect("powershell runs");
+        assert!(
+            win_get(&lines, "STATE").is_some() || win_get(&lines, "ERR").is_some(),
+            "no answer: {lines:?}"
+        );
     }
 }
 

@@ -27,6 +27,26 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=../../packaging/icon/hub.ico");
 
+    // Which build this is, readable on the first screen.
+    //
+    // Every test build of 2026-09-23 was called 0.9.9, and the owner, looking
+    // at a build with a day's new functions in it, reasonably concluded it was
+    // the old one: the only thing on screen that says which build it is had
+    // not changed. The date of the last saved change is different for every
+    // build that has anything new in it, means something to a person, and is
+    // the same every time the same commit is built, so it does not spoil a
+    // reproducible build the way the time of compiling would. Empty when not
+    // built from a git checkout, and then nothing is shown.
+    println!("cargo:rerun-if-changed=../../.git/logs/HEAD");
+    let stamp = Command::new("git")
+        .args(["log", "-1", "--format=%cd", "--date=format:%d %b %Y %H:%M"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    println!("cargo:rustc-env=HUB_BUILD={stamp}");
+
     // Only for Windows OUTPUT, not on a Windows host. Cross-compiling to Linux
     // from here must not try to attach a Windows resource.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {

@@ -515,36 +515,60 @@ pub fn mdns_answer(query: &[u8], us: Ipv4Addr) -> Option<Vec<u8>> {
             continue;
         }
 
-        let mut out = Vec::with_capacity(64);
-        // mDNS responses carry id 0: there is no transaction to match, the
-        // name in the answer is what identifies it.
-        out.extend_from_slice(&0u16.to_be_bytes());
-        out.extend_from_slice(&0x8400u16.to_be_bytes()); // response, authoritative
-        out.extend_from_slice(&0u16.to_be_bytes()); // no questions echoed
-        out.extend_from_slice(&1u16.to_be_bytes()); // one answer
-        out.extend_from_slice(&0u16.to_be_bytes());
-        out.extend_from_slice(&0u16.to_be_bytes());
-
-        // The name, written out in full. No compression pointer: there is no
-        // question section above to point back into.
-        for label in name.split('.') {
-            out.push(label.len() as u8);
-            out.extend_from_slice(label.as_bytes());
-        }
-        out.push(0);
-        out.extend_from_slice(&1u16.to_be_bytes()); // A
-        // Cache-flush bit set with class IN: this is the current answer and
-        // replaces anything remembered for this name.
-        out.extend_from_slice(&0x8001u16.to_be_bytes());
         // Two minutes. Long enough to be useful across a page of images,
         // short enough that a laptop carried away from this cable is not
         // still holding the answer.
-        out.extend_from_slice(&120u32.to_be_bytes());
-        out.extend_from_slice(&4u16.to_be_bytes());
-        out.extend_from_slice(&us.octets());
-        return Some(out);
+        return Some(mdns_record(&name, us, 120));
     }
     None
+}
+
+/// One unsolicited-style mDNS answer: `name` is at `us`, for `ttl` seconds.
+///
+/// The same packet answers a question, announces us on start, and with a
+/// ttl of 0 says goodbye on stop, which tells every device to forget the
+/// name now rather than keep the old address for two more minutes.
+pub fn mdns_record(name: &str, us: Ipv4Addr, ttl: u32) -> Vec<u8> {
+    let mut out = Vec::with_capacity(64);
+    // mDNS responses carry id 0: there is no transaction to match, the
+    // name in the answer is what identifies it.
+    out.extend_from_slice(&0u16.to_be_bytes());
+    out.extend_from_slice(&0x8400u16.to_be_bytes()); // response, authoritative
+    out.extend_from_slice(&0u16.to_be_bytes()); // no questions echoed
+    out.extend_from_slice(&1u16.to_be_bytes()); // one answer
+    out.extend_from_slice(&0u16.to_be_bytes());
+    out.extend_from_slice(&0u16.to_be_bytes());
+
+    // The name, written out in full. No compression pointer: there is no
+    // question section above to point back into.
+    for label in name.split('.') {
+        out.push(label.len() as u8);
+        out.extend_from_slice(label.as_bytes());
+    }
+    out.push(0);
+    out.extend_from_slice(&1u16.to_be_bytes()); // A
+    // Cache-flush bit set with class IN: this is the current answer and
+    // replaces anything remembered for this name.
+    out.extend_from_slice(&0x8001u16.to_be_bytes());
+    out.extend_from_slice(&ttl.to_be_bytes());
+    out.extend_from_slice(&4u16.to_be_bytes());
+    out.extend_from_slice(&us.octets());
+    out
+}
+
+/// Whether a question came from the network `us` is on.
+///
+/// The socket is bound to every interface, and on Linux it hears the group
+/// on every interface anything else (avahi) has joined it on. So a laptop on
+/// a cable AND on wifi heard its wifi neighbours asking for gorilla.local and
+/// answered them with the cable address, which none of them can reach. Only
+/// questions from our own network get an answer: 169.254/16 for a cable, the
+/// same /24 for a hotspot (NetworkManager's and Windows' both are /24).
+pub fn same_link(us: Ipv4Addr, from: Ipv4Addr) -> bool {
+    if us.is_link_local() {
+        return from.is_link_local();
+    }
+    us.octets()[..3] == from.octets()[..3]
 }
 
 /// Read a QNAME as dotted text. mDNS queries do not use compression pointers
@@ -588,7 +612,7 @@ fn read_query_name(msg: &[u8], mut pos: usize) -> Option<(String, usize)> {
 /// same shape as the console handling in term.rs: a few lines of the platform's
 /// own API where the portable wrapper cannot express what is needed.
 #[cfg(windows)]
-fn shared_udp(port: u16) -> std::io::Result<UdpSocket> {
+fn shared_udp(port: u16, out_via: Ipv4Addr) -> std::io::Result<UdpSocket> {
     use std::os::windows::io::FromRawSocket;
 
     // Winsock has to be started before socket() will work, and the standard
@@ -621,6 +645,13 @@ fn shared_udp(port: u16) -> std::io::Result<UdpSocket> {
             closesocket(s);
             return Err(std::io::Error::last_os_error());
         }
+        // Replies to the group leave by OUR interface, not by whichever one
+        // holds the default route. Joining a group only chooses where we
+        // LISTEN; without this the answer went out of the wifi. IPPROTO_IP 0,
+        // IP_MULTICAST_IF 9, value an in_addr. Not fatal: a failure leaves
+        // the direct reply, which routing already sends the right way.
+        let via = out_via.octets();
+        setsockopt(s, 0, 9, via.as_ptr(), 4);
         // struct sockaddr_in: family, port (network order), address, padding.
         let mut sa = [0u8; 16];
         sa[0..2].copy_from_slice(&(AF_INET as u16).to_ne_bytes());
@@ -636,7 +667,7 @@ fn shared_udp(port: u16) -> std::io::Result<UdpSocket> {
 }
 
 #[cfg(unix)]
-fn shared_udp(port: u16) -> std::io::Result<UdpSocket> {
+fn shared_udp(port: u16, out_via: Ipv4Addr) -> std::io::Result<UdpSocket> {
     use std::os::unix::io::FromRawFd;
 
     extern "C" {
@@ -672,6 +703,14 @@ fn shared_udp(port: u16) -> std::io::Result<UdpSocket> {
         // without SO_REUSEPORT cannot join it there.
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, p, 4);
         setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, p, 4);
+        // Replies to the group leave by OUR interface: see the Windows twin.
+        // IP_MULTICAST_IF is 32 on Linux, 9 on the BSDs and macOS.
+        #[cfg(target_os = "linux")]
+        const IP_MULTICAST_IF: i32 = 32;
+        #[cfg(not(target_os = "linux"))]
+        const IP_MULTICAST_IF: i32 = 9;
+        let via = out_via.octets();
+        setsockopt(fd, 0, IP_MULTICAST_IF, via.as_ptr(), 4);
 
         let mut sa = [0u8; 16];
         sa[0] = 16; // sin_len on the BSDs, ignored on Linux
@@ -692,7 +731,8 @@ fn shared_udp(port: u16) -> std::io::Result<UdpSocket> {
 }
 
 #[cfg(not(any(windows, unix)))]
-fn shared_udp(port: u16) -> std::io::Result<UdpSocket> {
+fn shared_udp(port: u16, out_via: Ipv4Addr) -> std::io::Result<UdpSocket> {
+    let _ = out_via;
     UdpSocket::bind(("0.0.0.0", port))
 }
 
@@ -764,14 +804,187 @@ pub fn name_is_taken(us: Ipv4Addr, patience: Duration) -> bool {
     taken
 }
 
+/// Answer gorilla.local on a network that may not have its address yet.
+///
+/// Waits, off the caller's thread, until `address` gives one, asks whether
+/// another machine already answers to the name, and then answers. `live`
+/// says it is answering, `taken` that it is not because somebody else is.
+/// Starting at the moment a hotspot is switched on is exactly when its
+/// address does not exist yet, which is why this waits instead of trying
+/// once and giving up.
+pub fn start_mdns_when_ready(
+    address: impl Fn() -> Option<Ipv4Addr> + Send + 'static,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    live: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    taken: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    use std::sync::atomic::Ordering;
+    std::thread::spawn(move || {
+        while !stop.load(Ordering::Relaxed) {
+            if let Some(us) = address() {
+                if name_is_taken(us, Duration::from_millis(700)) {
+                    taken.store(true, Ordering::Relaxed);
+                    return;
+                }
+                if start_mdns(us, std::sync::Arc::clone(&stop)).is_ok() {
+                    live.store(true, Ordering::Relaxed);
+                    return;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    });
+}
+
+// ------------------------------------------------ names on Windows' hotspot
+//
+// WHY. Tested with an Android phone on Windows' hotspot, 2026-09-23: the
+// phone joined, and typing gorilla.local did nothing. The name resolved
+// fine (asked of the hotspot's DNS from the laptop: 192.168.137.1); the
+// browser treated the word as a search, and with no internet the search went
+// nowhere. Typing is the wrong ask. The right one is the sign-in page every
+// phone opens by itself when its "is there internet?" check is answered by
+// somebody else, which is what the Linux hotspot does through dnsmasq.
+//
+// Windows' hotspot answers DNS with its own proxy on 0.0.0.0:53. Measured
+// the same day: a socket bound to 192.168.137.1:53 exactly is allowed, and
+// receives the hotspot's questions ahead of the proxy. So the hub answers
+// the probe names and its own names with its address, and passes every other
+// question on to Windows' proxy, so a shared internet connection still works
+// for everything else.
+
+/// The names phones and computers ask to decide whether there is internet,
+/// the same list the Linux drop-in answers, plus the words a teacher says.
+pub const PROBE_NAMES: [&str; 17] = [
+    "connectivitycheck.gstatic.com",
+    "connectivitycheck.android.com",
+    "clients3.google.com",
+    "captive.apple.com",
+    "www.apple.com",
+    "www.msftconnecttest.com",
+    "dns.msftncsi.com",
+    "detectportal.firefox.com",
+    "nmcheck.gnome.org",
+    "networkcheck.kde.org",
+    "connectivity-check.ubuntu.com",
+    "network-test.debian.org",
+    "classroom",
+    "class",
+    "lesson",
+    "school",
+    "gorilla.hub",
+];
+
+/// Whether a question on the hotspot is one the hub answers itself.
+pub fn ours_on_hotspot(name: &str) -> bool {
+    let n = name.trim_end_matches('.');
+    PROBE_NAMES.iter().chain(OUR_NAMES.iter()).chain(LOCAL_NAMES.iter()).any(|o| o.eq_ignore_ascii_case(n))
+}
+
+/// The name asked in a DNS question, if it is one.
+pub fn question_name(query: &[u8]) -> Option<String> {
+    if query.len() < 13 || u16::from_be_bytes([query[4], query[5]]) != 1 {
+        return None;
+    }
+    read_query_name(query, 12).map(|(n, _)| n)
+}
+
+/// "The server could not answer this", echoing the question: the quick way
+/// to say no, instead of letting the asker time out.
+pub fn servfail(query: &[u8]) -> Option<Vec<u8>> {
+    let end = skip_name(query, 12)?.checked_add(4)?;
+    if query.len() < end {
+        return None;
+    }
+    let mut out = query[..end].to_vec();
+    let rd = query[2] & 0x01;
+    out[2] = 0x80 | rd; // response, recursion desired echoed
+    out[3] = 0x80 | 0x02; // recursion available, SERVFAIL
+    out[6..12].copy_from_slice(&[0, 0, 0, 0, 0, 0]);
+    Some(out)
+}
+
+/// Answer names on the hotspot at whatever address `address` gives, for as
+/// long as `stop` is not set. Rebinds when the hotspot goes and comes back.
+pub fn start_hotspot_names(
+    address: impl Fn() -> Option<Ipv4Addr> + Send + 'static,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    use std::sync::atomic::Ordering;
+    std::thread::spawn(move || {
+        while !stop.load(Ordering::Relaxed) {
+            let Some(us) = address() else {
+                std::thread::sleep(Duration::from_millis(500));
+                continue;
+            };
+            let Ok(sock) = UdpSocket::bind((us, SERVER_PORT)) else {
+                std::thread::sleep(Duration::from_secs(1));
+                continue;
+            };
+            let _ = sock.set_read_timeout(Some(Duration::from_millis(500)));
+            let mut buf = [0u8; 512];
+            let mut idle_checks = 0u32;
+            while !stop.load(Ordering::Relaxed) {
+                match sock.recv_from(&mut buf) {
+                    Ok((n, from)) => {
+                        let q = buf[..n].to_vec();
+                        if question_name(&q).is_some_and(|name| ours_on_hotspot(&name)) {
+                            if let Some(reply) = answer(&q, us) {
+                                let _ = sock.send_to(&reply, from);
+                            }
+                        } else if let Ok(back) = sock.try_clone() {
+                            // Everything else to the router this laptop gets
+                            // its own internet from, on its own thread so a slow
+                            // answer holds nobody up. Not to Windows' proxy:
+                            // measured, it ignores questions relayed from the
+                            // laptop itself. No router (the bush): "no such
+                            // server" at once, so phones do not sit waiting.
+                            #[cfg(windows)]
+                            let upstream = crate::net::route_gateway()
+                                .filter(|g| !g.is_link_local() && g.octets()[..3] != us.octets()[..3]);
+                            #[cfg(not(windows))]
+                            let upstream = crate::net::live_default_gateway()
+                                .filter(|g| !g.is_link_local() && g.octets()[..3] != us.octets()[..3]);
+                            std::thread::spawn(move || {
+                                let relayed = upstream.and_then(|g| {
+                                    let up = UdpSocket::bind("0.0.0.0:0").ok()?;
+                                    up.set_read_timeout(Some(Duration::from_secs(4))).ok()?;
+                                    up.send_to(&q, (g, SERVER_PORT)).ok()?;
+                                    let mut r = [0u8; 1500];
+                                    let m = up.recv(&mut r).ok()?;
+                                    Some(r[..m].to_vec())
+                                });
+                                let reply = relayed.or_else(|| servfail(&q));
+                                if let Some(r) = reply {
+                                    let _ = back.send_to(&r, from);
+                                }
+                            });
+                        }
+                    }
+                    Err(_) => {
+                        // Every few seconds of quiet, make sure the address is
+                        // still ours: a hotspot switched off and on again gets
+                        // it back, and this socket has to be made again.
+                        idle_checks += 1;
+                        if idle_checks % 6 == 0 && address() != Some(us) {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
 pub fn start_mdns(
     us: Ipv4Addr,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
-    // Shared, not exclusive: a browser is very likely already here.
-    let socket = shared_udp(MDNS_PORT)?;
-    // Joining on OUR interface rather than letting the system choose, so the
-    // answer goes out of the cable and not out of the wifi.
+    // Shared, not exclusive: a browser is very likely already here. Replies
+    // to the group leave by `us`'s interface: see shared_udp.
+    let socket = shared_udp(MDNS_PORT, us)?;
+    // Listening on OUR interface. This chooses where we hear the group, NOT
+    // where answers go; the comment here used to claim both.
     socket.join_multicast_v4(&MDNS_GROUP, &us)?;
     // Loopback ON. It costs nothing in normal use, where the querier is
     // another machine, and it is the difference between being testable and
@@ -781,9 +994,25 @@ pub fn start_mdns(
     socket.set_read_timeout(Some(Duration::from_millis(500)))?;
 
     let to_group = SocketAddr::from((MDNS_GROUP, MDNS_PORT));
+    // Say we are here straight away, twice a second apart as RFC 6762 asks.
+    // The cache-flush bit in each record replaces whatever address a device
+    // remembered from an earlier run, so nobody has to wait two minutes for
+    // an old answer to run out.
+    fn announce(socket: &UdpSocket, us: Ipv4Addr, to: SocketAddr, ttl: u32) {
+        for name in LOCAL_NAMES {
+            let _ = socket.send_to(&mdns_record(name, us, ttl), to);
+        }
+    }
+    announce(&socket, us, to_group, 120);
     Ok(std::thread::spawn(move || {
         let mut buf = [0u8; 1500];
+        let started = std::time::Instant::now();
+        let mut announced_again = false;
         while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+            if !announced_again && started.elapsed() >= Duration::from_secs(1) {
+                announce(&socket, us, to_group, 120);
+                announced_again = true;
+            }
             let (n, from) = match socket.recv_from(&mut buf) {
                 Ok(v) => v,
                 Err(e)
@@ -794,6 +1023,14 @@ pub fn start_mdns(
                 }
                 Err(_) => continue,
             };
+            let asker = match from.ip() {
+                std::net::IpAddr::V4(v4) => v4,
+                _ => continue,
+            };
+            // Only our own network, or this machine asking itself.
+            if !(same_link(us, asker) || asker == us || asker.is_loopback()) {
+                continue;
+            }
             if let Some(reply) = mdns_answer(&buf[..n], us) {
                 // Both ways. The group is what RFC 6762 asks for; the direct
                 // reply is what gets through when a resolver has asked for one
@@ -802,6 +1039,10 @@ pub fn start_mdns(
                 let _ = socket.send_to(&reply, from);
             }
         }
+        // Goodbye: ttl 0 tells every device on the link to forget the name
+        // now. Without it they held our address for two minutes after Stop,
+        // and a name typed in that window reached a lesson that had ended.
+        announce(&socket, us, to_group, 0);
     }))
 }
 
@@ -990,5 +1231,67 @@ mod tests {
         assert_eq!(got, None);
         assert!(waited < Duration::from_secs(2), "waited {waited:?}, which would freeze the screen");
         drop(server);
+    }
+}
+
+#[cfg(test)]
+mod hotspot_name_tests {
+    use super::*;
+
+    fn q(name: &str) -> Vec<u8> {
+        let mut v = vec![0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0];
+        for l in name.split('.') {
+            v.push(l.len() as u8);
+            v.extend_from_slice(l.as_bytes());
+        }
+        v.extend_from_slice(&[0, 0, 1, 0, 1]);
+        v
+    }
+
+    /// The phone's "is there internet?" question and the hub's own names are
+    /// answered with the hub; everything else is passed on, so a shared
+    /// connection keeps working.
+    #[test]
+    fn probes_and_our_names_are_ours_and_nothing_else_is() {
+        for n in ["connectivitycheck.gstatic.com", "captive.apple.com", "www.msftconnecttest.com", "gorilla.local", "GORILLA", "classroom"] {
+            assert!(ours_on_hotspot(&question_name(&q(n)).unwrap()), "{n}");
+        }
+        for n in ["www.google.com", "example.org", "gorilla.com"] {
+            assert!(!ours_on_hotspot(&question_name(&q(n)).unwrap()), "{n}");
+        }
+        let reply = answer(&q("connectivitycheck.gstatic.com"), Ipv4Addr::new(192, 168, 137, 1)).unwrap();
+        assert_eq!(&reply[reply.len() - 4..], &[192, 168, 137, 1]);
+        let no = servfail(&q("www.google.com")).unwrap();
+        assert_eq!(no[3] & 0x0f, 2, "SERVFAIL");
+        assert_eq!(&no[0..2], &[0x12, 0x34], "the asker's id comes back");
+    }
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+
+    /// A laptop on a cable and on wifi must not answer its wifi neighbours
+    /// with the cable address, and a hotspot answers only its own /24.
+    #[test]
+    fn only_our_own_network_is_answered() {
+        let cable = Ipv4Addr::new(169, 254, 87, 1);
+        assert!(same_link(cable, Ipv4Addr::new(169, 254, 3, 9)));
+        assert!(!same_link(cable, Ipv4Addr::new(192, 168, 1, 20)));
+        let hotspot = Ipv4Addr::new(10, 42, 0, 1);
+        assert!(same_link(hotspot, Ipv4Addr::new(10, 42, 0, 57)));
+        assert!(!same_link(hotspot, Ipv4Addr::new(10, 42, 1, 57)));
+        assert!(!same_link(hotspot, Ipv4Addr::new(169, 254, 3, 9)));
+    }
+
+    /// The goodbye is the same record with a ttl of zero.
+    #[test]
+    fn a_goodbye_says_forget_this_now() {
+        let r = mdns_record("gorilla.local", Ipv4Addr::new(10, 42, 0, 1), 0);
+        let n = r.len();
+        assert_eq!(&r[n - 4..], &[10, 42, 0, 1]);
+        assert_eq!(&r[n - 10..n - 6], &0u32.to_be_bytes(), "ttl must be zero");
+        let r = mdns_record("gorilla.local", Ipv4Addr::new(10, 42, 0, 1), 120);
+        assert_eq!(&r[n - 10..n - 6], &120u32.to_be_bytes());
     }
 }

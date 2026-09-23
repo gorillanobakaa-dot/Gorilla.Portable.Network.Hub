@@ -30,6 +30,8 @@ mod tui;
 mod fetch;
 mod serve;
 mod sums;
+mod services;
+mod grid;
 
 const USAGE: &str = "\
 Gorilla Portable Network Hub
@@ -43,6 +45,9 @@ Gorilla Portable Network Hub
   hub sums  <file>          fingerprint each piece, using every core
   hub doctor                say what this computer can and cannot do
   hub fix-firewall          let this computer be reached from the network
+  hub services              find parts of Windows the hub needs that are switched off
+  hub services --fix        switch them back on (Windows asks permission once)
+  hub services --put-back   put them back exactly as they were
 
   hub <command> --help      detail for one command
 
@@ -71,7 +76,41 @@ fn plain_path(p: &std::path::Path) -> String {
     }
 }
 
+/// "   (built 23 Sep 2026 11:46)", or nothing when the build could not say.
+/// See build.rs for why the version number alone was not enough.
+pub fn built() -> String {
+    match option_env!("HUB_BUILD") {
+        Some(s) if !s.is_empty() => format!("   (built {s})"),
+        _ => String::new(),
+    }
+}
+
 fn main() {
+    // Write down any crash, where a person can find it.
+    //
+    // With panic = "abort" a crash ends the program at once, and the screen's
+    // own window takes the message with it. On 2026-09-23 the hub vanished
+    // twelve seconds after a phone joined its network, and nothing anywhere
+    // said why: the laptop's tweaks had switched Windows Error Reporting off
+    // too. So the panic message and where it happened go to a file first,
+    // then the usual message is printed.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let base = std::env::var_os("LOCALAPPDATA")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        let dir = base.join("PortableNetworkHub");
+        let _ = std::fs::create_dir_all(&dir);
+        let when = crate::net::timestamp();
+        let line = format!("{when}  hub {}{} crashed: {info}
+", env!("CARGO_PKG_VERSION"), built());
+        use std::io::Write as _;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("crash.log")) {
+            let _ = f.write_all(line.as_bytes());
+        }
+        default_hook(info);
+    }));
     let args: Vec<String> = std::env::args().collect();
     // No arguments opens the screen rather than printing usage and stopping.
     //
@@ -94,12 +133,13 @@ fn main() {
         "cable" | "cable-send" => cable_send(rest),
         "cable-get" | "cable-receive" => cable_get(rest),
         "fix-firewall" => tune::fix_firewall(),
+        "services" | "fix-services" => services::run(rest),
         "get" | "fetch" => fetch::run(rest),
         "sums" => sums::run(rest),
         "screen" | "tui" => tui::run(),
         "doctor" => doctor(),
         "-h" | "--help" | "help" => println!("{USAGE}"),
-        "-V" | "--version" | "version" => println!("hub {}", env!("CARGO_PKG_VERSION")),
+        "-V" | "--version" | "version" => println!("hub {}{}", env!("CARGO_PKG_VERSION"), built()),
         other => {
             eprintln!("Not a command: {other}\n");
             eprintln!("{USAGE}");
@@ -146,11 +186,23 @@ fn wifi_lines() -> Vec<String> {
             ],
         };
     }
+    // Windows, since 0.9.9: the hub switches Mobile Hotspot on itself, so
+    // the old advice to go to Settings first had become untrue. Said with
+    // what the card itself reports it can do, where it can be read.
+    if cfg!(windows) {
+        let mut v = vec![
+            "  wifi adapter   the hub switches Windows' Mobile Hotspot on itself".to_string(),
+            "                 when you start handing out (2.4 GHz unless you choose 5)".to_string(),
+        ];
+        if let Some(card) = net::wifi_card_summary() {
+            v.push(format!("  wifi card      {card}"));
+        }
+        return v;
+    }
     vec![
         "  wifi adapter   this program cannot turn one into a network by itself here".to_string(),
-        "                 to hand out over wifi, switch the hotspot on first:".to_string(),
-        "                 Settings, Network and internet, Mobile hotspot".to_string(),
-        "                 then come back and start handing out".to_string(),
+        "                 to hand out over wifi, switch the hotspot on first".to_string(),
+        "                 in this system's network settings, then come back".to_string(),
     ]
 }
 
@@ -178,6 +230,12 @@ fn doctor() {
         // every hotspot and most home routers and wrong for a network with a
         // mask wider than a /24. Said out loud rather than presented as fact.
         Some(g) if cfg!(target_os = "linux") => println!("  gateway        {g}"),
+        // Windows reads the real one from the route table since 0.9.9: the
+        // guess said .1 while the phone that was the router sat at .74.
+        #[cfg(windows)]
+        Some(_) if net::route_gateway().is_some() => {
+            println!("  gateway        {}", net::route_gateway().unwrap_or(std::net::Ipv4Addr::UNSPECIFIED))
+        }
         Some(g) => println!("  gateway        {g} (a guess, not read from the system)"),
         None => println!("  gateway        none, this computer has no route off itself"),
     }
@@ -217,14 +275,23 @@ fn doctor() {
     // silently: a firewall drops the packets and everything still looks fine.
     let w = tune::wire();
     if w.measured {
-        println!("  cable          {} at {} Mbps, {}", w.adapter, w.megabits, w.cable);
+        // Wifi is not a cable: this line called a 143 Mbps wifi link "CAT 5
+        // or wifi". Same test as the fix screen's.
+        let name = w.adapter.to_ascii_lowercase();
+        if ["wi-fi", "wifi", "wlan", "wireless"].iter().any(|k| name.contains(k)) {
+            println!("  connection     wifi ({}) at {} Mbps; no cable plugged in", w.adapter, w.megabits);
+        } else {
+            println!("  cable          {} at {} Mbps, {}", w.adapter, w.megabits, w.cable);
+        }
     } else {
         println!("  cable          speed not readable, so 1 Gbps is assumed");
     }
     println!("  sending pieces of {} KB at a time", w.chunk / 1024);
     match tune::reachable() {
         Some(true) => println!("  reachable      yes, the firewall lets others in"),
-        Some(false) => println!("  reachable      NO. Run: hub fix-firewall"),
+        // Only that the hub's own rule is missing; Windows may still let the
+        // program in by name, as it did on the test laptop.
+        Some(false) => println!("  reachable      the hub's firewall rule is not there yet: run  hub fix-firewall"),
         None => println!("  reachable      cannot tell on this system; try it and see"),
     }
     let addrs_now = net::local_addresses();
@@ -690,12 +757,14 @@ mod doctor_tests {
             !all.contains("none found"),
             "doctor claims a search it never made:\n{all}"
         );
-        // And it still has to say the thing that is true and useful, which is
-        // where the hotspot switch lives. hotspot_up() sends people to the same
-        // place, and two screens disagreeing about that is its own bug.
-        assert!(
-            all.contains("Mobile hotspot"),
-            "no route to handing out over wifi is offered:\n{all}"
-        );
+        // And it still has to say the thing that is true and useful. On
+        // Windows since 0.9.9 that is that the hub switches the hotspot on
+        // itself; sending people to Settings first had become untrue.
+        if cfg!(windows) {
+            assert!(all.contains("switches Windows' Mobile Hotspot on itself"), "{all}");
+            assert!(!all.contains("Settings"), "still sends people to Settings:\n{all}");
+        } else {
+            assert!(all.contains("switch the hotspot on first"), "{all}");
+        }
     }
 }
