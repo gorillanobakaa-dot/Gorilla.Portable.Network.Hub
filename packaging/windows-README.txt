@@ -1,4 +1,4 @@
-Gorilla Portable Network Hub 0.9.10  -  Windows
+Gorilla Portable Network Hub 0.10.0  -  Windows
 
 WHAT THIS IS
 This laptop becomes the network. Phones, tablets and laptops in the room join
@@ -18,6 +18,14 @@ START HERE
    class scans code 1 with a phone camera to join the wifi, and the class
    page opens by itself.
 6. On that screen, press h. It explains every key, and what the class does.
+   Press m to read and answer messages from the children.
+
+PRIVATE HELP FOR CHILDREN (off unless you switch it on)
+On the start screen, "Private help goes to" chooses the teacher or a trusted
+adult who signs in on their own phone at the address the screen shows, with
+"/adult" at the end. Its password (8 characters or more) locks the record of
+what was said. Read the step-by-step guide, part 6, before using it with
+children, and agree first who the trusted adult is and what they will do.
 
 IF WINDOWS SAYS "WINDOWS PROTECTED YOUR PC"
 That is Windows being careful with a program downloaded from the internet.

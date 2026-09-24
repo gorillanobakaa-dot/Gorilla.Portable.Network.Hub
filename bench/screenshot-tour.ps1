@@ -1,4 +1,4 @@
-# Version: 1.2.0 · updated 26-09-24-12-30
+# Version: 1.3.0 · updated 26-09-24-16-30
 #
 # A tour of the hub's screens on real Windows, photographed for the release
 # pages: drives the real program with keypresses and photographs its window.
@@ -21,12 +21,15 @@
 # no focus and cannot reach any other window, and Keys refuses to type at all
 # unless the hub this tour started is still running.
 #
-# Steps: first screen; the fix screen; the start screen on the band row and on
+# Steps: first screen; the fix screen; the start screen on the band row, on
+# the private-help rows (1.3.0: to a trusted adult, a demo password) and on
 # Start; the file list (columns, then the big-folder question); handing out
 # with the codes and the measured channel; the h help page; work sent in from
 # this laptop through the page (curl, as a phone would); the phone pages
 # (screenshot-phone-page.py: name, page, downloads help, choosing, sending,
-# arrived); the waiting screen; accept all. Then Stop and quit.
+# arrived); messages and private help as a child and the trusted adult
+# (chat-flow-test.py, its 13 checks); the Messages screen and a conversation
+# answered from the laptop; the waiting screen; accept all. Then Stop and quit.
 #
 # Pictures are named windows-<version>-<step>.png and phone-<version>-<step>.png
 # with the version read from the hub itself. 1.1.0 had 0.9.9 written in.
@@ -173,7 +176,13 @@ try {
     Keys 'leafy7green\r'
     Keys '\d' 800                                            # the Wifi band row
     Shot "windows-$Ver-start-screen-band"
-    Keys '\d\d\d' 800                                        # onto Start, which says what happens next
+    # Private help (0.10.0): to a trusted adult, with a demo password.
+    Keys '\d' 500                                            # Private help goes to
+    Keys '\r' 400; Keys '\r' 800                             # nobody -> teacher -> trusted adult
+    Shot "windows-$Ver-start-screen-private"
+    Keys '\d\r' 500                                          # its password (drawn as stars)
+    Keys 'nurse-demo-pass\r' 800
+    Keys '\d\d\d\d' 800                                      # onto Start, which says what happens next
     Shot "windows-$Ver-start-screen-start"
     Keys '\r' 2500                                           # Start handing out -> what gets handed out
     Keys 'n' 800                                             # untick all, to show choosing
@@ -200,8 +209,16 @@ try {
     curl.exe -s -o NUL -c $jar -b $jar -F "token=$token" -F "work=@$tmp\Leaf drawing.jpg" -F "work=@$tmp\Photosynthesis answers.docx" -F "work=@$tmp\Label the leaf.pdf" http://127.0.0.1/handin
     "  sent three pieces of work through the page"
     python (Join-Path $PSScriptRoot 'screenshot-phone-page.py') --url http://127.0.0.1/ --prefix (Join-Path $OutDir "phone-$Ver")
+    # Messages and private help, as a child and the trusted adult (0.10.0).
+    python (Join-Path $PSScriptRoot 'chat-flow-test.py') --url http://127.0.0.1 --password nurse-demo-pass --out $OutDir --prefix "phone-$Ver"
     Start-Sleep -Seconds 3
     Shot "windows-$Ver-work-arrived"
+    Keys 'm' 1200                                            # Messages: the child who wrote
+    Shot "windows-$Ver-messages"
+    Keys '\r' 1000
+    Keys 'Try the READ button, then tell me if it opens.\r' 1200
+    Shot "windows-$Ver-conversation"
+    Keys '\e' 800; Keys '\e' 1000                            # back to Messages, back to handing out
     Keys 'w' 1200
     Shot "windows-$Ver-waiting-accept-all"
     Keys 'e' 1500

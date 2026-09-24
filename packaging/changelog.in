@@ -1,5 +1,34 @@
 gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
 
+  * TWO-WAY MESSAGES. Each child has a conversation with the teacher: the
+    child writes on the class page, the teacher answers from the Messages
+    screen (m), and the answer appears on the phone within seconds (4 s
+    polling with a version number: a request that finishes at once, never a
+    held connection, which would eat the fixed worker pool). Seen marks both
+    ways. The teacher can write first. Ordinary messages go to messages.txt.
+  * PRIVATE HELP FOR CHILDREN, off until switched on. Chosen at the start of
+    the lesson: to the teacher on the laptop, or to a trusted adult who signs
+    in at /adult on their own phone, with an optional second adult. The child
+    gets a HELP page (address and title say nothing about help) with a
+    one-tap I NEED TO TALK, a private written channel, HIDE, and nothing that
+    rings or pops up; the adult can ask quietly to talk (YES/LATER/NO).
+  * THE PRIVATE RECORD IS LOCKED. ChaCha20 + HMAC-SHA256, a key per lesson,
+    locked per adult with PBKDF2-HMAC-SHA256 at 200,000 rounds (322 ms a
+    guess on the development laptop). Checked against RFC 8439, RFC 4231 and
+    the common PBKDF2 values, confirmed with Python. It names which adult
+    wrote each line. hub private-record reads it; hub serve --help-password.
+  * THE CHILDREN'S PAGES IN SIX LANGUAGES: English, French, Swahili,
+    Portuguese, Dari, Pashto (right to left). AI-drafted, NOT yet checked by
+    native speakers: they must be before this reaches a child.
+  * bench/chat-flow-test.py drives a child's phone and the adult's phone end
+    to end (13 checks). It found answers going to a conversation that did not
+    exist (a key encoded twice); fixed before release.
+  * Windows only, as before. Linux compiles but has not been run on hardware.
+
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+
+gorilla-portable-network-hub (0.9.10) unstable; urgency=medium
+
   * THE PAGES AND SCREENS EXPLAIN THEMSELVES. The class page has numbered
     sections with a line each on what the buttons do, a hand-in that shows
     its progress (XHR upload, "SENDING... N% - KEEP THIS PAGE OPEN"), a result

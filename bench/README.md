@@ -1,4 +1,4 @@
-<!-- Version: 1.2.0 · updated 26-09-24-14-10 -->
+<!-- Version: 1.3.0 · updated 26-09-24-17-00 -->
 # Burst transfer notes: what LocalSend does, what it cannot do, and what to build instead
 
 Working notes from a brainstorming session on 2026-08-22. Source read,
@@ -88,6 +88,7 @@ Linux) and [RESULTS-WINDOWS.md](RESULTS-WINDOWS.md) (a 2022 laptop, Windows).
 | `phone-speedtest.html` | any phone | served by the hub; pulls a big file into memory over 1 to 8 connections for a set time and counts every byte that arrived. Nothing is saved on the phone |
 | `download-meter.py` | any | the same pull from Python; run on the hub laptop against 127.0.0.1 it measures how fast the software can go without a radio |
 | `console-read.cs` | Windows | copies a console window's text by process number, to read the hub's own log lines without redirecting it |
+| `chat-flow-test.py` | any | a child's phone and the trusted adult's phone, end to end: messages, private help, the quiet request, HIDE (13 checks) |
 | `hotspot-*.ps1` | Windows | the hotspot's guard, close, channel and restart tests, and a read-only monitor |
 | `screenshot-tour.ps1`, `console-keys.cs`, `screenshot-phone-page.py` | Windows | the release pictures, taken from the real program |
 

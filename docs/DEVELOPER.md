@@ -1,4 +1,4 @@
-<!-- Version: 1.5.0 · updated 26-09-24-14-10 -->
+<!-- Version: 1.6.0 · updated 26-09-24-17-00 -->
 # Gorilla Portable Network Hub: the developer track
 
 Companion to `WHY-THIS-EXISTS.md`, which is the layman track and is not a
@@ -1647,3 +1647,27 @@ and records that it did in a note file; `stop` re-enables it only when the
 note exists. The watchman runs `stop` too, so a crash or the window's X still
 puts the setting back. Anything else that changes Windows settings should
 follow the same pattern: record, change, restore only what was recorded.
+
+## 16. Messages, private help, the locked record, languages (0.10.0)
+
+The per-change notes are in [0.10.0-DEVELOPER-NOTES.md](0.10.0-DEVELOPER-NOTES.md).
+The map:
+
+| module | holds |
+|---|---|
+| `chat.rs` | every conversation, ordinary and private, keyed by device; versions for polling; the receiver (off, teacher, trusted adult) |
+| `page.rs` | the child's conversation, the HELP door and page, the language store, every child-facing sentence through `t()` |
+| `adult.rs` | the trusted adult's sign-in, sessions, lock-out, and pages |
+| `record.rs` | the locked record: one file per lesson, a slot per adult, entries naming who wrote them; `hub private-record` |
+| `crypto.rs` | ChaCha20, HMAC-SHA256, PBKDF2, base64; checked against RFC test values |
+| `i18n.rs` | the six languages, right to left for Dari and Pashto; tests that every sentence is translated |
+
+Three rules to keep when changing any of it:
+
+1. **Nothing private in the clear, anywhere**: not on the teacher's main
+   screen, not in `messages.txt`, not in a log line. Private messages go to
+   `record::keep` and nowhere else.
+2. **Nothing that holds a connection open per phone.** The worker pool is
+   fixed; polling with a version number is the pattern.
+3. **Every child-facing sentence goes through `t(l, "...")` on one line**, or
+   `i18n::tests::every_sentence_on_the_pages_is_in_the_table` cannot see it.

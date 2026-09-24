@@ -320,6 +320,36 @@ Work waiting, with what each key does to it:
 <a href="screenshots/gallery/phone-0.9.10-sending.png"><img src="screenshots/gallery/phone-0.9.10-sending.png" width="240" alt="SENDING... 30% - KEEP THIS PAGE OPEN"></a>
 <a href="screenshots/gallery/phone-0.9.10-arrived.png"><img src="screenshots/gallery/phone-0.9.10-arrived.png" width="240" alt="Your work arrived"></a>
 
+## Windows, 24 September 2026 (0.10.0): talking, private help, languages
+
+From `bench/screenshot-tour.ps1` 1.3.0, which also runs `bench/chat-flow-test.py`
+as a child's phone and the trusted adult's phone (Edge at phone size, from
+the same laptop). Demo names and a demo password throughout.
+
+The start screen, choosing who receives private help:
+
+[![Private help goes to: a trusted adult, on their own phone](screenshots/gallery/windows-0.10.0-start-screen-private.png)](screenshots/gallery/windows-0.10.0-start-screen-private.png)
+
+Messages on the laptop, and a conversation answered from it:
+
+[![Messages: Amina, 1 new](screenshots/gallery/windows-0.10.0-messages.png)](screenshots/gallery/windows-0.10.0-messages.png)
+[![Talking with Amina](screenshots/gallery/windows-0.10.0-conversation.png)](screenshots/gallery/windows-0.10.0-conversation.png)
+
+On the phones:
+
+<a href="screenshots/gallery/phone-0.10.0-talk-to-teacher.png"><img src="screenshots/gallery/phone-0.10.0-talk-to-teacher.png" width="220" alt="3. Talk to your teacher"></a>
+<a href="screenshots/gallery/phone-0.10.0-help-page.png"><img src="screenshots/gallery/phone-0.10.0-help-page.png" width="220" alt="The private help page"></a>
+<a href="screenshots/gallery/phone-0.10.0-child-sees-answer.png"><img src="screenshots/gallery/phone-0.10.0-child-sees-answer.png" width="220" alt="The adult's answer and the quiet request, YES LATER NO"></a>
+
+<a href="screenshots/gallery/phone-0.10.0-adult-list.png"><img src="screenshots/gallery/phone-0.10.0-adult-list.png" width="220" alt="The trusted adult's list: ASKED TO TALK"></a>
+<a href="screenshots/gallery/phone-0.10.0-adult-conversation.png"><img src="screenshots/gallery/phone-0.10.0-adult-conversation.png" width="220" alt="The trusted adult's conversation"></a>
+
+In other languages (drafts, not yet checked by native speakers):
+
+<a href="screenshots/gallery/phone-0.10.0-swahili-name.png"><img src="screenshots/gallery/phone-0.10.0-swahili-name.png" width="220" alt="The name page in Swahili"></a>
+<a href="screenshots/gallery/phone-0.10.0-dari-page.png"><img src="screenshots/gallery/phone-0.10.0-dari-page.png" width="220" alt="The class page in Dari, right to left"></a>
+<a href="screenshots/gallery/phone-0.10.0-french-help.png"><img src="screenshots/gallery/phone-0.10.0-french-help.png" width="220" alt="The private help page in French"></a>
+
 ## Still missing
 
 - **The paused page**, as it appears on the child's phone.

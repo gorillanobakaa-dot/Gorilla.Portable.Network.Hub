@@ -1,4 +1,4 @@
-<!-- Version: 1.7.0 · updated 26-09-24-14-00 -->
+<!-- Version: 1.8.0 · updated 26-09-24-17-00 -->
 # Gorilla Portable Network Hub
 
 <!-- WHO-THIS-IS-FOR: managed block, do not edit by hand -->
@@ -27,6 +27,32 @@ Written for somebody who has never opened a terminal, with a picture of every
 screen.
 
 ---
+
+## New in 0.10.0: talking both ways, and private help for children
+
+<a href="docs/screenshots/gallery/phone-0.10.0-help-page.png"><img src="docs/screenshots/gallery/phone-0.10.0-help-page.png" width="240" align="right" alt="The private help page on a phone: HIDE THIS, I NEED TO TALK TO SOMEONE, and a box to write privately"></a>
+
+- **Each child can talk to the teacher**, and the teacher answers each one
+  from the laptop (**m**). Answers appear on the phone by themselves; seen
+  marks go both ways; the teacher can write first.
+- **Private help.** Some children cannot say what is wrong in front of the
+  class, their family or visiting officials. A HELP page lets them reach one
+  **trusted adult** (the teacher, or somebody else who signs in on their own
+  phone) with one tap, **I NEED TO TALK TO SOMEONE**, or in writing. Nothing
+  rings or pops up; **HIDE** leaves no trace on the phone; the adult can ask
+  quietly to talk. Off until switched on at the start of the lesson.
+- **Every private word is kept, locked** with the adults' passwords (standard
+  ciphers, checked against their published test values).
+- **The children's pages in six languages**: English, French, Swahili,
+  Portuguese, Dari and Pashto (right to left). *First drafts, not yet checked
+  by native speakers.*
+
+Not yet tried on a real phone over the air, and not yet reviewed by
+child-protection professionals: both before it reaches a child.
+In plain language: [docs/0.10.0-WHAT-CHANGED.md](docs/0.10.0-WHAT-CHANGED.md).
+For developers: [docs/0.10.0-DEVELOPER-NOTES.md](docs/0.10.0-DEVELOPER-NOTES.md).
+
+<br clear="right">
 
 ## New in 0.9.10: it explains itself
 
@@ -226,7 +252,7 @@ machine.
 |---|---|
 | [bench/RESULTS.md](bench/RESULTS.md) | **the numbers, on one page**, for the 2012 laptop on Linux. What it achieves, against what the hardware can physically do, and what is NOT proven |
 | [bench/RESULTS-WINDOWS.md](bench/RESULTS-WINDOWS.md) | the same for a 2022 laptop on Windows, with both laptops' specifications side by side |
-| [docs/HOW-TO.md](docs/HOW-TO.md) | **start here if you want to use it.** The step-by-step guide for 0.9.10, with a picture of every screen and every key on one page, written for somebody who has never opened a terminal |
+| [docs/HOW-TO.md](docs/HOW-TO.md) | **start here if you want to use it.** The step-by-step guide for 0.10.0, with a picture of every screen and every key on one page, written for somebody who has never opened a terminal |
 | [docs/WHY-THIS-EXISTS.md](docs/WHY-THIS-EXISTS.md) | the layman track. What the problem is and what was proved, in plain language |
 | [docs/DEVELOPER.md](docs/DEVELOPER.md) | the developer track. Architecture, wire format, every measurement with its method |
 | [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) | every screen, photographed on real hardware |
@@ -241,6 +267,8 @@ machine.
 | [docs/0.9.9-DEVELOPER-NOTES.md](docs/0.9.9-DEVELOPER-NOTES.md) | a day of field testing with real phones: each fault, how it was measured, and where the fix is |
 | [docs/0.9.10-WHAT-CHANGED.md](docs/0.9.10-WHAT-CHANGED.md) | the pages and screens explain themselves; the network stays up in a quiet room; how fast a newer laptop is, in plain language |
 | [docs/0.9.10-DEVELOPER-NOTES.md](docs/0.9.10-DEVELOPER-NOTES.md) | each change and how it was checked, the Windows bench tools, and what is not yet seen working |
+| [docs/0.10.0-WHAT-CHANGED.md](docs/0.10.0-WHAT-CHANGED.md) | talking both ways, private help for children, six languages, in plain language |
+| [docs/0.10.0-DEVELOPER-NOTES.md](docs/0.10.0-DEVELOPER-NOTES.md) | the message model and its polling, the adult's page, the locked record's format and ciphers, the translation table and its tests |
 | [docs/0.9.8-WHAT-CHANGED.md](docs/0.9.8-WHAT-CHANGED.md) | one fewer thing to type, because somebody actually checked |
 | [docs/0.9.8-DEVELOPER-NOTES.md](docs/0.9.8-DEVELOPER-NOTES.md) | settling a judgement call with a controlled experiment, and why over-reporting is unfalsifiable |
 | [docs/0.9.7-WHAT-CHANGED.md](docs/0.9.7-WHAT-CHANGED.md) | the laptop is not broken, somebody switched part of it off: in plain language |
@@ -305,6 +333,8 @@ it.
 | **0.9.3, the first screen says which version it is** | |
 | 0.9.3 built for Linux, static, with musl-gcc rather than zig | 992,592 |
 | the same 0.9.3 built for Windows | not measured yet |
+| **0.10.0, talking both ways, private help, six languages** | |
+| **0.10.0 built for Windows** | **956,416** |
 | **0.9.10, pages and screens that explain themselves** | |
 | **0.9.10 built for Windows, as published** | **830,464** |
 | **0.9.9, Windows makes its own wifi network; codes that scan** | |
@@ -333,6 +363,10 @@ quietly, because a table of costs that is not checked is worth less than no
 table: the numbers now match what the release page actually serves. 0.9.1 adds
 nothing to either binary, which is what a release touching only comments and
 test code should do, and is why the figures repeat.
+
+0.10.0 costs 125,952 bytes on Windows over 0.9.10 (830,464 to 956,416), for the messages,
+the private help pages, the adult's pages, the locked record and its ciphers, and the
+translation table in six languages. How that splits between them was not measured.
 
 0.9.10 costs 11,264 bytes on Windows over 0.9.9 (819,200 to 830,464), for the help page, the
 explanations on each screen, the phone page's instructions and its upload script, and the
@@ -435,12 +469,12 @@ assembled to spec and structurally verified on a Debian machine; it has not yet
 been installed on an Arch one, and that is exactly the kind of thing worth
 telling us about.
 
-**Windows 10 and 11:** unzip `hub-0.9.10-windows-x86_64.zip` and double-click
+**Windows 10 and 11:** unzip `hub-0.10.0-windows-x86_64.zip` and double-click
 `hub.exe`. From 0.9.9 the hub switches Windows' hotspot on itself; nothing to
 set up in Settings. If the first screen says the computer is not ready, choose
 *Fix problems with this computer* and say Yes to Windows' permission prompt.
 
-The newest Linux packages are 0.9.5; the Linux build of 0.9.10 is being tested.
+The newest Linux packages are 0.9.5; the Linux build of 0.10.0 is being tested.
 
 **From this repository:**
 
