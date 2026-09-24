@@ -20,7 +20,7 @@ gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
   * hub serve on Windows prints 192.168.137.1 while the hotspot is starting,
     not the laptop's other networks' addresses.
   * hub --help no longer says Windows needs an administrator for the wifi.
-  * READ-THIS-FIRST in the Windows zip rewritten as a six-step start.
+  * README.txt in the Windows zip rewritten as a six-step start.
   * bench: transfer-watch-windows.py, phone-speedtest.html, download-meter.py,
     console-read.cs; results in bench/RESULTS-WINDOWS.md (ThinkPad L15, Intel
     AX201: 191 Mbit/s best 30 s to a Wi-Fi 6 phone, 66.6% of the link).
