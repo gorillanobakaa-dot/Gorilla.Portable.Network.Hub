@@ -190,6 +190,9 @@ the whole class stops receiving with nothing in any log.
 
 ## 4. Architecture as built
 
+(This describes the four programs the project began as. Since 0.8 they are one
+binary, `src/hub`; section 14.1 has the current module map.)
+
 Four crates, no dependencies, std only. Sizes are release builds, stripped,
 `opt-level="z"`, LTO, one codegen unit, `panic=abort`.
 
@@ -1508,3 +1511,79 @@ Stated here because section 6 exists for exactly this reason.
 - `detect_linux()` and the `Refused::NeedsAdministrator` path have never run.
 - `tune::reachable()` returns `None` on everything except Windows. `doctor`
   reports that honestly as "cannot tell on this system".
+
+## 14. Windows as a full host (0.9.9)
+
+Until 0.9.8 Windows could serve over a hotspot but not make one. 0.9.9 makes
+it, keeps it up, and fixes what stood between a real phone and the page. The
+field day behind it, and every measurement, is in
+[0.9.9-DEVELOPER-NOTES.md](0.9.9-DEVELOPER-NOTES.md); this section is the map.
+
+### 14.1 The layout now
+
+Section 4 describes the four separate programs this began as. Since 0.8 they
+are one binary, `src/hub`, still std only, zero crates:
+
+| module | what |
+|---|---|
+| `main.rs` | commands, `doctor`, the panic hook (`crash.log`), `built()` |
+| `tui.rs` | the screen: every page, key handling, the not-ready offer |
+| `grid.rs` | lists in columns that page with the cursor (tested: the cursor can never be off screen) |
+| `term.rs` | raw terminal, key decoding (arrows, Page Up/Down, Home, End), `truncate_middle` |
+| `serve.rs` | HTTP server, hand-in, `halt()` / managed accept loop |
+| `page.rs` | the class page, the removable file list, the received folder |
+| `net.rs` | addresses, the hotspot on both systems, the Windows guard, watchman and `network.log` |
+| `dns.rs` | reverse lookups, the cable resolver, mDNS, the Windows hotspot's names |
+| `dhcp.rs` | the cable's address handout and its guard, re-checked while running |
+| `services.rs` | Windows services the hub needs: check, fix with one UAC prompt, put back |
+| `qr.rs` | QR encoder (format field fixed in 0.9.9), wifi-join payload |
+| `cable.rs`, `fetch.rs`, `sums.rs`, `zip.rs`, `sha256.rs`, `tune.rs` | as in sections 12 and 13 |
+
+### 14.2 The Windows hotspot
+
+- WinRT `NetworkOperatorTetheringManager`, reached through a PowerShell script
+  (`WIN_HOTSPOT` in `net.rs`) run with `-EncodedCommand`. Name, password and
+  band go in environment variables. No admin; starts with no internet from any
+  connection profile Windows will share from.
+- **2.4 GHz by default.** Band Auto with the laptop joined to nothing gave
+  5 GHz channel 149, which phones did not see. The screen shows the channel
+  measured with `WlanQueryInterface` on the adapter holding 192.168.137.1.
+- `hotspot_address_of` counts only when the route to 192.168.137.1 is that
+  address itself; after a start, wait for it to hold 1.5 s.
+- **Guard:** every 2 to 3 s; on loss, radio on and start again; waits only after
+  an accepted start. `HOTSPOT_OP` serialises start and stop.
+- **Watchman:** a windowless PowerShell that waits for the hub's PID to end and
+  stops the hotspot (the X, Ctrl-C, crashes, Task Manager).
+- **Names on the hotspot:** a socket bound to 192.168.137.1:53 receives the
+  hotspot's DNS ahead of Windows' proxy on 0.0.0.0:53. Probes and our names are
+  answered with us (the sign-in page pops); the rest goes to the router from the
+  route table, or `SERVFAIL`.
+
+### 14.3 Elevation, now that there is some
+
+Section 13.5 says there is no self-elevation. There still is none. Since 0.9.9
+there is **asked-for** elevation: only the person's action (the button, or
+`hub services --fix`) launches an elevated copy with `ShellExecuteExW` "runas",
+and that copy runs `services --apply-elevated`, which never launches anything.
+Whether it worked is decided by the ordinary copy reading the registry again.
+The loop section 13.5 describes cannot happen: nothing elevated starts anything.
+
+### 14.4 Testing it
+
+`cargo test` covers the logic (145 tests). What only a machine can show is in
+`bench/`, each one restoring what it changes:
+
+| script | proves |
+|---|---|
+| `hotspot-guard-test.ps1` | the network comes back after an outside stop and after the radio is switched off |
+| `hotspot-close-test.ps1` | killing the hub or closing its window switches the network off |
+| `hotspot-channel-test.ps1` | which channel each band really uses, laptop joined to nothing |
+| `hotspot-restart-timing.ps1` | where a restart's time goes |
+| `hotspot-monitor.ps1` | a read-only log of the hotspot every 2 s, for field days |
+| `screenshot-tour.ps1` (+ `console-keys.cs`, `screenshot-phone-page.py`) | the release pictures: drives the real screen, keys into its own console only |
+
+Two rules the day taught. Check output with an independent tool: the QR encoder
+passed its own test while no code it drew could be read, and OpenCV found it in
+one run. And never drive the screen with `SendKeys`: Windows will not bring a
+background window forward, so the keys land wherever the person at the laptop
+is typing.

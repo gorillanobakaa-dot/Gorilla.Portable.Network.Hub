@@ -220,6 +220,19 @@ is blanked on the fix screen.
 
 [![The first screen: the four choices, "Fix problems with this computer (wifi, cable, firewall)" among them, and "This computer is ready: everything the hub needs is switched on", with a paragraph asking for the check to be run once on every computer](screenshots/gallery/windows-0.9.9-first-screen.png)](screenshots/gallery/windows-0.9.9-first-screen.png)
 
+### When the laptop is not ready
+
+On a laptop where a tweak list has switched the hotspot services off, the first
+screen says so, choosing wifi stops at the offer to fix it, and one permission
+prompt later it is done. Photographed with the services really switched off
+(`hub services --put-back`), then switched back on by the hub itself.
+
+[![The first screen: THIS COMPUTER IS NOT READY YET, naming Windows Mobile Hotspot Service and Internet Connection Sharing, and saying where to go](screenshots/gallery/windows-0.9.9-not-ready.png)](screenshots/gallery/windows-0.9.9-not-ready.png)
+
+[![This computer is not ready yet: the two parts that are off, why they matter, Press enter to switch them back on](screenshots/gallery/windows-0.9.9-fix-offer.png)](screenshots/gallery/windows-0.9.9-fix-offer.png)
+
+[![All switched back on. The hub can make a wifi network and use a cable now](screenshots/gallery/windows-0.9.9-fix-done.png)](screenshots/gallery/windows-0.9.9-fix-done.png)
+
 ### Fix problems with this computer
 
 What the hub needs from Windows, the firewall, and what this laptop's wifi card

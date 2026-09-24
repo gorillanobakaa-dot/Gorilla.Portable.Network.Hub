@@ -1,4 +1,4 @@
-<!-- Version: 1.5.0 · updated 26-08-25-18-58 -->
+<!-- Version: 1.6.0 · updated 26-09-24-10-30 -->
 # Gorilla Portable Network Hub
 
 <!-- WHO-THIS-IS-FOR: managed block, do not edit by hand -->
@@ -21,6 +21,37 @@ Run `hub` with no arguments and it opens the screen. That is the way in for
 anybody who is not the person who wrote it.
 
 [![The teacher's screen on a 2012 laptop: the hub roster showing a wifi network it created, the password, the address to type, and a real phone connected and named](docs/screenshots/gallery/hero-desktop-with-live-roster.png)](docs/screenshots/gallery/hero-desktop-with-live-roster.png)
+
+**New to it? Start with the step-by-step guide: [docs/HOW-TO.md](docs/HOW-TO.md).**
+Written for somebody who has never opened a terminal, with a picture of every
+screen.
+
+---
+
+## New in 0.9.9 (Windows)
+
+Found by using it with real phones on a laptop far from any town: no internet,
+no router, just the laptop and the phones.
+
+[![Handing out on Windows: the network Gorilla Hub, the channel it is really broadcasting on, and two codes side by side, one to join the wifi and one to open the page](docs/screenshots/gallery/windows-0.9.9-handing-out-codes.png)](docs/screenshots/gallery/windows-0.9.9-handing-out-codes.png)
+
+- **Windows makes its own wifi network.** No Settings page, no administrator,
+  and it works with no internet at all. It uses 2.4 GHz, which every phone can
+  see, shows the channel it is really on, brings itself back if Windows drops
+  it, and switches off when the window is closed.
+- **The codes scan.** Every code the program had ever drawn was unreadable; one
+  small part was written backwards. Scan the first and the phone joins; the
+  page then opens by itself.
+- **Laptops that have been "sped up"** are caught on the first screen, and the
+  missing parts of Windows are switched back on with one permission prompt.
+- **Files:** lists that fill the window and go one folder at a time, a question
+  before ticking a folder of thousands, received work in one folder you can
+  find, **accept it all with one key**, and on the phone a REMOVE button for a
+  file picked by mistake.
+
+What changed, in plain language: [docs/0.9.9-WHAT-CHANGED.md](docs/0.9.9-WHAT-CHANGED.md).
+For developers, every change and how it was measured:
+[docs/0.9.9-DEVELOPER-NOTES.md](docs/0.9.9-DEVELOPER-NOTES.md).
 
 ---
 
@@ -148,7 +179,7 @@ machine.
 | | |
 |---|---|
 | [bench/RESULTS.md](bench/RESULTS.md) | **the numbers, on one page.** What it achieves, against what the hardware can physically do, and what is NOT proven |
-| [docs/HOW-TO.md](docs/HOW-TO.md) | **start here if you want to use it.** Step by step with pictures, written for somebody who has never opened a terminal |
+| [docs/HOW-TO.md](docs/HOW-TO.md) | **start here if you want to use it.** The step-by-step guide for 0.9.9, with a picture of every screen and every key on one page, written for somebody who has never opened a terminal |
 | [docs/WHY-THIS-EXISTS.md](docs/WHY-THIS-EXISTS.md) | the layman track. What the problem is and what was proved, in plain language |
 | [docs/DEVELOPER.md](docs/DEVELOPER.md) | the developer track. Architecture, wire format, every measurement with its method |
 | [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) | every screen, photographed on real hardware |
@@ -349,17 +380,19 @@ assembled to spec and structurally verified on a Debian machine; it has not yet
 been installed on an Arch one, and that is exactly the kind of thing worth
 telling us about.
 
-**Windows:** unzip `hub-0.9.1-windows-x86_64.zip` and read
-`READ-THIS-FIRST.txt`. Windows will not let a normal program create a wifi
-network, so you switch the hotspot on in Settings first. Everything else works
-the same.
+**Windows 10 and 11:** unzip `hub-0.9.9-windows-x86_64.zip` and double-click
+`hub.exe`. From 0.9.9 the hub switches Windows' hotspot on itself; nothing to
+set up in Settings. If the first screen says the computer is not ready, choose
+*Fix problems with this computer* and say Yes to Windows' permission prompt.
+
+The newest Linux packages are 0.9.5; the Linux build of 0.9.9 is being tested.
 
 **From this repository:**
 
 ```
 cd src/hub && cargo build --release && cd ../..
 ./packaging/build-deb.sh          # or ./packaging/build-arch.sh
-sudo dpkg -i packaging/build/gorilla-portable-network-hub_0.9.1_amd64.deb
+sudo dpkg -i packaging/build/gorilla-portable-network-hub_*_amd64.deb
 ```
 
 It installs `hub`, a menu entry called **Portable Network Hub**, a man page, and
@@ -380,9 +413,12 @@ the binary name here is not settled yet.
 
 **Handing out.** Open `hub`, choose *Hand out files to the class*, point it at
 a folder (a USB drive is fine, that is what teachers actually carry), tick
-which files the class may see, and optionally give the wifi network a name, a
-password and a channel. Folders inside the folder are included, exactly as
-they sit. It shows the address for the board and one line per device.
+which files the class may see, and give the wifi network a name and a password
+(on Windows *Gorilla Hub* and a password are ready; on Linux a channel can be
+chosen, on Windows a band). Folders inside the folder are included, exactly as
+they sit, one folder at a time on screen, and ticking a folder of thousands of
+files asks first with the number. It shows the network, the channel it is
+really on, the address, two codes to scan, and one line per device.
 
 **The kids need nothing installed, ever.** A phone or laptop that joins the
 wifi is told by its own operating system that something is waiting: the same
@@ -404,8 +440,12 @@ out.
 
 **Nothing lands on the teacher's computer unasked.** Work arrives in a holding
 area and waits. She sees who sent it, what it is and how big, and accepts or
-refuses without opening anything. A refusal is kept, never deleted. Nothing
-sent in is ever handed back out to the class, not even while it waits.
+refuses without opening anything: one piece, everything from one child, or all
+of it with one key. Accepted work goes to one named folder, *Documents\Gorilla
+Hub received*, shown on the screen and opened with one key. A refusal is kept,
+never deleted. Nothing sent in is ever handed back out to the class, not even
+while it waits. On the phone, a file picked by mistake can be removed before
+sending.
 
 **The teacher stays in charge.** A notice at the top of every kid's page (the
 blackboard, duplicated), a tick list that publishes or withdraws a file live
@@ -418,11 +458,13 @@ password knocks the whole room off at once. The screen is honest about the
 difference: a pause recognises a device, and a phone can come back wearing a
 different name, which is what the password is for.
 
-**Joining by camera, as a bonus and never the way in.** Press `j` and the
-screen draws a code a phone camera can read. The network name and password stay
-printed underneath at the same size, because plenty of these phones have a
-cracked camera or a camera app that wants an account first, and a screen
-showing only a code locks those children out invisibly.
+**Joining by camera, as a bonus and never the way in.** The handing-out screen
+draws two codes: one joins the wifi, password and all, one opens the page (`j`
+shows the first on its own). Checked with an independent reader, read back from
+a photograph of the screen. The network name and password stay printed above
+them at full size, because plenty of these phones have a cracked camera or a
+camera app that wants an account first, and a screen showing only a code locks
+those children out invisibly.
 
 **Going and getting, tool to tool.** Open `hub` on a second machine, choose
 *Get files from another computer*. It finds the teacher by itself, and one key
@@ -433,8 +475,10 @@ Everything is still there from the command line, for anybody who prefers it:
 
 ```
 hub serve ~/lessons --name Classroom --password chalkdust --channel 13
+hub serve C:\Lessons --name "Gorilla Hub" --password chalkdust --band 2.4   # Windows
 hub get http://10.42.0.1/lessons.zip
 hub doctor
+hub services --fix        # Windows: switch on the parts of Windows the hub needs
 ```
 
 ## Tell us how it went
@@ -459,6 +503,12 @@ connection within three minutes of the tool stopping for any reason at all.
 That is written the hard way because it was learned the hard way: this machine
 locked itself off its own network twice during development, both times because
 the teardown lived somewhere that never ran.
+
+On Windows the same promise is kept differently. A guard checks every few
+seconds that the network is really there and switches it, and the laptop's wifi
+radio, back on if Windows or anyone else drops it. A small watchman process
+switches the network off when the hub ends, however it ends, including the
+window's X. Every outage and Windows' answer is written to `network.log`.
 
 ## The one-line summary of the field days
 

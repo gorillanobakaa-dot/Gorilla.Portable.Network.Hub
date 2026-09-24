@@ -38,7 +38,10 @@ param(
     [Parameter(Mandatory)] [string]$Demo,
     [Parameter(Mandatory)] [string]$OutDir,
     [int]$Cols = 112,
-    [int]$Rows = 44
+    [int]$Rows = 44,
+    # 'main' (the tour above) or 'not-ready' (first screen with services
+    # switched off, the offer to fix, and the result). See the not-ready block.
+    [ValidateSet('main', 'not-ready')] [string]$Scene = 'main'
 )
 $ErrorActionPreference = 'Stop'
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
@@ -103,7 +106,7 @@ if ($env:HS_SET) { $c.Ssid = $env:HS_NAME; $c.Passphrase = $env:HS_PASS; $t = $a
 else { "$($c.Ssid)`n$($c.Passphrase)" }
 '@
 $hsFile = Join-Path $env:TEMP 'tour-hotspot.ps1'; Set-Content $hsFile $hs -Encoding utf8
-$saved = (powershell -NoProfile -ExecutionPolicy Bypass -File $hsFile) -split "`n"
+$saved = @((powershell -NoProfile -ExecutionPolicy Bypass -File $hsFile 2>$null) -split "`n")
 "saved hotspot settings read (name '$($saved[0].Trim())')"
 
 $home_ = Join-Path $Demo 'Teacher'
@@ -126,6 +129,23 @@ try {
     "tour hub pid $script:hubPid"
     [void][TourWin]::MoveWindow($script:win, 20, 20, 1100, 900, $true)
     Start-Sleep -Seconds 4                                   # the services check at start
+
+    if ($Scene -eq 'not-ready') {
+        # Run after `hub services --put-back` has switched the hotspot
+        # services off, as a tweak list leaves them. The fix itself raises a
+        # Windows permission prompt that the person at the laptop answers.
+        Shot 'windows-0.9.9-not-ready'
+        Keys '\r' 1500                                       # wifi: stops at the offer to fix
+        Shot 'windows-0.9.9-fix-offer'
+        Keys '\r' 1000                                       # switch them on: UAC appears
+        "  waiting for the permission prompt to be answered..."
+        $t0 = Get-Date
+        do { Start-Sleep -Seconds 2; $done = (& $Hub services) -match 'Everything the hub needs is switched on' } until ($done -or ((Get-Date) - $t0).TotalSeconds -gt 180)
+        Start-Sleep -Seconds 3
+        Shot 'windows-0.9.9-fix-done'
+        Keys '\r' 800; Keys '\e' 1200; Keys 'q' 2000
+        return
+    }
 
     Shot 'windows-0.9.9-first-screen'
     Keys '\d\d\d\r' 3000                                     # Fix problems with this computer
@@ -177,7 +197,14 @@ finally {
     if ($script:hubPid -and (Get-Process -Id $script:hubPid -ErrorAction SilentlyContinue)) { Stop-Process -Id $script:hubPid -Force; '  ended the tour hub' }
     if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
     Start-Sleep -Seconds 8                                   # the watchman switches the network off
-    $env:HS_SET = '1'; $env:HS_NAME = $saved[0].Trim(); $env:HS_PASS = $saved[1].Trim()
-    "hotspot settings put back: $(powershell -NoProfile -ExecutionPolicy Bypass -File $hsFile)"
-    Remove-Item Env:HS_SET, Env:HS_NAME, Env:HS_PASS
+    # Only put back what was actually read. With the hotspot services
+    # switched off (the not-ready scene) nothing can be read, and "putting
+    # back" empty values would try to wipe the owner's settings.
+    if ($saved.Count -ge 2 -and $saved[0].Trim() -and $saved[1].Trim()) {
+        $env:HS_SET = '1'; $env:HS_NAME = $saved[0].Trim(); $env:HS_PASS = $saved[1].Trim()
+        "hotspot settings put back: $(powershell -NoProfile -ExecutionPolicy Bypass -File $hsFile)"
+        Remove-Item Env:HS_SET, Env:HS_NAME, Env:HS_PASS -ErrorAction SilentlyContinue
+    } else {
+        "hotspot settings could not be read at the start, so nothing was put back"
+    }
 }
