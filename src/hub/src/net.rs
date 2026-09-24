@@ -827,6 +827,14 @@ static TZ_OFFSET: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
 
 fn tz_offset_seconds() -> i64 {
     *TZ_OFFSET.get_or_init(|| {
+        // Windows has no date command, so until 0.10.0 every stamp there was
+        // UTC without saying so: an hour behind the wall in a British summer,
+        // found when a real phone's clock and its messages disagreed.
+        #[cfg(windows)]
+        {
+            return windows_tz_offset_seconds();
+        }
+        #[allow(unreachable_code)]
         let out = std::process::Command::new("date")
             .arg("+%z")
             .stdin(std::process::Stdio::null())
@@ -842,6 +850,42 @@ fn tz_offset_seconds() -> i64 {
         let m: i64 = t[3..5].parse().unwrap_or(0);
         sign * (h * 3600 + m * 60)
     })
+}
+
+/// The offset Windows itself uses for its clock, daylight saving included.
+/// GetTimeZoneInformation reports the bias in minutes as UTC minus local.
+#[cfg(windows)]
+fn windows_tz_offset_seconds() -> i64 {
+    #[repr(C)]
+    struct Tzi {
+        bias: i32,
+        standard_name: [u16; 32],
+        standard_date: [u16; 8],
+        standard_bias: i32,
+        daylight_name: [u16; 32],
+        daylight_date: [u16; 8],
+        daylight_bias: i32,
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetTimeZoneInformation(tzi: *mut Tzi) -> u32;
+    }
+    let mut tzi = Tzi {
+        bias: 0,
+        standard_name: [0; 32],
+        standard_date: [0; 8],
+        standard_bias: 0,
+        daylight_name: [0; 32],
+        daylight_date: [0; 8],
+        daylight_bias: 0,
+    };
+    let bias = match unsafe { GetTimeZoneInformation(&mut tzi) } {
+        1 => tzi.bias + tzi.standard_bias,
+        2 => tzi.bias + tzi.daylight_bias,
+        0 => tzi.bias,
+        _ => return 0,
+    };
+    -(bias as i64) * 60
 }
 
 pub fn timestamp() -> String {
@@ -2930,5 +2974,33 @@ mod switched_off_tests {
                 "reported a service that is not on the list: {service}"
             );
         }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod clock_tests {
+    /// The stamps' offset must match the difference between Windows' local
+    /// and UTC clocks, asked for separately. Before 0.10.0 it was always 0
+    /// on Windows, so every stamp was UTC.
+    #[test]
+    fn stamps_use_the_wall_clock_on_windows() {
+        #[repr(C)]
+        #[derive(Default)]
+        struct St { y: u16, mo: u16, dow: u16, d: u16, h: u16, mi: u16, s: u16, ms: u16 }
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetLocalTime(t: *mut St);
+            fn GetSystemTime(t: *mut St);
+        }
+        let (mut l, mut u) = (St::default(), St::default());
+        unsafe {
+            GetSystemTime(&mut u);
+            GetLocalTime(&mut l);
+        }
+        let mins = |t: &St| t.h as i64 * 60 + t.mi as i64;
+        let want = (mins(&l) - mins(&u)).rem_euclid(1440);
+        let got = (super::tz_offset_seconds() / 60).rem_euclid(1440);
+        // a minute's grace, in case the two clocks were read either side of one
+        assert!((want - got).abs() <= 1 || (want - got).abs() >= 1439, "local-UTC {want} min, stamps use {got} min");
     }
 }

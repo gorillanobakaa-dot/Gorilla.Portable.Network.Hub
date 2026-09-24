@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<!-- Version: 1.0.0 · updated 26-09-24-17-30
+     phone-camera-check.html: does a phone's browser let a page served by the hub
+     (plain http, no certificate) use the camera and microphone?
+
+     Why: live calls between phones would need the browser's getUserMedia, and
+     browsers only allow it on "secure" pages (https, or localhost). The hub serves
+     plain http. This page measures what a real phone does, instead of assuming it.
+
+     How to use: put this file in the folder the hub hands out; on the phone, join
+     the hub's wifi and open http://192.168.137.1/phone-camera-check.html (or READ
+     it from the class page). Tap TRY THE CAMERA. The page says, in large words,
+     exactly what the browser answered. Nothing is recorded, kept or sent anywhere:
+     if the camera does open, the picture is shown on this phone only and stopped
+     after five seconds. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Camera check</title>
+<style>
+  body { font-family: sans-serif; margin: 16px; font-size: 18px; background: #fff; color: #111; }
+  button { font-size: 22px; padding: 14px 20px; width: 100%; background: #1a5; color: #fff; border: 0; border-radius: 8px; }
+  #out { margin-top: 16px; white-space: pre-wrap; }
+  .yes { color: #070; font-weight: bold; } .no { color: #b00; font-weight: bold; }
+  video { width: 100%; margin-top: 12px; background: #000; }
+  table { border-collapse: collapse; margin-top: 12px; font-size: 15px; }
+  td { border: 1px solid #aaa; padding: 4px 6px; vertical-align: top; }
+</style>
+</head>
+<body>
+<h1>Camera check</h1>
+<p>Does this phone let a hub page use the camera? Tap the button. Nothing is recorded or sent.</p>
+<button id="go">TRY THE CAMERA</button>
+<div id="out"></div>
+<video id="v" playsinline muted hidden></video>
+<table id="facts"></table>
+<script>
+  function row(k, v) {
+    var tr = document.createElement('tr');
+    tr.innerHTML = '<td>' + k + '</td><td>' + String(v).replace(/</g, '&lt;') + '</td>';
+    document.getElementById('facts').appendChild(tr);
+  }
+  row('address', location.href);
+  row('secure page (isSecureContext)', window.isSecureContext);
+  row('navigator.mediaDevices exists', !!(navigator.mediaDevices));
+  row('getUserMedia exists', !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia));
+  row('RTCPeerConnection exists', typeof RTCPeerConnection !== 'undefined');
+  row('browser', navigator.userAgent);
+  row('time', new Date().toString());
+
+  var out = document.getElementById('out');
+  document.getElementById('go').onclick = function () {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      out.innerHTML = '<p class="no">NO. The browser does not offer the camera to this page at all.</p>' +
+        '<p>It hides the camera from pages that are not secure (https). The hub serves plain http.</p>';
+      return;
+    }
+    out.textContent = 'Asking the browser...';
+    navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(function (s) {
+      out.innerHTML = '<p class="yes">YES. The camera opened on this page.</p>';
+      var v = document.getElementById('v');
+      v.hidden = false; v.srcObject = s; v.play();
+      setTimeout(function () { s.getTracks().forEach(function (t) { t.stop(); }); v.hidden = true;
+        out.innerHTML += '<p>Stopped after five seconds.</p>'; }, 5000);
+    }, function (e) {
+      out.innerHTML = '<p class="no">NO. The browser refused: ' + e.name + '</p><p>' +
+        String(e.message).replace(/</g, '&lt;') + '</p>';
+    });
+  };
+</script>
+</body>
+</html>

@@ -1000,6 +1000,24 @@ impl App {
             for line in why {
                 f.push_dim(line);
             }
+            // The cursor lands on Start once the folder is chosen, which jumps
+            // past the private help rows. The first real-phone test (0.10.0)
+            // ran a whole lesson with it off and nothing said so. Say it here,
+            // where the teacher is standing.
+            if !self.cable && self.row == fields.len() {
+                f.blank();
+                match (self.private_to, self.private_pw.chars().count()) {
+                    (0, _) => {
+                        f.push("  Private help for children is OFF.");
+                        f.push_dim("  To switch it on, go up to \"Private help goes to\".");
+                    }
+                    (_, n) if n < 8 => {
+                        f.push("  Private help will stay OFF: its password needs 8 characters.");
+                        f.push_dim("  Go up to \"Private help password\".");
+                    }
+                    _ => f.push("  Private help will be ON."),
+                }
+            }
         }
         if self.row == fields.len() - 1 && self.editing.is_none() {
             f.push_dim("  Everything people send you lands in this one folder. Press");
@@ -1900,6 +1918,7 @@ impl App {
             )),
             crate::chat::Receiver::Teacher => f.push("  Private help: ON, to you. Private messages appear under m."),
             crate::chat::Receiver::Off if !self.private_note.is_empty() => f.push(&format!("  {}", self.private_note)),
+            crate::chat::Receiver::Off if !self.cable => f.push_dim("  Private help: off. To switch it on, stop and set it on the start screen."),
             crate::chat::Receiver::Off => {}
         }
         if !self.cable {
@@ -4746,6 +4765,31 @@ mod tests {
         assert!(end.contains("says so on this screen"), "scrolled to the end shows the last line:\n{end}");
         assert!(!end.contains("more lines below"), "nothing below the end:\n{end}");
         assert!(end.contains("enter or esc to go back"));
+    }
+
+    /// The first real-phone test ran a lesson with private help off, because
+    /// the cursor lands on Start below the private help rows and nothing
+    /// said so. Start must say it, and still fit 24 by 80.
+    #[test]
+    fn start_says_whether_private_help_is_on() {
+        let mut app = App::new();
+        app.cable = false;
+        app.screen = Screen::Send;
+        app.row = app.send_fields().len();
+        let draw = |app: &App| {
+            let mut f = crate::term::Frame::new(24, 80);
+            app.draw_send(&mut f);
+            f.text()
+        };
+        let off = draw(&app);
+        assert!(off.contains("Private help for children is OFF."), "{off}");
+        assert!(off.contains("esc to go back"), "the key line must stay:
+{off}");
+        app.private_to = 2;
+        app.private_pw = "short".into();
+        assert!(draw(&app).contains("will stay OFF"));
+        app.private_pw = "long enough".into();
+        assert!(draw(&app).contains("Private help will be ON."));
     }
 
     /// 0.9.10 added explanation lines to the first screen and the start
