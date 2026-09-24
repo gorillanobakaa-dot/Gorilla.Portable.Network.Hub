@@ -1,25 +1,31 @@
-"""Drive the messages and private help end to end, as a child and an adult would.
+"""Drive the messages and the HELP button end to end, as a child's phone would.
 
-Version 1.0.0, 2026-09-24, for 0.9.10.
+Version 2.0.0, 2026-09-24, for 0.10.0.
 
-Two separate browser sessions against a running hub started with
-`--help-password`: one is a child's phone (Edge at phone size), the other the
-trusted adult's phone. Steps, each checked, with a picture after each:
+2.0.0: help moved into the conversation. The owner's second real-phone test
+showed the old design (switched on at the start of the lesson, behind a
+separate page) never got switched on, and would lose a child's impulse to ask.
+Now HELP is always there, under the conversation, and needs one tap. The old
+steps for the trusted adult's page are gone with it.
 
-  child   types a name, writes to the teacher (ordinary conversation)
-  child   opens HELP, taps I NEED TO TALK, writes privately
-  adult   signs in at /adult with a wrong password (refused), then the right one
-  adult   sees the child in the list, opens the conversation, answers,
-          and asks quietly to talk
-  child   sees the answer and the question appear by themselves, taps LATER
-  adult   sees "Later, not now."
-  child   taps HIDE: back on the class page, and the private words are not on it
+Against a running hub started with NO help settings at all (that is the
+point: nothing to switch on). Steps, each checked, with a picture after each:
+
+  child   types a name, writes to the teacher
+  child   taps HELP once: no new page, a green line says what happens next,
+          and the tap is in the conversation
+  child   taps HELP again at once: still accepted (asking for help is never
+          refused for going too fast)
+  record  messages.txt in the received folder has the HELP line
+  child   in Swahili: the button says HELP and the Swahili word
+
+The teacher's side (HELP first on the list, "A CHILD ASKED FOR HELP. Press m")
+is checked by the unit test tui::tests::one_tap_on_help_reaches_the_teacher_first.
 
 Needs: pip install playwright (drives the Edge already installed).
 
-    python bench/chat-flow-test.py --url http://127.0.0.1:8089 --password <help password> --out <folder for pictures>
+    python bench/chat-flow-test.py --url http://127.0.0.1:8089 --received <received folder> --out <folder for pictures>
 """
-
 import argparse
 import os
 import sys
@@ -33,10 +39,12 @@ PHONE = dict(viewport={"width": 412, "height": 915}, device_scale_factor=2,
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--url", default="http://127.0.0.1:8089")
-    ap.add_argument("--password", required=True)
+    ap.add_argument("--received", required=True, help="the hub's received folder, where messages.txt is written")
     ap.add_argument("--out", required=True)
     ap.add_argument("--prefix", default="chat")
     a = ap.parse_args()
+    # The Windows console is not UTF-8 by default; the button's hand would crash the print.
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     os.makedirs(a.out, exist_ok=True)
     failures = []
 
@@ -53,7 +61,6 @@ def main() -> int:
     with sync_playwright() as pw:
         browser = pw.chromium.launch(channel="msedge")
         child = browser.new_context(**PHONE).new_page()
-        adult = browser.new_context(**PHONE).new_page()
 
         # English explicitly: every session here shares 127.0.0.1, so a language
         # chosen by an earlier run would otherwise carry over.
@@ -65,58 +72,33 @@ def main() -> int:
         child.click("#talk ~ form.talk button")
         child.wait_for_function("document.getElementById('thread').textContent.indexOf('Lesson 2 will not open') >= 0", timeout=15000)
         check(True, "the child's message to the teacher appears in the conversation")
-        child.locator("#talk").scroll_into_view_if_needed()
-        shot(child, "talk-to-teacher")
 
-        child.click("a.helpbtn")
-        child.wait_for_load_state()
-        check(child.title() == "Class page", "the help page's title says nothing about help")
-        check("/page2" in child.url, "the help page's address says nothing about help")
+        check(child.locator("button.need").count() == 1, "HELP is on the page with nothing switched on")
+        before = child.url
         child.click("button.need")
         child.wait_for_selector("#talkok", state="visible", timeout=15000)
-        check("safe moment" in child.inner_text("#talkok"), "one tap sends I NEED TO TALK and says what happens next")
-        child.fill("form.talk textarea[name=text]", "Something is happening at home")
-        child.click("text=SEND PRIVATELY")
-        child.wait_for_function("document.getElementById('thread').textContent.indexOf('Something is happening') >= 0", timeout=15000)
-        check(True, "the private message appears on the child's help page")
-        shot(child, "help-page", full=True)
+        check(child.url == before, "one tap on HELP stays on the same page")
+        check("safe moment" in child.inner_text("#talkok"), "a green line says what happens next")
+        child.wait_for_function("document.getElementById('thread').textContent.indexOf('✋ HELP') >= 0", timeout=15000)
+        check(True, "the tap is in the conversation")
+        child.locator("button.need").scroll_into_view_if_needed()
+        shot(child, "help-in-chat")
 
-        adult.goto(a.url + "/adult")
-        adult.fill("input[name=password]", "not-the-password")
-        adult.click("text=SIGN IN")
-        adult.wait_for_load_state()
-        check("not right" in adult.content(), "a wrong password is refused and says so")
-        adult.fill("input[name=password]", a.password)
-        adult.click("text=SIGN IN")
-        adult.wait_for_load_state()
-        check("Amina" in adult.content() and "ASKED TO TALK" in adult.content(), "the adult sees the child, flagged as asking to talk")
-        shot(adult, "adult-list", full=True)
-        adult.click("a.row")
-        adult.wait_for_load_state()
-        adult.fill("textarea[name=text]", "Thank you for telling me. Are you safe right now?")
-        adult.click("text=SEND")
-        adult.wait_for_load_state()
-        adult.click("text=ASK QUIETLY TO TALK")
-        adult.wait_for_load_state()
-        frame = adult.frame_locator("iframe")
-        check("Something is happening at home" in frame.locator("body").inner_text(), "the adult reads the child's private words")
-        shot(adult, "adult-conversation", full=True)
-
-        child.wait_for_function("document.getElementById('thread').textContent.indexOf('Are you safe') >= 0", timeout=15000)
-        check(True, "the adult's answer appears on the child's page by itself")
-        check(child.locator("text=would like to talk to you").count() > 0, "the quiet request appears, with YES, LATER and NO")
-        shot(child, "child-sees-answer", full=True)
-        child.click("button:has-text('LATER')")
+        child.click("button.need")
         child.wait_for_timeout(1500)
-        adult.reload()
-        adult.wait_for_timeout(6000)
-        check("Later, not now." in adult.frame_locator("iframe").locator("body").inner_text(), "the adult sees the child's answer")
+        check(child.locator("#talkmsg").is_hidden(), "a second tap straight away is still accepted")
 
-        child.click("text=HIDE THIS")
+        path = os.path.join(a.received, "messages.txt")
+        text = open(path, encoding="utf-8").read() if os.path.exists(path) else ""
+        check("Amina" in text and "tapped HELP" in text, "messages.txt has the HELP line")
+
+        child.goto(a.url + "/?lang=sw")
         child.wait_for_load_state()
-        body = child.content()
-        check(child.url.rstrip("/").endswith(("8089", "127.0.0.1")) or child.url.endswith("/"), "HIDE goes back to the class page")
-        check("Something is happening" not in body and "Are you safe" not in body, "the private words are not on the class page")
+        label = child.inner_text("button.need")
+        check("HELP" in label and "MSAADA" in label.upper(), f"in Swahili the button says HELP and the Swahili word ({label.strip()})")
+        child.locator("button.need").scroll_into_view_if_needed()
+        shot(child, "help-in-chat-swahili")
+        child.goto(a.url + "/?lang=en")
         browser.close()
 
     print("\n%d checks failed" % len(failures) if failures else "\nall checks passed")

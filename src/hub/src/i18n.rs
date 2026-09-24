@@ -464,6 +464,20 @@ pub const TABLE: &[(&str, [&str; 5])] = &[
         "چیزی فرستاده نشد: اول چیزی بنویسید.",
         "هېڅ ونه لیږل شو: لومړی یو څه ولیکئ.",
     ]),
+    ("Need help? One tap is enough. Only your teacher sees it.", [
+        "Besoin d'aide ? Un seul toucher suffit. Seul ton professeur le voit.",
+        "Unahitaji msaada? Mguso mmoja unatosha. Ni mwalimu wako tu anayeona.",
+        "Precisas de ajuda? Um toque chega. Só o teu professor vê.",
+        "کمک لازم دارید؟ یک لمس کافی است. فقط معلم شما آن را می‌بیند.",
+        "مرستې ته اړتیا لرئ؟ یو کېکاږل بس دی. یوازې ستاسو ښوونکی یې ویني.",
+    ]),
+    ("Sent. Your teacher will find a safe moment to talk to you.", [
+        "Envoyé. Ton professeur trouvera un moment sûr pour te parler.",
+        "Imetumwa. Mwalimu wako atapata wakati salama wa kuongea nawe.",
+        "Enviado. O teu professor vai encontrar um momento seguro para falar contigo.",
+        "فرستاده شد. معلم شما یک وقت امن برای صحبت با شما پیدا می‌کند.",
+        "ولیږل شو. ستاسو ښوونکی به له تاسو سره د خبرو لپاره یو خوندي وخت پیدا کړي.",
+    ]),
     ("Sent. A trusted adult will find a safe moment to talk to you.", [
         "Envoyé. Un adulte de confiance trouvera un moment sûr pour te parler.",
         "Imetumwa. Mtu mzima unayemwamini atapata wakati salama wa kuongea nawe.",

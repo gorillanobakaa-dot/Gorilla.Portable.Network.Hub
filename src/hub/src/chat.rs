@@ -42,7 +42,8 @@ const KEPT_PER_CONVERSATION: usize = 200;
 pub enum Kind {
     /// Words.
     Text,
-    /// A child's one tap: "I need to talk to someone". No typing needed.
+    /// A child's one tap on HELP, in the ordinary conversation. No typing
+    /// needed, nothing to switch on first.
     NeedToTalk,
     /// The adult asks one child, quietly: "I would like to talk to you".
     AdultAsks,
@@ -189,7 +190,7 @@ pub fn from_child(key: &str, label: &str, text: &str, kind: Kind, private: bool,
         }
         st.recent.retain(|(_, t)| t.elapsed().as_secs() < 60);
         // Asking for help is never refused for going too fast.
-        let urgent = private && kind != Kind::Text;
+        let urgent = kind != Kind::Text;
         if !urgent && st.recent.iter().filter(|(k, _)| k == key).count() >= PER_MINUTE {
             return ("toofast", None);
         }
@@ -310,6 +311,11 @@ pub fn unread(private: bool) -> usize {
     with(|st| st.msgs.iter().filter(|m| m.private == private && m.from_child && !m.seen).count())
 }
 
+/// Children who tapped HELP and whose conversation nobody has opened since.
+pub fn help_waiting() -> usize {
+    conversations(false).iter().filter(|c| c.needs_talk).count()
+}
+
 /// Adult messages or requests a child's page has not shown yet.
 pub fn waiting_for_child(key: &str, private: bool) -> usize {
     with(|st| {
@@ -324,7 +330,7 @@ pub fn waiting_for_child(key: &str, private: bool) -> usize {
 pub fn describe(m: &Msg) -> String {
     match m.kind {
         Kind::Text => m.text.clone(),
-        Kind::NeedToTalk => "I NEED TO TALK TO SOMEONE (one tap)".into(),
+        Kind::NeedToTalk => "HELP: this child tapped HELP".into(),
         Kind::AdultAsks => "I would like to talk to you. Is that all right?".into(),
         Kind::AnswerYes => "Yes, I want to talk.".into(),
         Kind::AnswerLater => "Later, not now.".into(),

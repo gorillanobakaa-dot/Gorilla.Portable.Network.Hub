@@ -277,6 +277,8 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, 
          .me{{background:#e8f0fe;margin-inline-start:15%}}.them{{background:#eef7ee;margin-inline-end:15%}}\
          .who{{font-size:.8em;color:#555}}\
          a.helpbtn{{background:#28527a;display:block;text-align:center;font-size:1.2em}}\
+         button.need{{background:#b3261e;font-size:1.2em;margin-top:10px}}\
+         .ok{{background:#e6f4ea;border:2px solid #1a7f37;padding:10px;margin:8px 0}}\
          </style></head><body>\n",
         t(l, "Class page")
     ));
@@ -454,7 +456,9 @@ fn describe_for_child(m: &crate::chat::Msg, l: &str) -> String {
     use crate::chat::Kind;
     match m.kind {
         Kind::Text => m.text.clone(),
-        Kind::NeedToTalk => t(l, "I NEED TO TALK TO SOMEONE (one tap)").into(),
+        // The same words as the button the child pressed. The caller escapes
+        // this, so the separator is a real character, not an HTML entity.
+        Kind::NeedToTalk => format!("\u{270b} {}", help_word(l).replace("&middot;", "\u{b7}")),
         Kind::AdultAsks => t(l, "I would like to talk to you. Is that all right?").into(),
         Kind::AnswerYes => t(l, "Yes, I want to talk.").into(),
         Kind::AnswerLater => t(l, "Later, not now.").into(),
@@ -555,14 +559,24 @@ pub fn talk_section(peer_ip: &str, section: usize) -> String {
          <input type=\"hidden\" name=\"token\" value=\"{}\">\
          <input type=\"hidden\" name=\"kind\" value=\"text\"><input type=\"hidden\" name=\"p\" value=\"0\">\
          <textarea name=\"text\" autocomplete=\"off\" placeholder=\"{}\"></textarea><br>\
-         <button type=\"submit\">{}</button></form>\n{}{TALK_SCRIPT}",
+         <button type=\"submit\">{}</button></form>\n{}\
+         <form method=\"post\" action=\"/talk\" class=talk>\
+         <input type=\"hidden\" name=\"token\" value=\"{}\">\
+         <input type=\"hidden\" name=\"kind\" value=\"need\"><input type=\"hidden\" name=\"p\" value=\"0\">\
+         <button type=\"submit\" class=need>&#9995; {}</button></form>\n\
+         <p class=hint>{}</p>\n\
+         <div id=talkok class=ok style=\"display:none\" data-sent=\"{}\"></div>\n{TALK_SCRIPT}",
         t(l, "Talk to your teacher"),
         t(l, "Write a question or a message. Your teacher reads it on the laptop and can answer you here. New answers appear by themselves."),
         talk_fragment(&key, false),
         fresh_token(),
         attr(t(l, "Type your message here")),
         t(l, "SEND"),
-        talk_msg_line(l)
+        talk_msg_line(l),
+        fresh_token(),
+        help_word(l),
+        t(l, "Need help? One tap is enough. Only your teacher sees it."),
+        attr(t(l, "Sent. Your teacher will find a safe moment to talk to you."))
     )
 }
 
@@ -681,7 +695,8 @@ pub fn take_talk(peer_ip: &str, body: &str, root: &Path) -> &'static str {
     }
     use crate::chat::Kind;
     let kind = match (kind.as_str(), private) {
-        ("need", true) => Kind::NeedToTalk,
+        // HELP, from the ordinary conversation or the old private page.
+        ("need", _) => Kind::NeedToTalk,
         ("yes", true) => Kind::AnswerYes,
         ("later", true) => Kind::AnswerLater,
         ("no", true) => Kind::AnswerNo,
@@ -697,7 +712,7 @@ pub fn take_talk(peer_ip: &str, body: &str, root: &Path) -> &'static str {
             let dir = handed_in_dir(root);
             if std::fs::create_dir_all(&dir).is_ok() {
                 if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("messages.txt")) {
-                    let _ = writeln!(f, "{}  {} -> teacher: {}", crate::net::timestamp(), crate::serve::full_label(peer_ip), m.text);
+                    let _ = writeln!(f, "{}  {} -> teacher: {}", crate::net::timestamp(), crate::serve::full_label(peer_ip), crate::chat::describe(&m));
                 }
             }
         }
