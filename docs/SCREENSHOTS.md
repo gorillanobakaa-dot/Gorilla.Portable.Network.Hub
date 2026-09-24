@@ -208,6 +208,59 @@ point they matter; two of those were wrong diagnoses of the same symptom, kept
 because the symptom was a screenshot of the wrong version and that is precisely
 the failure this set exists to avoid.
 
+## Windows, 24 September 2026 (0.9.9)
+
+Taken by `bench/screenshot-tour.ps1`, which drives the real program and
+photographs only its window, with the hub pointed at a demo teacher's folder
+(`C:\GorillaHubDemo`) so no real paths or files appear. The wifi password is a
+demo one. One detail, the laptop's own address on the network it was using,
+is blanked on the fix screen.
+
+### The first screen
+
+[![The first screen: the four choices, "Fix problems with this computer (wifi, cable, firewall)" among them, and "This computer is ready: everything the hub needs is switched on", with a paragraph asking for the check to be run once on every computer](screenshots/gallery/windows-0.9.9-first-screen.png)](screenshots/gallery/windows-0.9.9-first-screen.png)
+
+### Fix problems with this computer
+
+What the hub needs from Windows, the firewall, and what this laptop's wifi card
+can do, read from the card's own report.
+
+[![The fix screen: Windows parts all switched on; firewall not opened for the hub yet; the wifi card can make a network on 2.4 or 5 GHz, not 6 GHz, one network at a time, no multi-band; the two buttons](screenshots/gallery/windows-0.9.9-fix-problems.png)](screenshots/gallery/windows-0.9.9-fix-problems.png)
+
+### The start screen, on the band row
+
+[![The start screen: folder, network name Gorilla Hub, a demo password, Wifi band 2.4 GHz (every phone sees it) highlighted with its explanation, and where received files go](screenshots/gallery/windows-0.9.9-start-screen-band.png)](screenshots/gallery/windows-0.9.9-start-screen-band.png)
+
+### Choosing what to hand out, one folder at a time
+
+[![The file list: folders with their file counts, then files, all unticked](screenshots/gallery/windows-0.9.9-folder-view.png)](screenshots/gallery/windows-0.9.9-folder-view.png)
+
+A folder of 36 files asks before ticking them all:
+
+[![The question: Space again ticks ALL 36 files inside Past papers, every folder inside included; Enter goes inside to choose instead](screenshots/gallery/windows-0.9.9-big-folder-question.png)](screenshots/gallery/windows-0.9.9-big-folder-question.png)
+
+### Handing out: the codes, and the real channel
+
+Both codes decode, read back from this very picture with OpenCV:
+`WIFI:T:WPA;S:Gorilla Hub;P:leafy7green;;` and `http://192.168.137.1`.
+
+[![Handing out: Gorilla Hub, the demo password, broadcasting on 2.4 GHz channel 11, the address and gorilla.local, and the two codes side by side](screenshots/gallery/windows-0.9.9-handing-out-codes.png)](screenshots/gallery/windows-0.9.9-handing-out-codes.png)
+
+### Work arriving, and accepting all of it
+
+[![The same screen with a device on the network and three pieces of work waiting](screenshots/gallery/windows-0.9.9-work-arrived.png)](screenshots/gallery/windows-0.9.9-work-arrived.png)
+
+[![Work waiting: three pieces from one sender, with e to accept all, p for all from one person](screenshots/gallery/windows-0.9.9-waiting-accept-all.png)](screenshots/gallery/windows-0.9.9-waiting-accept-all.png)
+
+[![Accepted 3 pieces of work, and the folder they are in](screenshots/gallery/windows-0.9.9-accepted-all.png)](screenshots/gallery/windows-0.9.9-accepted-all.png)
+
+### On the phone: choose, remove one, send
+
+Photographed in Edge at a phone's size by `bench/screenshot-phone-page.py`:
+three files chosen, the wrong one removed.
+
+[![The class page on a phone: two chosen files listed with REMOVE buttons, "2 files will be sent", SEND IT TO YOUR TEACHER and START AGAIN](screenshots/gallery/phone-0.9.9-choose-and-remove.png)](screenshots/gallery/phone-0.9.9-choose-and-remove.png)
+
 ## Still missing
 
 - **The paused page**, as it appears on the child's phone.
