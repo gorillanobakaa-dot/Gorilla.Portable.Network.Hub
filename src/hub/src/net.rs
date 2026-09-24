@@ -782,9 +782,58 @@ pub fn device_tag(ip: &str) -> Option<String> {
     Some(short_hash(&mac))
 }
 
-#[cfg(not(target_os = "linux"))]
+/// Windows, from 0.10.0. Until then there was no tag here at all, so on the
+/// Windows hub a child who reconnected became a different address and nothing
+/// else; found on 2026-09-24 when the owner asked for sign-ins to be
+/// recorded with a device identity.
+#[cfg(windows)]
+pub fn device_tag(ip: &str) -> Option<String> {
+    let mac = mac_for(ip)?;
+    Some(short_hash(&mac))
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 pub fn device_tag(_ip: &str) -> Option<String> {
     None
+}
+
+/// The hardware address for an address on our network, from Windows' own
+/// ARP table (GetIpNetTable): read-only, no administrator, nothing sent.
+/// Formatted like Linux's /proc/net/arp ("aa:bb:cc:dd:ee:ff") so a device
+/// gets the same tag whichever system the hub runs on.
+#[cfg(windows)]
+fn mac_for(ip: &str) -> Option<String> {
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Row {
+        index: u32,
+        phys_len: u32,
+        phys: [u8; 8],
+        addr: u32,
+        kind: u32,
+    }
+    #[link(name = "iphlpapi")]
+    extern "system" {
+        fn GetIpNetTable(table: *mut u8, size: *mut u32, order: i32) -> u32;
+    }
+    let want: Ipv4Addr = ip.parse().ok()?;
+    let mut size: u32 = 0;
+    unsafe { GetIpNetTable(std::ptr::null_mut(), &mut size, 0) };
+    if size == 0 {
+        return None;
+    }
+    // u32-aligned storage for the table: a count, then the rows.
+    let mut buf = vec![0u32; (size as usize).div_ceil(4) + 1];
+    if unsafe { GetIpNetTable(buf.as_mut_ptr() as *mut u8, &mut size, 0) } != 0 {
+        return None;
+    }
+    let count = buf[0] as usize;
+    let rows = unsafe { std::slice::from_raw_parts(buf.as_ptr().add(1) as *const Row, count) };
+    // 3 dynamic, 4 static; 2 is invalid (an entry that did not resolve).
+    let row = rows
+        .iter()
+        .find(|r| r.addr.to_ne_bytes() == want.octets() && (r.kind == 3 || r.kind == 4) && r.phys_len == 6)?;
+    Some(row.phys[..6].iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(":"))
 }
 
 /// The hardware address for an address on our network, from the ARP table.
@@ -3002,5 +3051,26 @@ mod clock_tests {
         let got = (super::tz_offset_seconds() / 60).rem_euclid(1440);
         // a minute's grace, in case the two clocks were read either side of one
         assert!((want - got).abs() <= 1 || (want - got).abs() >= 1439, "local-UTC {want} min, stamps use {got} min");
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tag_tests {
+    /// The hardware address read from Windows' table must match what
+    /// Windows' own `arp -a` prints for the same neighbour.
+    #[test]
+    fn the_windows_device_tag_reads_the_same_address_as_arp() {
+        let out = std::process::Command::new("arp").arg("-a").output().expect("arp runs");
+        let text = String::from_utf8_lossy(&out.stdout);
+        let entry = text.lines().find_map(|l| {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            (f.len() == 3 && f[2] == "dynamic" && !f[1].starts_with("01-00-5e") && f[1] != "ff-ff-ff-ff-ff-ff")
+                .then(|| (f[0].to_string(), f[1].replace('-', ":")))
+        });
+        let Some((ip, mac)) = entry else {
+            panic!("no dynamic neighbour in arp -a to compare against:\n{text}");
+        };
+        assert_eq!(super::mac_for(&ip).as_deref(), Some(mac.as_str()), "for {ip}");
+        assert_eq!(super::device_tag(&ip).map(|t| t.len()), Some(4));
     }
 }

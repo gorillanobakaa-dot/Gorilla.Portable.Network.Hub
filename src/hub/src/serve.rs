@@ -1625,7 +1625,7 @@ fn serve_one(
                 .unwrap_or(0);
             let mut body = vec![0u8; len.min(4096)];
             reader.read_exact(&mut body)?;
-            crate::page::claim_name(&peer_ip, &String::from_utf8_lossy(&body));
+            crate::page::claim_name(&peer_ip, &String::from_utf8_lossy(&body), root);
             write!(out, "HTTP/1.1 303 See Other\r\nLocation: /\r\nContent-Length: 0\r\n\r\n")?;
             out.flush()?;
             return Ok(false);

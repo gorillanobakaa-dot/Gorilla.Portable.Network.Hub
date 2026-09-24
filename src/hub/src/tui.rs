@@ -251,6 +251,11 @@ struct App {
     receive_dir: PathBuf,
     /// The picker is choosing where received work goes, not what to send.
     picking_receive: bool,
+    /// The short way in (the owner, 2026-09-24: "way too many hoops"): Hand
+    /// out files opens the picker, and choosing a folder starts the hotspot
+    /// with everything in it handed out. The settings are one key away (s)
+    /// and never in the way.
+    quick: bool,
     /// Windows: make the network on 5 GHz instead of 2.4 GHz.
     band5: bool,
     /// The folder being looked at on the tick screen, relative to what is
@@ -454,6 +459,7 @@ impl App {
             tick: Vec::new(),
             receive_dir: crate::page::default_receive_dir(),
             picking_receive: false,
+            quick: false,
             band5: false,
             tick_dir: String::new(),
             tick_first: 0,
@@ -1422,7 +1428,9 @@ impl App {
 
     /// "1. Scan to join the wifi" and "2. Then scan to open the page", drawn
     /// side by side if they fit in what is left of the window.
-    fn draw_scan_codes(&self, f: &mut Frame, ssid: &str) {
+    /// Both codes side by side, if the window has room; false, drawing
+    /// nothing, if it does not.
+    fn draw_scan_codes(&self, f: &mut Frame, ssid: &str) -> bool {
         // Two modules of border, not the standard's four: on the test day the
         // codes were too big to fit a phone's camera frame without stepping
         // well back. The terminal around them is dark, and phone cameras read
@@ -1430,18 +1438,15 @@ impl App {
         const QUIET: usize = 2;
         let join = crate::qr::wifi_join(ssid, &self.password);
         let page = self.page_url().and_then(|u| crate::qr::encode(u.as_bytes()));
-        let (Some(join), Some(page)) = (join, page) else { return };
+        let (Some(join), Some(page)) = (join, page) else { return false };
         let (jw, jh) = crate::qr::rendered_size(&join, QUIET);
         let (pw, ph) = crate::qr::rendered_size(&page, QUIET);
         let gap = 6;
         let need_cols = 2 + jw + gap + pw;
         // Headings, the codes, and a line under them; the hint row below.
         let room = f.rows.saturating_sub(f.used() + 5);
-        f.blank();
         if need_cols > f.cols || jh.max(ph) > room {
-            f.push("  PHONES: press j to show a code they can scan to join and open the page.");
-            f.push_dim("  (The window is too small to show it here. Making it bigger shows it.)");
-            return;
+            return false;
         }
         let head_a = "1. Scan to join the wifi";
         let head_b = "2. Then scan to open the page";
@@ -1454,6 +1459,7 @@ impl App {
             f.push_raw(&format!("  {left}{}{right}", " ".repeat(gap)));
         }
         f.push_dim("  Point the phone's camera at the code and tap what appears.");
+        true
     }
 
     fn draw_joincode(&self, f: &mut Frame) {
@@ -1507,6 +1513,11 @@ impl App {
 
         f.push(&format!("  Wifi network {}      Password {}", h.ssid, self.password));
         f.blank();
+        // Both codes when they fit: one joins, the other opens the page.
+        if self.draw_scan_codes(f, &h.ssid.clone()) {
+            self.hints(f, "  esc to go back");
+            return;
+        }
 
         let Some(code) = code else {
             f.push("  That network name and password are too long to fit in a code.");
@@ -1651,8 +1662,15 @@ impl App {
             }
         }
         if let Some(h) = &self.hotspot {
-            f.push(&format!("  Wifi network      {}", h.ssid));
-            f.push(&format!("  Password          {}", self.password));
+            // How a child joins, for any phone or laptop, camera or not: the
+            // way every hotspot is joined. The codes are on j, for the phones
+            // that can scan (the owner, 2026-09-24: many of the phones this is
+            // for have no working camera at all).
+            f.push("  Children join from their wifi list. Write these two on the board:");
+            f.push(&format!("    1. Choose the network   {}", h.ssid));
+            f.push(&format!("    2. Type the password    {}", self.password));
+            f.push("    3. The class page opens by itself, and asks for their name.");
+            f.blank();
             if let Some(ch) = net::hotspot_channel() {
                 f.push(&format!("  Broadcasting on   {}", net::describe_channel(ch)));
             } else if cfg!(windows) {
@@ -1754,23 +1772,16 @@ impl App {
             f.push("  Phones that join will see that program, not this lesson.");
             f.push(&format!("  Close it, or tell the class to type the address WITH :{}", port()));
         }
-        // Scan, do not type. The address is a string nobody in the room can
-        // type, on phones whose owners have never looked for a slash. So when
-        // this computer made the network, the two codes that do everything go
-        // right here, not behind a key: one joins the wifi (password and all),
-        // one opens the page. Side by side when the window is wide enough,
-        // otherwise one loud line saying which key shows them.
+        // The codes were here, filling the screen, until 2026-09-24. Many of
+        // the phones this is for have no working camera, and on a short
+        // window the codes pushed the class list, the HELP alarm and the key
+        // line off the bottom. They are on j now; the wifi list is the way in.
         // Once a phone is on the network, the class's activity matters more
         // than the codes, which on a short window crowded out everything
         // (the owner, 2026-09-24: "no way to get back to the main screen").
         // j still shows them, for latecomers.
-        if let Some(h) = &self.hotspot {
-            if self.joined.is_empty() {
-                self.draw_scan_codes(f, &h.ssid.clone());
-            } else {
-                f.blank();
-                f.push("  More phones to join? Press j to show the codes.");
-            }
+        if self.hotspot.is_some() {
+            f.push_dim("  Phones with a working camera can scan instead: press j for the code.");
         }
         // Two loud states a USB drive causes. The folder is often a flash
         // drive kept as the teacher's failsafe, and it gets unplugged, filled
@@ -2636,6 +2647,7 @@ impl App {
                 match self.row {
                     0 => {
                         self.cable = false;
+                        self.quick = true;
                         self.screen = Screen::Send;
                     }
                     1 => {
@@ -2663,6 +2675,12 @@ impl App {
                     self.screen = Screen::FixOffer;
                 }
                 self.row = 0;
+                // Wifi: straight to choosing the folder.
+                if matches!(self.screen, Screen::Send) && self.quick {
+                    self.open_picker();
+                } else {
+                    self.quick = false;
+                }
             }
             Key::Char('q') | Key::Esc | Key::Quit => return true,
             _ => {}
@@ -2926,6 +2944,10 @@ impl App {
         // takes a tick off, enter never does.
         if self.picking_receive {
             self.hints(f, "  enter opens a folder    esc goes back without changing it");
+        } else if self.quick && self.picked.is_empty() {
+            self.hints(f, "  space ticks   enter opens a folder   s settings   esc goes back");
+        } else if self.quick {
+            self.hints(f, "  space ticks   c clears all   enter opens   s settings   esc back");
         } else if self.picked.is_empty() {
             self.hints(
                 f,
@@ -3049,7 +3071,15 @@ impl App {
                 }
             }
             Key::Esc => {
+                // The short way in came from the first screen, so back is there.
+                self.screen = if self.quick && !self.picking_receive { Screen::Home } else { Screen::Send };
+                self.quick = false;
                 self.picking_receive = false;
+                self.row = 0;
+            }
+            // The settings: network name, password, band, where work goes.
+            Key::Char('s') if self.quick && !self.picking_receive => {
+                self.quick = false;
                 self.screen = Screen::Send;
                 self.row = 0;
             }
@@ -3073,6 +3103,7 @@ impl App {
             self.chosen = None;
             self.screen = Screen::Send;
             self.row = self.send_fields().len();
+            self.quick_start();
             return;
         }
 
@@ -3109,6 +3140,22 @@ impl App {
         // is to send it, and leaving the cursor on "What to send" invites
         // pressing enter again and reopening the picker they just left.
         self.row = self.send_fields().len();
+        self.quick_start();
+    }
+
+    /// The short way in: what was chosen is handed out at once, all of it,
+    /// with no tick screen and no settings screen in between. f still changes
+    /// what is handed out while the class runs.
+    fn quick_start(&mut self) {
+        if !self.quick || self.cable {
+            return;
+        }
+        self.quick = false;
+        self.open_tick(true);
+        if matches!(self.screen, Screen::Tick { .. }) {
+            self.apply_ticks();
+            self.begin_sending();
+        }
     }
 
     fn send_key(&mut self, k: Key) -> bool {
@@ -4792,7 +4839,24 @@ mod tests {
         let mut app = App::new();
         *app.services.lock().unwrap() = Some(Vec::new());
         app.home_key(Key::Enter);
-        assert!(matches!(app.screen, Screen::Send), "nothing off, nothing in the way");
+        assert!(matches!(app.screen, Screen::Pick), "nothing off, nothing in the way: straight to the folder");
+    }
+
+    /// The short way in (2026-09-24): Hand out files opens the folder
+    /// picker, s opens the settings, esc goes back to the first screen.
+    #[test]
+    fn hand_out_goes_straight_to_the_folder_with_settings_one_key_away() {
+        let mut app = App::new();
+        *app.services.lock().unwrap() = Some(Vec::new());
+        app.home_key(Key::Enter);
+        assert!(matches!(app.screen, Screen::Pick) && app.quick);
+        app.pick_key(Key::Char('s'));
+        assert!(matches!(app.screen, Screen::Send) && !app.quick, "s opens the settings");
+        let mut app = App::new();
+        *app.services.lock().unwrap() = Some(Vec::new());
+        app.home_key(Key::Enter);
+        app.pick_key(Key::Esc);
+        assert!(matches!(app.screen, Screen::Home), "esc goes back where it came from");
     }
 
     fn a_tree(app: &mut App, big_folder: usize) {

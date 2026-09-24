@@ -70,7 +70,14 @@ pub fn notes(last: usize) -> Vec<(String, String)> {
 }
 
 /// A kid's claimed name, arriving from the /name form.
-pub fn claim_name(peer_ip: &str, body: &str) {
+///
+/// Every sign-in, and every change of name, is written to sign-ins.txt in the
+/// received folder: the time, the name, the device's tag, what the device is
+/// and its address. The owner, 2026-09-24: the class network has a password
+/// and a sign-in "with name and device id recorded for forensic and legal
+/// accountability". The tag is a short hash of the hardware address, never
+/// the address itself (see net::device_tag).
+pub fn claim_name(peer_ip: &str, body: &str, root: &Path) {
     let mut who = String::new();
     for pair in body.split('&') {
         let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
@@ -79,7 +86,19 @@ pub fn claim_name(peer_ip: &str, body: &str) {
         }
     }
     if let Some(name) = sanitize_display_name(&who) {
+        let before = serve::claimed_name(peer_ip);
         serve::set_claimed_name(peer_ip, &name);
+        let dir = handed_in_dir(root);
+        if std::fs::create_dir_all(&dir).is_ok() {
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("sign-ins.txt")) {
+                let what = match before {
+                    Some(old) if old != name => format!("changed name from {old}"),
+                    Some(_) => "signed in again".to_string(),
+                    None => "signed in".to_string(),
+                };
+                let _ = writeln!(f, "{}  {}  {what}", crate::net::timestamp(), serve::full_label(peer_ip));
+            }
+        }
     }
 }
 
@@ -1828,7 +1847,7 @@ mod tests {
         assert!(before.contains("type your name"), "an unnamed device must be asked first");
         assert!(!before.contains("Send your work"), "no forms before a name");
         assert!(!before.contains("action=\"/handin\""), "no hand-in form before a name");
-        claim_name("10.42.0.201", "who=Amina+N.");
+        claim_name("10.42.0.201", "who=Amina+N.", &std::env::temp_dir().join("hub-signin-test"));
         let after = class_page(&dir, None, "10.42.0.201", false, "10.42.0.1");
         assert!(after.contains("You are <b>Amina N.</b>"), "{after}");
         assert!(after.contains("Talk to your teacher"), "the page must open up after the name");
@@ -1836,7 +1855,7 @@ mod tests {
 
     #[test]
     fn a_name_typed_as_markup_becomes_text_not_an_element() {
-        claim_name("10.42.0.202", "who=%3Cscript%3Ezap%3C%2Fscript%3E");
+        claim_name("10.42.0.202", "who=%3Cscript%3Ezap%3C%2Fscript%3E", &std::env::temp_dir().join("hub-signin-test"));
         let got = crate::serve::claimed_name("10.42.0.202").unwrap();
         assert!(!got.contains('<') && !got.contains('>'), "{got}");
         assert!(got.contains("script"), "letters survive, markup does not: {got}");
@@ -1847,7 +1866,7 @@ mod tests {
         // The received folder is process-wide: see tui::tests::work_can_be_accepted_all_at_once_or_per_person.
         let _g = crate::serve::SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tmpdir();
-        claim_name("10.42.0.203", "who=Johnny");
+        claim_name("10.42.0.203", "who=Johnny", &std::env::temp_dir().join("hub-signin-test"));
         crate::serve::set_device_name("10.42.0.203", "Xiaomi-11-Lite-5G-NE");
         let _ = take_note("10.42.0.203", "token=fj1&text=the+same+message+for+kicks", &dir);
         let txt = std::fs::read_to_string(dir.join("handed-in/notes.txt")).unwrap();
@@ -1860,7 +1879,7 @@ mod tests {
         // The received folder is process-wide: see tui::tests::work_can_be_accepted_all_at_once_or_per_person.
         let _g = crate::serve::SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tmpdir();
-        claim_name("10.42.0.204", "who=Amina");
+        claim_name("10.42.0.204", "who=Amina", &std::env::temp_dir().join("hub-signin-test"));
         let out = upload(&dir, "10.42.0.204", "essay.docx", b"real work");
         assert_eq!(out.tag, "handin");
         assert!(dir.join("handed-in/waiting").join("Amina--essay.docx").exists(),
@@ -1874,7 +1893,7 @@ mod tests {
     fn the_page_explains_itself_and_every_result() {
         let dir = tmpdir();
         assert!(crate::serve::probe_handin(&dir), "temp dir should be writable");
-        claim_name("10.42.0.211", "who=Amina");
+        claim_name("10.42.0.211", "who=Amina", &std::env::temp_dir().join("hub-signin-test"));
         let page = class_page(&dir, None, "10.42.0.211", false, "10.42.0.1");
         for want in ["1. Files from your teacher", "2. Send your work to your teacher",
                      "3. Talk to your teacher", "Where do the files I GET go?",
@@ -1897,7 +1916,7 @@ mod tests {
         let _g = crate::serve::SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::chat::clear();
         let dir = tmpdir();
-        claim_name("10.42.0.220", "who=Amina");
+        claim_name("10.42.0.220", "who=Amina", &std::env::temp_dir().join("hub-signin-test"));
         let said = take_talk("10.42.0.220", "token=t1&kind=text&p=0&text=Lesson+2+will+not+open", &dir);
         assert_eq!(said, "sent");
         let key = crate::serve::device_key("10.42.0.220");
@@ -1918,7 +1937,7 @@ mod tests {
         let _g = crate::serve::SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::chat::clear();
         let dir = tmpdir();
-        claim_name("10.42.0.221", "who=Baraka");
+        claim_name("10.42.0.221", "who=Baraka", &std::env::temp_dir().join("hub-signin-test"));
         crate::chat::set_receiver(crate::chat::Receiver::Off);
         let page = class_page(&dir, None, "10.42.0.221", false, "10.42.0.1");
         assert!(!page.contains("/page2"), "no help door while the channel is off");
@@ -1949,7 +1968,7 @@ mod tests {
         // The server probes writability at start; without that the hand-in
         // form is deliberately hidden and there is nothing to escape from.
         assert!(crate::serve::probe_handin(&dir), "temp dir should be writable");
-        claim_name("10.42.0.210", "who=Amina");
+        claim_name("10.42.0.210", "who=Amina", &std::env::temp_dir().join("hub-signin-test"));
         let page = class_page(&dir, None, "10.42.0.210", false, "10.42.0.1");
         assert!(page.contains("it cannot send them"), "the escape hatch must be on the page");
         assert!(page.contains("<summary>Tapping Choose files does nothing?"),
@@ -2021,5 +2040,22 @@ mod tests {
     fn an_empty_note_is_refused() {
         let dir = tmpdir();
         assert_eq!(take_note("10.42.0.95", "token=t&text=++", &dir), "empty");
+    }
+
+    /// Every sign-in and change of name is kept, with the time and the device.
+    #[test]
+    fn sign_ins_are_recorded() {
+        let _g = crate::serve::SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = crate::scratchdir::scratch("sign-ins");
+        let recv = root.join("received");
+        set_receive_dir(Some(recv.clone()));
+        claim_name("10.42.0.230", "who=Amina", &root);
+        claim_name("10.42.0.230", "who=Amina+K", &root);
+        set_receive_dir(None);
+        let text = std::fs::read_to_string(recv.join("sign-ins.txt")).unwrap_or_default();
+        let lines: Vec<&str> = text.lines().filter(|l| l.contains("10.42.0.230")).collect();
+        assert_eq!(lines.len(), 2, "{text}");
+        assert!(lines[0].contains("Amina") && lines[0].ends_with("signed in"), "{text}");
+        assert!(lines[1].contains("Amina K") && lines[1].ends_with("changed name from Amina"), "{text}");
     }
 }
