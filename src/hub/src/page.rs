@@ -19,6 +19,7 @@
 // hands in a 200 MB video on a laptop with 2 GB of RAM, so the body must go
 // to disk as it arrives, never into memory.
 
+use crate::i18n::{t, tf};
 use crate::serve::{self};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::net::TcpStream;
@@ -159,162 +160,218 @@ fn token_already_used(peer_ip: &str, token: &str) -> bool {
     false
 }
 
+/// The language each device chose, by device key: (key, code).
+static LANG_CHOSEN: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+/// A child picked a language on the page (?lang=xx). Unknown codes are ignored.
+pub fn set_lang(peer_ip: &str, code: &str) {
+    if !crate::i18n::known(code) {
+        return;
+    }
+    let key = serve::device_key(peer_ip);
+    let mut l = LANG_CHOSEN.lock().unwrap_or_else(|e| e.into_inner());
+    match l.iter_mut().find(|(k, _)| *k == key) {
+        Some(e) => e.1 = code.to_string(),
+        None => l.push((key, code.to_string())),
+    }
+}
+
+pub fn lang_of_key(key: &str) -> String {
+    let l = LANG_CHOSEN.lock().unwrap_or_else(|e| e.into_inner());
+    l.iter().find(|(k, _)| k == key).map(|(_, c)| c.clone()).unwrap_or_else(|| "en".into())
+}
+
+pub fn lang_of(peer_ip: &str) -> String {
+    lang_of_key(&serve::device_key(peer_ip))
+}
+
+/// The six languages, each in its own words, the current one in bold. `extra`
+/// is added to each link (the name page keeps asking for the name).
+fn lang_picker(l: &str, extra: &str) -> String {
+    let links: Vec<String> = crate::i18n::LANGS
+        .iter()
+        .map(|(code, name, _, _)| {
+            if *code == l {
+                format!("<b>{name}</b>")
+            } else {
+                format!("<a href=\"/?lang={code}{extra}\">{name}</a>")
+            }
+        })
+        .collect();
+    format!("<p class=small>{}: {}</p>\n", t(l, "Language"), links.join(" &middot; "))
+}
+
+/// HELP stays in English on every page, because it is the one word most
+/// children anywhere know; the child's own word for it sits beside it.
+fn help_word(l: &str) -> String {
+    if l == "en" { "HELP".to_string() } else { format!("HELP &middot; {}", t(l, "HELP")) }
+}
+
 /// The list of chosen files with a REMOVE button each. DataTransfer is how a
 /// page may set a file input's files; where it is missing (old browsers) the
 /// script does nothing and the plain file button and START AGAIN still work.
-const PICK_LIST_SCRIPT: &str = "<script>(function(){var p=document.getElementById('pick'),box=document.getElementById('chosen');if(!p||!box||!window.DataTransfer)return;var kept=[];function size(n){return n>1e6?(n/1e6).toFixed(1)+' MB':Math.max(1,Math.round(n/1e3))+' KB';}function sync(){var dt=new DataTransfer();kept.forEach(function(f){dt.items.add(f);});p.files=dt.files;show();}function show(){box.innerHTML='';kept.forEach(function(f,i){var d=document.createElement('div');d.className='pickrow';var n=document.createElement('span');n.textContent=f.name+'  ('+size(f.size)+')';d.appendChild(n);var x=document.createElement('button');x.type='button';x.className='remove';x.textContent='REMOVE';x.onclick=function(){kept.splice(i,1);sync();};d.appendChild(x);box.appendChild(d);});if(kept.length){var c=document.createElement('div');c.className='count';c.textContent=kept.length+(kept.length==1?' file':' files')+' will be sent.';box.appendChild(c);}}p.addEventListener('change',function(){for(var i=0;i<p.files.length;i++){var f=p.files[i];if(!kept.some(function(k){return k.name==f.name&&k.size==f.size;}))kept.push(f);}sync();});p.form.addEventListener('reset',function(){kept=[];setTimeout(show,0);});})();</script>\n";
+/// Its words come from the list's data- attributes, in the child's language.
+const PICK_LIST_SCRIPT: &str = "<script>(function(){var p=document.getElementById('pick'),box=document.getElementById('chosen');if(!p||!box||!window.DataTransfer)return;var kept=[];function size(n){return n>1e6?(n/1e6).toFixed(1)+' MB':Math.max(1,Math.round(n/1e3))+' KB';}function sync(){var dt=new DataTransfer();kept.forEach(function(f){dt.items.add(f);});p.files=dt.files;show();}function show(){box.innerHTML='';kept.forEach(function(f,i){var d=document.createElement('div');d.className='pickrow';var n=document.createElement('span');n.textContent=f.name+'  ('+size(f.size)+')';d.appendChild(n);var x=document.createElement('button');x.type='button';x.className='remove';x.textContent=box.getAttribute('data-remove');x.onclick=function(){kept.splice(i,1);sync();};d.appendChild(x);box.appendChild(d);});if(kept.length){var c=document.createElement('div');c.className='count';c.textContent=kept.length==1?box.getAttribute('data-one'):box.getAttribute('data-many').replace('{n}',kept.length);box.appendChild(c);}}p.addEventListener('change',function(){for(var i=0;i<p.files.length;i++){var f=p.files[i];if(!kept.some(function(k){return k.name==f.name&&k.size==f.size;}))kept.push(f);}sync();});p.form.addEventListener('reset',function(){kept=[];setTimeout(show,0);});})();</script>\n";
 
 /// Sending shows itself. A plain form post shows nothing on the page while a
-/// big file goes up, and a child who sees nothing happen taps SEND again, or closes the
-/// page. So the send goes through XMLHttpRequest with a percentage on the
-/// button and "keep this page open" beside it; the server's answer is the same
-/// redirect as before, followed to the same result box. A phone without
-/// FormData or XHR gets the plain form post it always had. Pressing SEND with
-/// nothing chosen is answered on the spot instead of with a round trip.
-const SEND_SCRIPT: &str = "<script>(function(){var f=document.getElementById('handin');if(!f)return;var b=document.getElementById('sendbtn'),m=document.getElementById('sendmsg');function say(t){if(m){m.textContent=t;m.style.display='block';}}f.addEventListener('submit',function(e){var p=document.getElementById('pick');if(p&&p.files&&p.files.length===0){e.preventDefault();say('Choose your work first: tap the Choose files button above and pick a file.');return;}if(m)m.style.display='none';b.disabled=true;b.textContent='SENDING... KEEP THIS PAGE OPEN';if(!window.FormData||!window.XMLHttpRequest)return;e.preventDefault();var x=new XMLHttpRequest();x.open('POST','/handin');if(x.upload)x.upload.onprogress=function(ev){if(ev.lengthComputable)b.textContent='SENDING... '+Math.floor(ev.loaded*100/ev.total)+'% - KEEP THIS PAGE OPEN';};x.onload=function(){var u=x.responseURL||'';location.href=u.indexOf('done=')>=0?u:'/';};x.onerror=function(){b.disabled=false;b.textContent='SEND IT TO YOUR TEACHER';say('It did not arrive. Check that this phone is still joined to the class wifi, then tap SEND IT TO YOUR TEACHER again.');};x.send(new FormData(f));});})();</script>\n";
+/// big file goes up, and a child who sees nothing happen taps SEND again, or
+/// closes the page. So the send goes through XMLHttpRequest with a percentage
+/// on the button and "keep this page open" beside it; the server's answer is
+/// the same redirect as before, followed to the same result box. A phone
+/// without FormData or XHR gets the plain form post it always had. Pressing
+/// SEND with nothing chosen is answered on the spot. Its words come from the
+/// form's data- attributes, in the child's language.
+const SEND_SCRIPT: &str = "<script>(function(){var f=document.getElementById('handin');if(!f)return;var b=document.getElementById('sendbtn'),m=document.getElementById('sendmsg');function w(n){return f.getAttribute('data-'+n);}function say(t){if(m){m.textContent=t;m.style.display='block';}}f.addEventListener('submit',function(e){var p=document.getElementById('pick');if(p&&p.files&&p.files.length===0){e.preventDefault();say(w('choose'));return;}if(m)m.style.display='none';b.disabled=true;b.textContent=w('sending');if(!window.FormData||!window.XMLHttpRequest)return;e.preventDefault();var x=new XMLHttpRequest();x.open('POST','/handin');if(x.upload)x.upload.onprogress=function(ev){if(ev.lengthComputable)b.textContent=w('progress').replace('{n}',Math.floor(ev.loaded*100/ev.total));};x.onload=function(){var u=x.responseURL||'';location.href=u.indexOf('done=')>=0?u:'/';};x.onerror=function(){b.disabled=false;b.textContent=w('send');say(w('lost'));};x.send(new FormData(f));});})();</script>\n";
 
 /// The whole page. `done` names a just-finished action so the reloaded page
 /// can say so (the POST answered with a redirect here; refresh never
 /// resubmits).
 ///
-/// WRITTEN FOR A CHILD WHO HAS NEVER SEEN IT, reading in a second language.
-/// Every section is numbered and says in one line what its buttons do; every
-/// result says what happened AND what to do next. Asked for by the owner,
-/// 2026-09-24: "impossible not to understand how to use it". The button words
-/// did not change (THAT'S ME, READ, GET IT, SEND IT TO YOUR TEACHER), because
-/// the guide and the teachers already use them.
+/// WRITTEN FOR A CHILD WHO HAS NEVER SEEN IT, reading in a second language,
+/// and in their own language when they choose one (i18n.rs, drafts until
+/// checked by native speakers). Every section is numbered and says in one
+/// line what its buttons do; every result says what happened AND what to do
+/// next. Asked for by the owner, 2026-09-24: "impossible not to understand
+/// how to use it".
 pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, here: &str) -> String {
+    let l = lang_of(peer_ip);
+    let l = l.as_str();
     let notice = notice();
     let mut s = String::with_capacity(8192);
-    s.push_str(
-        "<!doctype html><html><head><meta charset=\"utf-8\">\
+    s.push_str("<!doctype html>");
+    s.push_str(&crate::i18n::html_open(l));
+    s.push_str(&format!(
+        "<head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
-         <title>Class page</title><style>\
-         body{font-family:sans-serif;margin:0;padding:12px;background:#fff;color:#111;max-width:620px;line-height:1.4}\
-         h1{font-size:1.35em;margin:4px 0 8px}\
-         h2{font-size:1.15em;margin:22px 0 4px;padding-top:12px;border-top:2px solid #ddd}\
-         .hint{margin:4px 0 8px;color:#333}\
-         .small{font-size:.9em;color:#555}\
-         .notice{background:#fff8d6;border:2px solid #d9c65a;padding:10px;font-size:1.15em;margin:10px 0;white-space:pre-wrap}\
-         .done{background:#e2f7e2;border:2px solid #58a758;padding:10px;font-size:1.1em;margin:10px 0}\
-         .bad{background:#fdecea;border:2px solid #c0392b;padding:10px;font-size:1.1em;margin:10px 0}\
-         .file{margin:14px 0}\
-         .name{font-size:1.1em;word-break:break-all}\
-         .size{color:#666;font-size:.9em;margin-left:6px}\
-         a.btn,button{display:inline-block;background:#1a6b1a;color:#fff;border:0;border-radius:6px;\
-         padding:12px 20px;font-size:1.05em;text-decoration:none;margin:4px 8px 0 0}\
-         button[disabled]{background:#6a8f6a}\
-         a.read{background:#28527a}\
-         textarea,input[type=file]{width:100%;font-size:1em;margin:6px 0}\
-         textarea{height:4em}\
-         input,textarea{box-sizing:border-box;max-width:100%}\
-         ol.steps{margin:6px 0 8px;padding-left:1.4em}ol.steps li{margin:4px 0}\
-         details{margin:8px 0}summary{cursor:pointer;font-weight:bold;color:#28527a}\
-         .escape{background:#fff3cd;border:2px solid #d9a441;padding:10px;margin:8px 0}\
-         .escapebtn{background:#b34700;font-size:1.15em;display:block;text-align:center;margin:10px 0}\
-         .escapealt{background:#555;display:block;text-align:center;margin:6px 0}\
-         iframe{width:100%;border:1px solid #ddd;border-radius:6px;height:65vh;min-height:340px}\
-         .pickrow{display:flex;justify-content:space-between;align-items:center;border:1px solid #ccc;border-radius:6px;padding:6px 8px;margin:6px 0;word-break:break-all}\
-         button.remove{background:#a11;padding:8px 12px;font-size:.95em;margin:0 0 0 8px}\
-         button.again{background:#555}\
-         .count{margin:6px 0;font-weight:bold}\
-         .thread{border:1px solid #ddd;border-radius:6px;padding:8px;max-height:45vh;overflow-y:auto;margin:8px 0}\
-         .msg{margin:6px 0;padding:8px;border-radius:8px;white-space:pre-wrap;word-break:break-word}\
-         .me{background:#e8f0fe;margin-left:15%}.them{background:#eef7ee;margin-right:15%}\
-         .who{font-size:.8em;color:#555}\
-         a.helpbtn{background:#28527a;display:block;text-align:center;font-size:1.2em}\
+         <title>{}</title><style>\
+         body{{font-family:sans-serif;margin:0;padding:12px;background:#fff;color:#111;max-width:620px;line-height:1.4}}\
+         h1{{font-size:1.35em;margin:4px 0 8px}}\
+         h2{{font-size:1.15em;margin:22px 0 4px;padding-top:12px;border-top:2px solid #ddd}}\
+         .hint{{margin:4px 0 8px;color:#333}}\
+         .small{{font-size:.9em;color:#555}}\
+         .notice{{background:#fff8d6;border:2px solid #d9c65a;padding:10px;font-size:1.15em;margin:10px 0;white-space:pre-wrap}}\
+         .done{{background:#e2f7e2;border:2px solid #58a758;padding:10px;font-size:1.1em;margin:10px 0}}\
+         .bad{{background:#fdecea;border:2px solid #c0392b;padding:10px;font-size:1.1em;margin:10px 0}}\
+         .file{{margin:14px 0}}\
+         .name{{font-size:1.1em;word-break:break-all}}\
+         .size{{color:#666;font-size:.9em;margin:0 6px}}\
+         a.btn,button{{display:inline-block;background:#1a6b1a;color:#fff;border:0;border-radius:6px;\
+         padding:12px 20px;font-size:1.05em;text-decoration:none;margin:4px 8px 0 0}}\
+         button[disabled]{{background:#6a8f6a}}\
+         a.read{{background:#28527a}}\
+         textarea,input[type=file]{{width:100%;font-size:1em;margin:6px 0}}\
+         textarea{{height:4em}}\
+         input,textarea{{box-sizing:border-box;max-width:100%}}\
+         ol.steps{{margin:6px 0 8px;padding-inline-start:1.4em}}ol.steps li{{margin:4px 0}}\
+         details{{margin:8px 0}}summary{{cursor:pointer;font-weight:bold;color:#28527a}}\
+         .escape{{background:#fff3cd;border:2px solid #d9a441;padding:10px;margin:8px 0}}\
+         .escapebtn{{background:#b34700;font-size:1.15em;display:block;text-align:center;margin:10px 0}}\
+         .escapealt{{background:#555;display:block;text-align:center;margin:6px 0}}\
+         iframe{{width:100%;border:1px solid #ddd;border-radius:6px;height:65vh;min-height:340px}}\
+         .pickrow{{display:flex;justify-content:space-between;align-items:center;border:1px solid #ccc;border-radius:6px;padding:6px 8px;margin:6px 0;word-break:break-all}}\
+         button.remove{{background:#a11;padding:8px 12px;font-size:.95em;margin:0 8px}}\
+         button.again{{background:#555}}\
+         .count{{margin:6px 0;font-weight:bold}}\
+         .thread{{border:1px solid #ddd;border-radius:6px;padding:8px;max-height:45vh;overflow-y:auto;margin:8px 0}}\
+         .msg{{margin:6px 0;padding:8px;border-radius:8px;white-space:pre-wrap;word-break:break-word}}\
+         .me{{background:#e8f0fe;margin-inline-start:15%}}.them{{background:#eef7ee;margin-inline-end:15%}}\
+         .who{{font-size:.8em;color:#555}}\
+         a.helpbtn{{background:#28527a;display:block;text-align:center;font-size:1.2em}}\
          </style></head><body>\n",
-    );
+        t(l, "Class page")
+    ));
     // WHO ARE YOU comes before everything else. Thirty identical phones make
     // device models useless to a teacher, so the first thing a device is
     // asked, once per lesson, is a name. Unauthenticated on purpose (no
     // accounts, ever); the honesty comes from the permanent record keeping
-    // name, device and address side by side.
+    // name, device and address side by side. The language is chosen here too.
     let claimed = serve::claimed_name(peer_ip);
     if claimed.is_none() || rename {
         let current = claimed.unwrap_or_default();
+        s.push_str(&lang_picker(l, "&rename=1"));
         s.push_str(&format!(
-            "<h1>Welcome to the class page</h1>\
+            "<h1>{}</h1>\
              <form method=\"post\" action=\"/name\">\
-             <b>First, type your name.</b><br>\
-             Use the name your teacher calls you. When you send work, your teacher \
-             sees this name on it.<br>\
+             <b>{}</b><br>{}<br>\
              <input type=\"text\" name=\"who\" value=\"{}\" maxlength=\"24\" \
              style=\"width:100%;font-size:1.2em;margin:8px 0;padding:8px\"><br>\
-             <button type=\"submit\">THAT'S ME</button></form>\n\
-             <p class=small>You only do this once. This page comes from your teacher's \
-             laptop through the class wifi. It works with no internet.</p>\n",
-            html_escape(&current)
+             <button type=\"submit\">{}</button></form>\n\
+             <p class=small>{}</p>\n",
+            t(l, "Welcome to the class page"),
+            t(l, "First, type your name."),
+            t(l, "Use the name your teacher calls you. When you send work, your teacher sees this name on it."),
+            html_escape(&current),
+            t(l, "THAT'S ME"),
+            t(l, "You only do this once. This page comes from your teacher's laptop through the class wifi. It works with no internet.")
         ));
         s.push_str("</body></html>\n");
         return s;
     }
     let me = claimed.unwrap_or_default();
     s.push_str(&format!(
-        "<h1>Class page</h1>\n<p>You are <b>{}</b>. <a href=\"/?rename=1\">Not you? Tap here to change it.</a></p>\n",
-        html_escape(&me)
+        "<h1>{}</h1>\n<p>{} <a href=\"/?rename=1\">{}</a></p>\n",
+        t(l, "Class page"),
+        tf(l, "You are <b>{name}</b>.", &[("name", &html_escape(&me))]),
+        t(l, "Not you? Tap here to change it.")
     ));
-    match done {
-        Some("handin") => s.push_str(
-            "<div class=done><b>Your work arrived.</b> It is on your teacher's laptop now, \
-             waiting for your teacher to accept it. You can send more, or close this page.</div>\n",
-        ),
-        Some("note") => s.push_str(
-            "<div class=done><b>Your note arrived.</b> Your teacher can read it on the laptop.</div>\n",
-        ),
-        Some("empty") => s.push_str(
-            "<div class=bad><b>Nothing was sent</b>, because no file was chosen. Under \
-             \"Send your work\", tap Choose files and pick your work first.</div>\n",
-        ),
-        Some("toobig") => s.push_str(
-            "<div class=bad><b>That file is too big to send this way</b> (more than 1 GB). \
-             Ask your teacher what to do.</div>\n",
-        ),
-        Some("cantsave") => s.push_str(
-            "<div class=bad><b>Your teacher's laptop could not keep it.</b> Nothing is lost: \
-             your work is still on your phone. Tell your teacher.</div>\n",
-        ),
-        _ => {}
+    let result = match done {
+        Some("handin") => Some(("done", t(l, "<b>Your work arrived.</b> It is on your teacher's laptop now, waiting for your teacher to accept it. You can send more, or close this page."))),
+        Some("note") => Some(("done", t(l, "<b>Your note arrived.</b> Your teacher can read it on the laptop."))),
+        Some("empty") => Some(("bad", t(l, "<b>Nothing was sent</b>, because no file was chosen. Under \"Send your work\", tap Choose files and pick your work first."))),
+        Some("toobig") => Some(("bad", t(l, "<b>That file is too big to send this way</b> (more than 1 GB). Ask your teacher what to do."))),
+        Some("cantsave") => Some(("bad", t(l, "<b>Your teacher's laptop could not keep it.</b> Nothing is lost: your work is still on your phone. Tell your teacher."))),
+        _ => None,
+    };
+    if let Some((class, words)) = result {
+        s.push_str(&format!("<div class={class}>{words}</div>\n"));
     }
     if !notice.is_empty() {
         s.push_str(&format!(
-            "<div class=notice><b>From your teacher</b><br>{}</div>\n",
+            "<div class=notice><b>{}</b><br>{}</div>\n",
+            t(l, "From your teacher"),
             linkify(&html_escape(&notice))
         ));
     }
     // The list lives in its own frame so IT can refresh while a half-typed
     // note on the page below survives. Frames are older than the parents of
     // the kids using this.
-    s.push_str(
-        "<h2>1. Files from your teacher</h2>\n\
-         <p class=hint><b>READ</b> or <b>PLAY</b>: look at it now. <b>GET IT</b>: keep a copy \
-         on this phone. Slide the list up and down to see every file; new files appear by themselves.</p>\n\
-         <iframe src=\"/files\"></iframe>\n\
-         <details><summary>Where do the files I GET go?</summary>\
-         <p><b>Android:</b> open the <b>Files</b> app (on Samsung: <b>My Files</b>), then \
-         <b>Downloads</b>.<br><b>iPhone:</b> open the <b>Files</b> app, then <b>Downloads</b>.<br>\
-         <b>Any phone:</b> your browser's menu (the three dots) has <b>Downloads</b> too.</p>\
-         </details>\n",
-    );
+    s.push_str(&format!(
+        "<h2>1. {}</h2>\n<p class=hint>{}</p>\n<iframe src=\"/files\"></iframe>\n\
+         <details><summary>{}</summary><p>{}</p></details>\n",
+        t(l, "Files from your teacher"),
+        t(l, "<b>READ</b> or <b>PLAY</b>: look at it now. <b>GET IT</b>: keep a copy on this phone. Slide the list up and down to see every file; new files appear by themselves."),
+        t(l, "Where do the files I GET go?"),
+        t(l, "<b>Android:</b> open the <b>Files</b> app (on Samsung: <b>My Files</b>), then <b>Downloads</b>.<br><b>iPhone:</b> open the <b>Files</b> app, then <b>Downloads</b>.<br><b>Any phone:</b> your browser's menu (the three dots) has <b>Downloads</b> too.")
+    ));
     let mut section = 2;
     if serve::handin_available() {
         let token = fresh_token();
         s.push_str(&format!(
-            "<h2>{section}. Send your work to your teacher</h2>\n\
-             <ol class=steps>\
-             <li>Tap <b>Choose files</b> below (some phones say <b>Browse</b>) and pick your \
-             work: a photo of your page, a document, a drawing.</li>\
-             <li>Check the list. Picked the wrong one? Tap <b>REMOVE</b> next to it.</li>\
-             <li>Tap <b>SEND IT TO YOUR TEACHER</b>. Keep this page open until the green box \
-             says it arrived.</li></ol>\n\
-             <form method=\"post\" action=\"/handin\" enctype=\"multipart/form-data\" id=\"handin\">\
+            "<h2>{section}. {}</h2>\n<ol class=steps><li>{}</li><li>{}</li><li>{}</li></ol>\n\
+             <form method=\"post\" action=\"/handin\" enctype=\"multipart/form-data\" id=\"handin\" \
+             data-choose=\"{}\" data-sending=\"{}\" data-progress=\"{}\" data-send=\"{}\" data-lost=\"{}\">\
              <input type=\"hidden\" name=\"token\" value=\"{token}\">\
              <input type=\"file\" name=\"work\" id=\"pick\" multiple><br>\
-             <div id=\"chosen\"></div>\
-             <small>You can pick more than one, and pick again to add more.</small><br>\
-             <button type=\"submit\" id=\"sendbtn\">SEND IT TO YOUR TEACHER</button>\
-             <button type=\"reset\" class=\"again\">START AGAIN</button>\
-             <div id=\"sendmsg\" class=\"bad\" style=\"display:none\"></div></form>\n"
+             <div id=\"chosen\" data-remove=\"{}\" data-one=\"{}\" data-many=\"{}\"></div>\
+             <small>{}</small><br>\
+             <button type=\"submit\" id=\"sendbtn\">{}</button>\
+             <button type=\"reset\" class=\"again\">{}</button>\
+             <div id=\"sendmsg\" class=\"bad\" style=\"display:none\"></div></form>\n",
+            t(l, "Send your work to your teacher"),
+            t(l, "Tap <b>Choose files</b> below (some phones say <b>Browse</b>) and pick your work: a photo of your page, a document, a drawing."),
+            t(l, "Check the list. Picked the wrong one? Tap <b>REMOVE</b> next to it."),
+            t(l, "Tap <b>SEND IT TO YOUR TEACHER</b>. Keep this page open until the green box says it arrived."),
+            attr(t(l, "Choose your work first: tap the Choose files button above and pick a file.")),
+            attr(t(l, "SENDING... KEEP THIS PAGE OPEN")),
+            attr(t(l, "SENDING... {n}% - KEEP THIS PAGE OPEN")),
+            attr(t(l, "SEND IT TO YOUR TEACHER")),
+            attr(t(l, "It did not arrive. Check that this phone is still joined to the class wifi, then tap SEND IT TO YOUR TEACHER again.")),
+            attr(t(l, "REMOVE")),
+            attr(t(l, "1 file will be sent.")),
+            attr(t(l, "{n} files will be sent.")),
+            t(l, "You can pick more than one, and pick again to add more."),
+            t(l, "SEND IT TO YOUR TEACHER"),
+            t(l, "START AGAIN")
         ));
         section += 1;
         // A chosen file could not be taken back. The browser's own file
@@ -351,23 +408,22 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, 
         //
         // Folded away under the symptom itself since 2026-09-24. Shown open,
         // it told every child in an ordinary browser "you are in the wifi
-        // sign-in window", which is false in any ordinary browser; the page cannot
-        // tell the two apart reliably, the child can: Choose files did nothing.
+        // sign-in window", which is false in any ordinary browser; the page
+        // cannot tell the two apart reliably, the child can: Choose files did
+        // nothing.
         let bare = here.split(':').next().unwrap_or(here);
         s.push_str(&format!(
-            "<details class=escape><summary>Tapping Choose files does nothing?</summary>\
-             Then this page is open in the small wifi sign-in window some phones use. \
-             That window can show and download files, but it cannot send them. Open the \
-             page in your normal browser instead; you stay on the class wifi.<br>\
+            "<details class=escape><summary>{}</summary>{}<br>\
              <a class=\"btn escapebtn\" \
-             href=\"intent://{bare}/#Intent;scheme=http;action=android.intent.action.VIEW;end\">\
-             OPEN THIS IN MY BROWSER</a>\
-             <a class=\"btn escapealt\" href=\"http://{}/\">or tap here</a>\
-             <br><small>If neither opens your browser: tap the three dots at \
-             the top of this window and choose \"Open in browser\" or \"Use \
-             this network as is\".</small>\
-             </details>\n",
+             href=\"intent://{bare}/#Intent;scheme=http;action=android.intent.action.VIEW;end\">{}</a>\
+             <a class=\"btn escapealt\" href=\"http://{}/\">{}</a>\
+             <br><small>{}</small></details>\n",
+            t(l, "Tapping Choose files does nothing?"),
+            t(l, "Then this page is open in the small wifi sign-in window some phones use. That window can show and download files, but it cannot send them. Open the page in your normal browser instead; you stay on the class wifi."),
+            t(l, "OPEN THIS IN MY BROWSER"),
             html_escape(here),
+            t(l, "or tap here"),
+            t(l, "If neither opens your browser: tap the three dots at the top of this window and choose \"Open in browser\" or \"Use this network as is\"."),
             bare = html_escape(bare)
         ));
     }
@@ -376,42 +432,65 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, 
     s.push_str(&talk_section(peer_ip, section));
     section += 1;
     s.push_str(&help_door(peer_ip, section));
-    s.push_str(
-        "<p class=small>This page comes from your teacher's laptop through the class wifi, \
-         and works with no internet. If it stops working, check that your phone is still \
-         joined to the class wifi, then reload the page.</p>\n",
-    );
+    s.push_str(&format!(
+        "<p class=small>{}</p>\n",
+        t(l, "This page comes from your teacher's laptop through the class wifi, and works with no internet. If it stops working, check that your phone is still joined to the class wifi, then reload the page.")
+    ));
+    s.push_str(&lang_picker(l, ""));
     let _ = root;
     s.push_str("</body></html>\n");
     s
 }
 
+/// A translated sentence inside an HTML attribute.
+fn attr(s: &str) -> String {
+    s.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
 // ---------------------------------------------------------------- talking
+
+/// What a one-tap message says, in the child's language.
+fn describe_for_child(m: &crate::chat::Msg, l: &str) -> String {
+    use crate::chat::Kind;
+    match m.kind {
+        Kind::Text => m.text.clone(),
+        Kind::NeedToTalk => t(l, "I NEED TO TALK TO SOMEONE (one tap)").into(),
+        Kind::AdultAsks => t(l, "I would like to talk to you. Is that all right?").into(),
+        Kind::AnswerYes => t(l, "Yes, I want to talk.").into(),
+        Kind::AnswerLater => t(l, "Later, not now.").into(),
+        Kind::AnswerNo => t(l, "No, thank you.").into(),
+    }
+}
 
 /// The conversation, as HTML, for the page and for each poll. `private`
 /// picks the help conversation instead of the ordinary one.
 pub fn talk_fragment(key: &str, private: bool) -> String {
+    let l = lang_of_key(key);
+    let l = l.as_str();
     let msgs = crate::chat::thread(key, private);
     let mut s = String::new();
     if msgs.is_empty() {
-        s.push_str(if private {
-            "<p class=small>Nothing here yet. Only you and the trusted adult can see this.</p>"
-        } else {
-            "<p class=small>No messages yet. Write to your teacher below.</p>"
-        });
+        s.push_str(&format!(
+            "<p class=small>{}</p>",
+            if private {
+                t(l, "Nothing here yet. Only you and the trusted adult can see this.")
+            } else {
+                t(l, "No messages yet. Write to your teacher below.")
+            }
+        ));
     }
-    let adult = if private { "Trusted adult" } else { "Teacher" };
+    let adult = if private { t(l, "Trusted adult") } else { t(l, "Teacher") };
     for m in &msgs {
-        let (class, who) = if m.from_child { ("me", "You") } else { ("them", adult) };
+        let (class, who) = if m.from_child { ("me", t(l, "You")) } else { ("them", adult) };
         let seen = if m.from_child && m.seen {
-            if private { " &middot; read" } else { " &middot; seen by your teacher" }
+            format!(" &middot; {}", if private { t(l, "read") } else { t(l, "seen by your teacher") })
         } else {
-            ""
+            String::new()
         };
         s.push_str(&format!(
             "<div class=\"msg {class}\"><span class=who>{who} &middot; {}{seen}</span><br>{}</div>",
             html_escape(&m.at),
-            html_escape(&crate::chat::describe(m))
+            html_escape(&describe_for_child(m, l))
         ));
     }
     // The adult's quiet request, answered with one tap. Last, beside the
@@ -420,12 +499,13 @@ pub fn talk_fragment(key: &str, private: bool) -> String {
     // the fragment, so a request that arrives while the page is open appears
     // by itself.
     if private && crate::chat::open_request(key) {
-        let t = fresh_token();
+        let tk = fresh_token();
         s.push_str(&format!(
-            "<div class=ask><b>A trusted adult would like to talk to you.</b> Is that all right?              Only they will see your answer.<br>{}{}{}</div>",
-            answer_form(&format!("{t}a"), "yes", "YES", ""),
-            answer_form(&format!("{t}b"), "later", "LATER", " class=no"),
-            answer_form(&format!("{t}c"), "no", "NO", " class=no"),
+            "<div class=ask>{}<br>{}{}{}</div>",
+            t(l, "<b>A trusted adult would like to talk to you.</b> Is that all right? Only they will see your answer."),
+            answer_form(&format!("{tk}a"), "yes", t(l, "YES"), ""),
+            answer_form(&format!("{tk}b"), "later", t(l, "LATER"), " class=no"),
+            answer_form(&format!("{tk}c"), "no", t(l, "NO"), " class=no"),
         ));
     }
     s
@@ -445,28 +525,44 @@ fn answer_form(token: &str, kind: &str, label: &str, class: &str) -> String {
 /// pocket costs nothing. One listener for every send form, so the answer
 /// buttons work even when they arrived after the page loaded. A new token per
 /// send, so the server's retry protection does not swallow the next message.
-/// Without script, the forms post normally and the page reloads.
-const TALK_SCRIPT: &str = r#"<script>(function(){var box=document.getElementById('thread');if(!box||!window.XMLHttpRequest||!document.addEventListener)return;var v=+box.getAttribute('data-v'),p=box.getAttribute('data-p');function down(){box.scrollTop=box.scrollHeight;}down();function say(id,t){var m=document.getElementById(id);if(m){if(t){m.textContent=t;m.style.display='block';}else{m.style.display='none';}}}function poll(){if(document.hidden)return;var x=new XMLHttpRequest();x.open('GET','/talk?p='+p+'&v='+v+'&r='+Math.random());x.onload=function(){if(x.status==200){var t=x.responseText,i=t.indexOf('\n');v=+t.slice(0,i);box.innerHTML=t.slice(i+1);down();}};x.send();}setInterval(poll,4000);document.addEventListener('submit',function(e){var f=e.target;if(!f||!/(^| )talk( |$)/.test(f.className))return;var ta=f.elements['text'],k=f.elements['kind'].value;e.preventDefault();if(k=='text'&&(!ta||!ta.value.replace(/\s/g,''))){say('talkmsg','Nothing was sent: write something first.');return;}f.elements['token'].value=Math.random().toString(36).slice(2);var body=[];for(var j=0;j<f.elements.length;j++){var el=f.elements[j];if(el.name)body.push(encodeURIComponent(el.name)+'='+encodeURIComponent(el.value));}var b=f.getElementsByTagName('button')[0];b.disabled=true;var x=new XMLHttpRequest();x.open('POST','/talk');x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');x.setRequestHeader('X-Hub','1');x.onload=function(){b.disabled=false;if(x.responseText=='sent'){if(ta)ta.value='';say('talkmsg','');if(k=='need')say('talkok','Sent. A trusted adult will find a safe moment to talk to you.');poll();}else{say('talkmsg',x.responseText=='toofast'?'That was a lot of messages. Wait one minute, then send again.':'Nothing was sent: write something first.');}};x.onerror=function(){b.disabled=false;say('talkmsg','It did not arrive. Check that this phone is still on the class wifi, then send again.');};x.send(body.join('&'));},false);})();</script>
+/// Its words come from data- attributes, in the child's language. Without
+/// script, the forms post normally and the page reloads.
+const TALK_SCRIPT: &str = r#"<script>(function(){var box=document.getElementById('thread');if(!box||!window.XMLHttpRequest||!document.addEventListener)return;var v=+box.getAttribute('data-v'),p=box.getAttribute('data-p');function down(){box.scrollTop=box.scrollHeight;}down();function word(id,n){var m=document.getElementById(id);return m?m.getAttribute('data-'+n):'';}function say(id,t){var m=document.getElementById(id);if(m){if(t){m.textContent=t;m.style.display='block';}else{m.style.display='none';}}}function poll(){if(document.hidden)return;var x=new XMLHttpRequest();x.open('GET','/talk?p='+p+'&v='+v+'&r='+Math.random());x.onload=function(){if(x.status==200){var t=x.responseText,i=t.indexOf('\n');v=+t.slice(0,i);box.innerHTML=t.slice(i+1);down();}};x.send();}setInterval(poll,4000);document.addEventListener('submit',function(e){var f=e.target;if(!f||!/(^| )talk( |$)/.test(f.className))return;var ta=f.elements['text'],k=f.elements['kind'].value;e.preventDefault();if(k=='text'&&(!ta||!ta.value.replace(/\s/g,''))){say('talkmsg',word('talkmsg','empty'));return;}f.elements['token'].value=Math.random().toString(36).slice(2);var body=[];for(var j=0;j<f.elements.length;j++){var el=f.elements[j];if(el.name)body.push(encodeURIComponent(el.name)+'='+encodeURIComponent(el.value));}var b=f.getElementsByTagName('button')[0];b.disabled=true;var x=new XMLHttpRequest();x.open('POST','/talk');x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');x.setRequestHeader('X-Hub','1');x.onload=function(){b.disabled=false;if(x.responseText=='sent'){if(ta)ta.value='';say('talkmsg','');if(k=='need')say('talkok',word('talkok','sent'));poll();}else{say('talkmsg',word('talkmsg',x.responseText=='toofast'?'fast':'empty'));}};x.onerror=function(){b.disabled=false;say('talkmsg',word('talkmsg','lost'));};x.send(body.join('&'));},false);})();</script>
 "#;
+
+/// The line under a conversation that the script fills with what went wrong,
+/// carrying its possible sentences in the child's language.
+fn talk_msg_line(l: &str) -> String {
+    format!(
+        "<div id=talkmsg class=bad style=\"display:none\" data-empty=\"{}\" data-fast=\"{}\" data-lost=\"{}\"></div>\n",
+        attr(t(l, "Nothing was sent: write something first.")),
+        attr(t(l, "That was a lot of messages. Wait one minute, then send again.")),
+        attr(t(l, "It did not arrive. Check that this phone is still on the class wifi, then send again."))
+    )
+}
 
 /// The ordinary conversation, as the class page's third part.
 pub fn talk_section(peer_ip: &str, section: usize) -> String {
     let key = crate::serve::device_key(peer_ip);
+    let l = lang_of_key(&key);
+    let l = l.as_str();
     crate::chat::child_saw(&key, false);
     let v = crate::chat::version(&key, false);
     format!(
-        "<h2 id=talk>{section}. Talk to your teacher</h2>\n\
-         <p class=hint>Write a question or a message. Your teacher reads it on the laptop and \
-         can answer you here. New answers appear by themselves.</p>\n\
+        "<h2 id=talk>{section}. {}</h2>\n<p class=hint>{}</p>\n\
          <div id=thread class=thread data-v=\"{v}\" data-p=\"0\">{}</div>\n\
          <form method=\"post\" action=\"/talk\" class=talk>\
          <input type=\"hidden\" name=\"token\" value=\"{}\">\
          <input type=\"hidden\" name=\"kind\" value=\"text\"><input type=\"hidden\" name=\"p\" value=\"0\">\
-         <textarea name=\"text\" autocomplete=\"off\" placeholder=\"Type your message here\"></textarea><br>\
-         <button type=\"submit\">SEND</button></form>\n\
-         <div id=talkmsg class=bad style=\"display:none\"></div>\n{TALK_SCRIPT}",
+         <textarea name=\"text\" autocomplete=\"off\" placeholder=\"{}\"></textarea><br>\
+         <button type=\"submit\">{}</button></form>\n{}{TALK_SCRIPT}",
+        t(l, "Talk to your teacher"),
+        t(l, "Write a question or a message. Your teacher reads it on the laptop and can answer you here. New answers appear by themselves."),
         talk_fragment(&key, false),
-        fresh_token()
+        fresh_token(),
+        attr(t(l, "Type your message here")),
+        t(l, "SEND"),
+        talk_msg_line(l)
     )
 }
 
@@ -478,14 +574,16 @@ pub fn help_door(peer_ip: &str, section: usize) -> String {
         return String::new();
     }
     let key = crate::serve::device_key(peer_ip);
+    let l = lang_of_key(&key);
+    let l = l.as_str();
     let waiting = crate::chat::waiting_for_child(&key, true) > 0 || crate::chat::open_request(&key);
     let dot = if waiting { " &#9679;" } else { "" };
+    let word = help_word(l);
     format!(
-        "<h2>{section}. HELP</h2>\n\
-         <p class=hint>If something is wrong and you do not want to say it in front of others, \
-         you can talk privately to a trusted adult. Nobody else sees it.</p>\n\
+        "<h2>{section}. {word}</h2>\n<p class=hint>{}</p>\n\
          <a class=\"btn helpbtn\" href=\"/page2\" onclick=\"location.replace('/page2');return false;\">\
-         &#9995; HELP{dot}</a>\n"
+         &#9995; {word}{dot}</a>\n",
+        t(l, "If something is wrong and you do not want to say it in front of others, you can talk privately to a trusted adult. Nobody else sees it.")
     )
 }
 
@@ -495,52 +593,63 @@ pub fn help_door(peer_ip: &str, section: usize) -> String {
 /// class page without leaving a step to go back to.
 pub fn help_page(peer_ip: &str) -> String {
     let key = crate::serve::device_key(peer_ip);
+    let l = lang_of_key(&key);
+    let l = l.as_str();
     crate::chat::child_saw(&key, true);
     let v = crate::chat::version(&key, true);
     let mut s = String::with_capacity(8192);
-    s.push_str(
-        "<!doctype html><html><head><meta charset=\"utf-8\">\
+    s.push_str("<!doctype html>");
+    s.push_str(&crate::i18n::html_open(l));
+    s.push_str(&format!(
+        "<head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
          <meta name=\"referrer\" content=\"no-referrer\">\
-         <title>Class page</title><style>\
-         body{font-family:sans-serif;margin:0;padding:12px;background:#fff;color:#111;max-width:620px;line-height:1.4}\
-         h1{font-size:1.3em;margin:4px 0 8px}\
-         .hide{position:sticky;top:0;display:block;background:#555;color:#fff;text-align:center;\
-         padding:12px;font-size:1.1em;border-radius:6px;text-decoration:none;margin:0 0 12px}\
-         .hint{color:#333}.small{font-size:.9em;color:#555}\
-         button{background:#1a6b1a;color:#fff;border:0;border-radius:6px;padding:12px 20px;font-size:1.05em;margin:4px 8px 4px 0}\
-         button.need{background:#28527a;font-size:1.2em;width:100%;padding:18px}\
-         button.no{background:#555}\
-         textarea{width:100%;box-sizing:border-box;height:5em;font-size:1em;margin:6px 0}\
-         .thread{border:1px solid #ddd;border-radius:6px;padding:8px;max-height:45vh;overflow-y:auto;margin:8px 0}\
-         .msg{margin:6px 0;padding:8px;border-radius:8px;white-space:pre-wrap;word-break:break-word}\
-         .me{background:#e8f0fe;margin-left:15%}.them{background:#eef7ee;margin-right:15%}\
-         .who{font-size:.8em;color:#555}\
-         .ask{background:#fff8d6;border:2px solid #d9c65a;padding:10px;margin:10px 0}\
-         .bad{background:#fdecea;border:2px solid #c0392b;padding:10px;margin:10px 0}\
-         .ok{background:#e2f7e2;border:2px solid #58a758;padding:10px;margin:10px 0}\
+         <title>{}</title><style>\
+         body{{font-family:sans-serif;margin:0;padding:12px;background:#fff;color:#111;max-width:620px;line-height:1.4}}\
+         h1{{font-size:1.3em;margin:4px 0 8px}}\
+         .hide{{position:sticky;top:0;display:block;background:#555;color:#fff;text-align:center;\
+         padding:12px;font-size:1.1em;border-radius:6px;text-decoration:none;margin:0 0 12px}}\
+         .hint{{color:#333}}.small{{font-size:.9em;color:#555}}\
+         button{{background:#1a6b1a;color:#fff;border:0;border-radius:6px;padding:12px 20px;font-size:1.05em;margin:4px 8px 4px 0}}\
+         button.need{{background:#28527a;font-size:1.2em;width:100%;padding:18px}}\
+         button.no{{background:#555}}\
+         textarea{{width:100%;box-sizing:border-box;height:5em;font-size:1em;margin:6px 0}}\
+         .thread{{border:1px solid #ddd;border-radius:6px;padding:8px;max-height:45vh;overflow-y:auto;margin:8px 0}}\
+         .msg{{margin:6px 0;padding:8px;border-radius:8px;white-space:pre-wrap;word-break:break-word}}\
+         .me{{background:#e8f0fe;margin-inline-start:15%}}.them{{background:#eef7ee;margin-inline-end:15%}}\
+         .who{{font-size:.8em;color:#555}}\
+         .ask{{background:#fff8d6;border:2px solid #d9c65a;padding:10px;margin:10px 0}}\
+         .bad{{background:#fdecea;border:2px solid #c0392b;padding:10px;margin:10px 0}}\
+         .ok{{background:#e2f7e2;border:2px solid #58a758;padding:10px;margin:10px 0}}\
          </style></head><body>\n\
-         <a class=hide href=\"/\" onclick=\"location.replace('/');return false;\">&#8592; HIDE THIS (back to the files)</a>\n\
-         <h1>Talk privately</h1>\n\
-         <p class=hint>Only you and a trusted adult see this. Your teacher's screen does not show \
-         what you write. Nothing is kept on this phone: when you press HIDE, it is gone from here.</p>\n",
-    );
+         <a class=hide href=\"/\" onclick=\"location.replace('/');return false;\">{} {}</a>\n\
+         <h1>{}</h1>\n<p class=hint>{}</p>\n",
+        t(l, "Class page"),
+        if crate::i18n::rtl(l) { "&#8594;" } else { "&#8592;" },
+        t(l, "HIDE THIS (back to the files)"),
+        t(l, "Talk privately"),
+        t(l, "Only you and a trusted adult see this. Your teacher's screen does not show what you write. Nothing is kept on this phone: when you press HIDE, it is gone from here.")
+    ));
     let t1 = fresh_token();
     let t2 = fresh_token();
     s.push_str(&format!(
         "<form method=post action=\"/talk\" class=talk><input type=hidden name=token value=\"{t1}\">\
          <input type=hidden name=kind value=need><input type=hidden name=p value=1>\
-         <button type=submit class=need>&#9995; I NEED TO TALK TO SOMEONE</button></form>\n\
-         <p class=small>One tap is enough. You do not have to write anything. The trusted adult \
-         will find a safe moment to talk to you.</p>\n\
-         <div id=talkok class=ok style=\"display:none\"></div>\n\
+         <button type=submit class=need>&#9995; {}</button></form>\n\
+         <p class=small>{}</p>\n\
+         <div id=talkok class=ok style=\"display:none\" data-sent=\"{}\"></div>\n\
          <div id=thread class=thread data-v=\"{v}\" data-p=\"1\">{}</div>\n\
          <form method=post action=\"/talk\" class=talk><input type=hidden name=token value=\"{t2}\">\
          <input type=hidden name=kind value=text><input type=hidden name=p value=1>\
-         <textarea name=text autocomplete=off placeholder=\"Or write here, if you want to\"></textarea><br>\
-         <button type=submit>SEND PRIVATELY</button></form>\n\
-         <div id=talkmsg class=bad style=\"display:none\"></div>\n",
-        talk_fragment(&key, true)
+         <textarea name=text autocomplete=off placeholder=\"{}\"></textarea><br>\
+         <button type=submit>{}</button></form>\n{}",
+        t(l, "I NEED TO TALK TO SOMEONE"),
+        t(l, "One tap is enough. You do not have to write anything. The trusted adult will find a safe moment to talk to you."),
+        attr(t(l, "Sent. A trusted adult will find a safe moment to talk to you.")),
+        talk_fragment(&key, true),
+        attr(t(l, "Or write here, if you want to")),
+        t(l, "SEND PRIVATELY"),
+        talk_msg_line(l)
     ));
     s.push_str(TALK_SCRIPT);
     s.push_str("</body></html>\n");
@@ -599,28 +708,34 @@ pub fn take_talk(peer_ip: &str, body: &str, root: &Path) -> &'static str {
 /// The refreshing file list inside the iframe. Big buttons, two verbs:
 /// READ or PLAY opens the file right now in the browser (the video streams,
 /// because byte ranges are already there for resume); GET IT keeps a copy in
-/// the phone's Downloads.
-pub fn files_frame(root: &Path) -> String {
+/// the phone's Downloads. In the child's language.
+pub fn files_frame(root: &Path, l: &str) -> String {
     let mut s = String::with_capacity(2048);
+    s.push_str("<!doctype html>");
+    s.push_str(&crate::i18n::html_open(l));
     s.push_str(
-        "<!doctype html><html><head><meta charset=\"utf-8\">\
+        "<head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
          <meta http-equiv=\"refresh\" content=\"10\">\
          <style>body{font-family:sans-serif;margin:0;color:#111}\
          .file{margin:0 0 16px 0}.name{font-size:1.1em;word-break:break-all}\
-         .size{color:#666;font-size:.9em;margin-left:6px}\
+         .size{color:#666;font-size:.9em;margin:0 6px}\
          a.btn{display:inline-block;background:#1a6b1a;color:#fff;border-radius:6px;\
          padding:12px 20px;font-size:1.05em;text-decoration:none;margin:4px 8px 0 0}\
          a.read{background:#28527a}</style></head><body>\n",
     );
     if !root.exists() {
-        s.push_str("<p><b>The folder cannot be reached right now.</b> \
-                    If the files live on a USB drive, it may have been unplugged. Tell your teacher.</p>\n");
+        s.push_str(&format!(
+            "<p>{}</p>\n",
+            t(l, "<b>The folder cannot be reached right now.</b> If the files live on a USB drive, it may have been unplugged. Tell your teacher.")
+        ));
     }
     let files = serve::visible_files(root);
     if files.is_empty() && root.exists() {
-        s.push_str("<p>Your teacher is not sharing any files yet. Just wait: this list \
-                    checks again every 10 seconds by itself.</p>\n");
+        s.push_str(&format!(
+            "<p>{}</p>\n",
+            t(l, "Your teacher is not sharing any files yet. Just wait: this list checks again every 10 seconds by itself.")
+        ));
     }
     // The one button a browser CAN take a whole folder with. A browser
     // downloads exactly one thing per click, so the folder has to become one
@@ -630,9 +745,10 @@ pub fn files_frame(root: &Path) -> String {
     if files.len() > 1 {
         let bytes: u64 = files.iter().map(|(_, b)| b).sum();
         s.push_str(&format!(
-            "<div class=file><a class=btn href=\"/everything.zip\"              style=\"background:#7a2882\">GET EVERYTHING              ({} files, {})</a><br><span class=size>All the files in one download. A computer opens it              like a folder; on a phone, open it from the Files app. Keep the              phone or computer on until it has finished.</span></div>\n",
-            files.len(),
-            human(bytes)
+            "<div class=file><a class=btn href=\"/everything.zip\" style=\"background:#7a2882\">{}</a><br>\
+             <span class=size>{}</span></div>\n",
+            tf(l, "GET EVERYTHING ({n} files, {size})", &[("n", &files.len().to_string()), ("size", &human(bytes))]),
+            t(l, "All the files in one download. A computer opens it like a folder; on a phone, open it from the Files app. Keep the phone or computer on until it has finished.")
         ));
     }
     // A phone has to render this, and a child has to scroll it with a thumb.
@@ -642,34 +758,27 @@ pub fn files_frame(root: &Path) -> String {
     const ON_PAGE: usize = 300;
     let total = files.len();
     let shown = total.min(ON_PAGE);
+    let (read, play, get) = (t(l, "READ"), t(l, "PLAY"), t(l, "GET IT"));
     for (name, size) in files.into_iter().take(ON_PAGE) {
         let esc = html_escape(&name);
         let url = urlencode(&name);
         s.push_str(&format!("<div class=file><span class=name>{esc}</span><span class=size>{}</span><br>", human(size)));
         if openable(&name) {
-            let verb = if is_media(&name) { "PLAY" } else { "READ" };
+            let verb = if is_media(&name) { play } else { read };
             s.push_str(&format!("<a class=\"btn read\" href=\"/view/{url}\">{verb}</a>"));
         }
-        s.push_str(&format!("<a class=btn href=\"/{url}?dl=1\">GET IT</a></div>\n"));
+        s.push_str(&format!("<a class=btn href=\"/{url}?dl=1\">{get}</a></div>\n"));
     }
     if total > shown {
         s.push_str(&format!(
-            "<p><b>{} more files are being handed out than fit on this page.</b><br>\
-             The GET EVERYTHING button at the top has all of them.</p>\n",
-            total - shown
+            "<p>{}</p>\n",
+            tf(l, "<b>{n} more files are being handed out than fit on this page.</b><br>The GET EVERYTHING button at the top has all of them.", &[("n", &(total - shown).to_string())])
         ));
     }
     s.push_str("</body></html>\n");
     s
 }
 
-/// The viewer: the file, wrapped in a page whose first element is the way
-/// back.
-///
-/// Found on a real phone 2026-08-25: READ opened the bare file, which is
-/// correct in a browser with a back button and a trap inside a captive
-/// sign-in sheet, which has none. The owner's words: "I am forever stuck on
-/// that page viewing it." A viewer page costs nothing and has a door.
 /// What a paused device sees, and the only thing it can reach.
 ///
 /// A dead end on purpose: no form, no button, nothing to press. Every escape
@@ -680,33 +789,41 @@ pub fn files_frame(root: &Path) -> String {
 /// from the child. They will have put the phone down; the phone comes back on
 /// its own. The whole design assumes the person holding it does not know how
 /// to help, and should not have to.
-pub fn paused_page() -> String {
-    String::from(
-        "<!doctype html><html><head><meta charset=\"utf-8\">\
+pub fn paused_page(l: &str) -> String {
+    format!(
+        "<!doctype html>{}<head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
          <meta http-equiv=\"refresh\" content=\"15\">\
-         <title>Paused</title><style>\
-         body{font-family:sans-serif;margin:0;padding:24px;background:#fff;color:#111;max-width:620px}\
-         h1{font-size:1.4em}\
-         .box{background:#fdecea;border:2px solid #c0392b;padding:14px;font-size:1.15em;margin:14px 0}\
-         p{font-size:1.05em;line-height:1.5}\
-         </style></head><body>\n\
-         <h1>Paused</h1>\n\
-         <div class=box>Your teacher has paused this device.</div>\n\
-         <p>You cannot get the class files or hand anything in right now.\
-         Nothing you send will arrive.</p>\n\
-         <p>Speak to your teacher. When they let you back in, this page comes\
-         back by itself. You do not need to do anything.</p>\n\
-         </body></html>\n",
+         <title>{}</title><style>\
+         body{{font-family:sans-serif;margin:0;padding:24px;background:#fff;color:#111;max-width:620px}}\
+         h1{{font-size:1.4em}}\
+         .box{{background:#fdecea;border:2px solid #c0392b;padding:14px;font-size:1.15em;margin:14px 0}}\
+         p{{font-size:1.05em;line-height:1.5}}\
+         </style></head><body>\n<h1>{}</h1>\n<div class=box>{}</div>\n<p>{}</p>\n<p>{}</p>\n</body></html>\n",
+        crate::i18n::html_open(l),
+        t(l, "Paused"),
+        t(l, "Paused"),
+        t(l, "Your teacher has paused this device."),
+        t(l, "You cannot get the class files or hand anything in right now. Nothing you send will arrive."),
+        t(l, "Speak to your teacher. When they let you back in, this page comes back by itself. You do not need to do anything.")
     )
 }
 
-pub fn view_page(name: &str) -> String {
+/// The viewer: the file, wrapped in a page whose first element is the way
+/// back.
+///
+/// Found on a real phone 2026-08-25: READ opened the bare file, which is
+/// correct in a browser with a back button and a trap inside a captive
+/// sign-in sheet, which has none. The owner's words: "I am forever stuck on
+/// that page viewing it." A viewer page costs nothing and has a door.
+pub fn view_page(name: &str, l: &str) -> String {
     let esc = html_escape(name);
     let url = urlencode(name);
     let mut s = String::with_capacity(1024);
+    s.push_str("<!doctype html>");
+    s.push_str(&crate::i18n::html_open(l));
     s.push_str(
-        "<!doctype html><html><head><meta charset=\"utf-8\">\
+        "<head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
          <style>body{font-family:sans-serif;margin:0;background:#222;color:#eee}\
          .bar{position:sticky;top:0;background:#1a6b1a;padding:10px}\
@@ -717,7 +834,9 @@ pub fn view_page(name: &str) -> String {
          audio{width:100%;margin:20px 0}</style></head><body>\n",
     );
     s.push_str(&format!(
-        "<div class=bar><a href=\"/\">&#8592; BACK TO THE FILES</a></div><div class=name>{esc}</div>\n"
+        "<div class=bar><a href=\"/\">{} {}</a></div><div class=name>{esc}</div>\n",
+        if crate::i18n::rtl(l) { "&#8594;" } else { "&#8592;" },
+        t(l, "BACK TO THE FILES")
     ));
     match ext(name).as_str() {
         "jpg" | "jpeg" | "png" | "gif" | "webp" => {

@@ -36,6 +36,7 @@ mod chat;
 mod record;
 mod crypto;
 mod adult;
+mod i18n;
 
 const USAGE: &str = "\
 Gorilla Portable Network Hub

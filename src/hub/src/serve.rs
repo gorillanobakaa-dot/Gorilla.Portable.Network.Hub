@@ -1594,7 +1594,7 @@ fn serve_one(
         if method == "GET" && path_only == "/talk" {
             return respond(&mut out, 204, "text/plain", b"").map(|_| keep);
         }
-        let page = crate::page::paused_page();
+        let page = crate::page::paused_page(&crate::page::lang_of(&peer_ip));
         respond_fresh(&mut out, "text/html; charset=utf-8", page.as_bytes())?;
         return Ok(false);
     }
@@ -1681,6 +1681,10 @@ fn serve_one(
             return respond(&mut out, 200, "text/plain; charset=utf-8", crate::page::sender().as_bytes()).map(|_| keep);
         }
         mark_page_seen(&peer_ip);
+        // The child chose a language (i18n.rs); kept for this device.
+        if let Some(code) = query.split('&').find_map(|p| p.strip_prefix("lang=")) {
+            crate::page::set_lang(&peer_ip, code);
+        }
         let done = query.strip_prefix("done=");
         // The address the class was told to use, taken from the socket this
         // request actually arrived on, so the escape hatch never prints a
@@ -1780,7 +1784,7 @@ fn serve_one(
     }
     if path_only == "/files" {
         mark_page_seen(&peer_ip);
-        return respond_fresh(&mut out, "text/html; charset=utf-8", crate::page::files_frame(root).as_bytes()).map(|_| keep);
+        return respond_fresh(&mut out, "text/html; charset=utf-8", crate::page::files_frame(root, &crate::page::lang_of(&peer_ip)).as_bytes()).map(|_| keep);
     }
     // The viewer: the same file the READ button used to open bare, wrapped in
     // a page that keeps a way BACK. Inside a sign-in sheet there is no back
@@ -1790,7 +1794,7 @@ fn serve_one(
         let inside = safe_join(root, &name).map(|p| p.is_file()).unwrap_or(false);
         if inside && is_allowed(&name) {
             return respond_fresh(&mut out, "text/html; charset=utf-8",
-                crate::page::view_page(&name).as_bytes()).map(|_| keep);
+                crate::page::view_page(&name, &crate::page::lang_of(&peer_ip)).as_bytes()).map(|_| keep);
         }
         return respond(&mut out, 404, "text/plain", b"not found").map(|_| keep);
     }

@@ -55,7 +55,9 @@ def main() -> int:
         child = browser.new_context(**PHONE).new_page()
         adult = browser.new_context(**PHONE).new_page()
 
-        child.goto(a.url + "/?rename=1")
+        # English explicitly: every session here shares 127.0.0.1, so a language
+        # chosen by an earlier run would otherwise carry over.
+        child.goto(a.url + "/?lang=en&rename=1")
         child.fill("input[name=who]", "Amina")
         child.click("text=THAT'S ME")
         child.wait_for_load_state()
