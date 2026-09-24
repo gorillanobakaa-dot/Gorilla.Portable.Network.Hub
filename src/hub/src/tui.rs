@@ -538,6 +538,11 @@ impl App {
         if self.hotspot.is_some() {
             self.refresh_joined();
         }
+        // A message's scroll position, kept inside the text for this window.
+        if let Screen::Note(text) = &self.screen {
+            let max = note_lines(text, cols).len().saturating_sub(Self::note_room(rows));
+            self.row = self.row.min(max);
+        }
         let mut f = Frame::new(rows, cols);
         match self.screen {
             Screen::Home => self.draw_home(&mut f),
@@ -2085,18 +2090,33 @@ impl App {
         self.hints(f, "  q or esc to stop    it will carry on from here next time");
     }
 
+    /// A message screen scrolls. It did not: a message taller than the window
+    /// was cut off at the bottom, and the line saying how to leave went with
+    /// it. The help page behind h (0.9.10) is about thirty lines, which is
+    /// more than a small window has. self.row is the first line shown,
+    /// clamped in draw() where the window's size is known.
+    fn note_room(rows: usize) -> usize {
+        // Title and its blank (2), the "more below" line and the hint row.
+        rows.saturating_sub(4).max(1)
+    }
+
     fn draw_note(&self, f: &mut Frame) {
         let Screen::Note(text) = &self.screen else { return };
         self.title(f, "");
-        for line in text.lines() {
-            // Wrap by words at the frame width rather than letting the terminal
-            // wrap mid-word, which would also push the hint line off the
-            // bottom and make the screen look broken.
-            for chunk in wrap(line, f.cols.saturating_sub(4)) {
-                f.push(&format!("  {chunk}"));
-            }
+        let lines = note_lines(text, f.cols);
+        let room = Self::note_room(f.rows);
+        let start = self.row.min(lines.len().saturating_sub(room));
+        for line in lines.iter().skip(start).take(room) {
+            f.push(line);
         }
-        self.hints(f, "  enter or esc to go back");
+        let long = lines.len() > room;
+        if long && start + room < lines.len() {
+            f.push_dim(&format!("  ...{} more lines below: press the down arrow", lines.len() - start - room));
+        }
+        self.hints(
+            f,
+            if long { "  up and down to read    enter or esc to go back" } else { "  enter or esc to go back" },
+        );
     }
 }
 
@@ -2124,6 +2144,16 @@ impl App {
             Screen::ReceiveFiles => self.files_key(k),
             Screen::Receiving => self.receiving_key(k),
             Screen::Note(_) => {
+                // Scrolling; draw() keeps the row inside the text.
+                match k {
+                    Key::Up => self.row = self.row.saturating_sub(1),
+                    Key::Down => self.row += 1,
+                    Key::PageUp => self.row = self.row.saturating_sub(10),
+                    Key::PageDown => self.row += 10,
+                    Key::Home => self.row = 0,
+                    Key::End => self.row = usize::MAX / 2,
+                    _ => {}
+                }
                 if matches!(k, Key::Enter | Key::Esc | Key::Char('q')) {
                     self.screen = std::mem::replace(&mut self.back, Screen::Home);
                     self.row = 0;
@@ -3970,6 +4000,19 @@ The page does not open by itself: scan code 2, or type the address.
 Choose files does nothing on a phone: that phone opened the page in its small sign-in window. The page tells them how to open it in the normal browser.
 The network went off: the hub switches it back on by itself within seconds, and says so on this screen.";
 
+/// A message, wrapped by words at the window's width and indented. Wrapping
+/// here rather than letting the terminal do it keeps words whole and keeps
+/// the hint line on the screen.
+fn note_lines(text: &str, cols: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        for chunk in wrap(line, cols.saturating_sub(4)) {
+            out.push(format!("  {chunk}"));
+        }
+    }
+    out
+}
+
 fn transfer_row(who: &str, t: &serve::Transfer) -> String {
     let pct = if t.total > 0 { t.done as f64 / t.total as f64 } else { 0.0 };
     // How long she has to wait, so she knows whether she can shut the lid.
@@ -4190,6 +4233,49 @@ mod tests {
             shown.contains(env!("CARGO_PKG_VERSION")),
             "the home screen does not name the version:\n{shown}"
         );
+    }
+
+    /// The help page is longer than a small window. Before 0.9.10 a message
+    /// that did not fit was cut off, and the line saying how to leave went
+    /// with it.
+    #[test]
+    fn a_long_message_scrolls_and_keeps_the_way_out() {
+        let mut app = App::new();
+        app.note(SENDING_HELP);
+        let mut f = crate::term::Frame::new(24, 80);
+        app.draw_note(&mut f);
+        let top = f.text();
+        assert!(top.contains("more lines below"), "must say there is more:\n{top}");
+        assert!(top.contains("enter or esc to go back"), "the way out must stay:\n{top}");
+        assert!(top.contains("HELP: HANDING OUT FILES"), "starts at the top:\n{top}");
+        app.row = 10_000;
+        let mut f = crate::term::Frame::new(24, 80);
+        app.draw_note(&mut f);
+        let end = f.text();
+        assert!(end.contains("says so on this screen"), "scrolled to the end shows the last line:\n{end}");
+        assert!(!end.contains("more lines below"), "nothing below the end:\n{end}");
+        assert!(end.contains("enter or esc to go back"));
+    }
+
+    /// 0.9.10 added explanation lines to the first screen and the start
+    /// screen. At 24 by 80, the smallest window this is meant for, every one
+    /// of them must still leave the key line at the bottom.
+    #[test]
+    fn the_new_explanations_fit_a_24_by_80_window() {
+        let mut app = App::new();
+        for row in 0..4 {
+            app.row = row;
+            let mut f = crate::term::Frame::new(24, 80);
+            app.draw_home(&mut f);
+            assert!(f.text().contains("enter to open"), "home row {row} lost its key line:\n{}", f.text());
+        }
+        let rows = app.send_fields().len() + 1;
+        for row in 0..rows {
+            app.row = row;
+            let mut f = crate::term::Frame::new(24, 80);
+            app.draw_send(&mut f);
+            assert!(f.text().contains("esc to go back"), "start screen row {row} lost its key line:\n{}", f.text());
+        }
     }
 
     fn switched_off_here() -> Vec<crate::services::Found> {

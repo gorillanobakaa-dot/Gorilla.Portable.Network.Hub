@@ -226,7 +226,8 @@ back when you stop.
 
 On this screen, **h** opens one page that explains every key, what the class
 does step by step, and what to do if something goes wrong. Enter brings you
-back.
+back. In a small window the page says *more lines below*: the down arrow
+shows the rest.
 
 [![Help: handing out files. What the class does in four steps, the keys on this screen, and if something goes wrong](screenshots/gallery/windows-0.9.10-help.png)](screenshots/gallery/windows-0.9.10-help.png)
 

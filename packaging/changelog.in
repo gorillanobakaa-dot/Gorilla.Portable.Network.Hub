@@ -7,7 +7,8 @@ gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
     download go". The sign-in-window help is folded under its symptom. The
     teacher's screens describe the highlighted menu choice, every start-screen
     row, the tick marks, and the waiting-work keys; h on the handing-out
-    screen opens one page of help.
+    screen opens one page of help, and long messages now scroll instead of
+    being cut off with their hint line.
   * THE NETWORK NO LONGER DROPS WHEN THE ROOM IS QUIET. Windows switches its
     hotspot off after five minutes with no client; the hub disables that
     (DisableNoConnectionsTimeout, no administrator needed) and puts it back on
