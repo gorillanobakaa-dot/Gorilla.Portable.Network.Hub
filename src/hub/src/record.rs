@@ -119,12 +119,15 @@ pub fn who_is(password: &str) -> Option<String> {
     None
 }
 
-/// Keep one private message, locked. Nothing is written if no record is open,
-/// and then the private channel is off anyway.
-pub fn keep(m: &crate::chat::Msg) {
+/// Keep one private message, locked, with WHO wrote it: "child", "teacher",
+/// "trusted adult" or "second adult". Which adult matters: the record exists
+/// partly so that an adult cannot misuse the channel unseen, and with two
+/// adults able to write, "an adult" would not say which. Nothing is written
+/// if no record is open, and then the private channel is off anyway.
+pub fn keep(m: &crate::chat::Msg, by: &str) {
     let g = OPEN.lock().unwrap_or_else(|e| e.into_inner());
     let Some(o) = g.as_ref() else { return };
-    let who = if m.from_child { "child" } else { "adult" };
+    let who = by.replace(['\t', '\n'], " ");
     let line = format!(
         "{}\t{}\t{who}\t{:?}\t{}",
         crate::net::timestamp(),
@@ -201,7 +204,9 @@ pub fn run(args: Vec<String>) {
     if std::io::stdin().read_line(&mut pw).is_err() {
         return;
     }
-    let pw = pw.trim_end_matches(['\r', '\n']);
+    // Windows PowerShell puts an invisible byte-order mark in front of text
+    // piped to a program; a password starting with one opened nothing.
+    let pw = pw.trim_start_matches('\u{feff}').trim_end_matches(['\r', '\n']);
     let mut opened = 0;
     for f in &files {
         if let Ok(lines) = read(f, pw) {
@@ -209,8 +214,10 @@ pub fn run(args: Vec<String>) {
             println!("\n== {}", f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
             for l in lines {
                 let parts: Vec<&str> = l.splitn(5, '\t').collect();
-                if parts.len() == 5 {
-                    println!("{}  {} ({}): {}", parts[0], parts[1], parts[2], parts[4]);
+                if parts.len() == 5 && parts[2] == "child" {
+                    println!("{}  {}: {}", parts[0], parts[1], parts[4]);
+                } else if parts.len() == 5 {
+                    println!("{}  the {} to {}: {}", parts[0], parts[2], parts[1], parts[4]);
                 } else {
                     println!("{l}");
                 }
@@ -253,8 +260,8 @@ pub(crate) mod tests {
         let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tmp("two");
         let path = start(&dir, &[("trusted adult", "first-secret"), ("second adult", "other-secret")]).unwrap();
-        keep(&msg("something that must stay private"));
-        keep(&msg("a second message"));
+        keep(&msg("something that must stay private"), "child");
+        keep(&msg("a second message"), "child");
         let raw = std::fs::read_to_string(&path).unwrap();
         assert!(!raw.contains("must stay") && !raw.contains("Amina"), "no words in the clear:\n{raw}");
         for pw in ["first-secret", "other-secret"] {
@@ -267,7 +274,7 @@ pub(crate) mod tests {
         assert_eq!(who_is("nope"), None);
         stop();
         assert!(!is_open());
-        keep(&msg("after stop"));
+        keep(&msg("after stop"), "child");
         assert_eq!(read(&path, "first-secret").unwrap().len(), 2, "nothing is written once the lesson stopped");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -277,7 +284,7 @@ pub(crate) mod tests {
         let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tmp("tamper");
         let path = start(&dir, &[("trusted adult", "pw-123456")]).unwrap();
-        keep(&msg("original words"));
+        keep(&msg("original words"), "child");
         stop();
         let raw = std::fs::read_to_string(&path).unwrap();
         let e = raw.lines().find(|l| l.starts_with("E ")).unwrap().to_string();

@@ -1532,16 +1532,16 @@ fn serve_one(
                 crate::adult::sign_out(&text);
                 see_other(&mut out, "/adult", "Set-Cookie: hubadult=; Path=/adult; Max-Age=0\r\n")?;
             }
-            ("POST", "/adult/send", Some(_)) if !key.is_empty() => {
+            ("POST", "/adult/send", Some(by)) if !key.is_empty() => {
                 let words = crate::adult::field(&body, "text");
                 if let Some(m) = crate::chat::from_adult(&key, &words, crate::chat::Kind::Text, true) {
-                    crate::record::keep(&m);
+                    crate::record::keep(&m, &by);
                 }
                 see_other(&mut out, &back, "")?;
             }
-            ("POST", "/adult/ask", Some(_)) if !key.is_empty() => {
+            ("POST", "/adult/ask", Some(by)) if !key.is_empty() => {
                 if let Some(m) = crate::chat::from_adult(&key, "", crate::chat::Kind::AdultAsks, true) {
-                    crate::record::keep(&m);
+                    crate::record::keep(&m, &by);
                 }
                 see_other(&mut out, &back, "")?;
             }

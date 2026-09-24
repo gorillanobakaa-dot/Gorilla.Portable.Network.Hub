@@ -393,25 +393,12 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, 
 pub fn talk_fragment(key: &str, private: bool) -> String {
     let msgs = crate::chat::thread(key, private);
     let mut s = String::new();
-    // The adult's quiet request, answered with one tap. Inside the fragment,
-    // so a request that arrives while the page is open appears by itself.
-    if private && crate::chat::open_request(key) {
-        let t = fresh_token();
-        s.push_str(&format!(
-            "<div class=ask><b>A trusted adult would like to talk to you.</b> Is that all right? \
-             Only they will see your answer.<br>{}{}{}</div>",
-            answer_form(&format!("{t}a"), "yes", "YES", ""),
-            answer_form(&format!("{t}b"), "later", "LATER", " class=no"),
-            answer_form(&format!("{t}c"), "no", "NO", " class=no"),
-        ));
-    }
     if msgs.is_empty() {
         s.push_str(if private {
             "<p class=small>Nothing here yet. Only you and the trusted adult can see this.</p>"
         } else {
             "<p class=small>No messages yet. Write to your teacher below.</p>"
         });
-        return s;
     }
     let adult = if private { "Trusted adult" } else { "Teacher" };
     for m in &msgs {
@@ -425,6 +412,20 @@ pub fn talk_fragment(key: &str, private: bool) -> String {
             "<div class=\"msg {class}\"><span class=who>{who} &middot; {}{seen}</span><br>{}</div>",
             html_escape(&m.at),
             html_escape(&crate::chat::describe(m))
+        ));
+    }
+    // The adult's quiet request, answered with one tap. Last, beside the
+    // newest message where the box is scrolled to: at the top it was half
+    // hidden (seen in bench/chat-flow-test.py's pictures, 2026-09-24). Inside
+    // the fragment, so a request that arrives while the page is open appears
+    // by itself.
+    if private && crate::chat::open_request(key) {
+        let t = fresh_token();
+        s.push_str(&format!(
+            "<div class=ask><b>A trusted adult would like to talk to you.</b> Is that all right?              Only they will see your answer.<br>{}{}{}</div>",
+            answer_form(&format!("{t}a"), "yes", "YES", ""),
+            answer_form(&format!("{t}b"), "later", "LATER", " class=no"),
+            answer_form(&format!("{t}c"), "no", "NO", " class=no"),
         ));
     }
     s
@@ -582,7 +583,7 @@ pub fn take_talk(peer_ip: &str, body: &str, root: &Path) -> &'static str {
     let (said, msg) = crate::chat::from_child(&key, &label, &text, kind, private, &token);
     if let Some(m) = msg {
         if private {
-            crate::record::keep(&m);
+            crate::record::keep(&m, "child");
         } else {
             let dir = handed_in_dir(root);
             if std::fs::create_dir_all(&dir).is_ok() {

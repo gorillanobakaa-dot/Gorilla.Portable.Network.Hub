@@ -177,17 +177,23 @@ pub fn thread_page(key: &str) -> String {
         .find(|c| c.key == key)
         .map(|c| c.label)
         .unwrap_or_else(|| "this child".into());
+    // Two spellings of the same key: URL-encoded for the frame's address,
+    // HTML-escaped for the forms' hidden fields. Putting the URL-encoded one
+    // in a form field had the browser encode it again, and every answer went
+    // to a conversation that did not exist (found by bench/chat-flow-test.py,
+    // 2026-09-24).
     let k = urlencode(key);
+    let kf = html_escape(key);
     let t = crate::net::random_bytes(8).map(|b| b.iter().map(|x| format!("{x:02x}")).collect::<String>()).unwrap_or_default();
     let mut s = head("Adult page", None);
     s.push_str(&format!(
         "<a class=btn href=\"/adult\">&#8592; ALL CONVERSATIONS</a>\n<h1>{}</h1>\n\
          <iframe src=\"/adult/frame?c={k}\"></iframe>\n\
-         <form method=post action=\"/adult/send\"><input type=hidden name=c value=\"{k}\">\
+         <form method=post action=\"/adult/send\"><input type=hidden name=c value=\"{kf}\">\
          <input type=hidden name=token value=\"{t}\">\
          <textarea name=text autocomplete=off placeholder=\"Your answer\"></textarea><br>\
          <button type=submit>SEND</button></form>\n\
-         <form method=post action=\"/adult/ask\"><input type=hidden name=c value=\"{k}\">\
+         <form method=post action=\"/adult/ask\"><input type=hidden name=c value=\"{kf}\">\
          <button type=submit class=ask>ASK QUIETLY TO TALK</button></form>\n\
          <p class=small>ASK QUIETLY TO TALK puts a question on the child's HELP page: \"A trusted \
          adult would like to talk to you. Is that all right?\" with YES, LATER and NO. Nothing rings \

@@ -2473,7 +2473,7 @@ impl App {
     fn adult_says(&mut self, key: &str, label: &str, text: &str, kind: crate::chat::Kind, private: bool) {
         let Some(m) = crate::chat::from_adult(key, text, kind, private) else { return };
         if private {
-            crate::record::keep(&m);
+            crate::record::keep(&m, "teacher");
             return;
         }
         let dir = crate::page::handed_in_dir(&PathBuf::from(shellexpand(&self.folder)));
