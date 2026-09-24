@@ -1627,6 +1627,29 @@ impl App {
             f,
             if self.cable { "Sending down the cable" } else { "Handing out files" },
         );
+        // What a teacher must never miss goes first, where nothing below can
+        // push it off a short window. The real-phone test, 2026-09-24: three
+        // HELP taps arrived while the scan codes filled a 30-line window, and
+        // the alarm and the key line were both off the bottom.
+        if !self.cable {
+            let help = crate::chat::help_waiting();
+            let unread = crate::chat::unread(false);
+            if help > 0 {
+                f.push(&format!(
+                    "  {} ASKED FOR HELP. Press m.",
+                    if help == 1 { "A CHILD".to_string() } else { format!("{help} CHILDREN") }
+                ));
+            }
+            if unread > 0 {
+                f.push(&format!(
+                    "  {unread} NEW MESSAGE{} FROM THE CLASS. Press m to read and answer.",
+                    if unread == 1 { "" } else { "S" }
+                ));
+            }
+            if help > 0 || unread > 0 {
+                f.blank();
+            }
+        }
         if let Some(h) = &self.hotspot {
             f.push(&format!("  Wifi network      {}", h.ssid));
             f.push(&format!("  Password          {}", self.password));
@@ -1737,8 +1760,17 @@ impl App {
         // right here, not behind a key: one joins the wifi (password and all),
         // one opens the page. Side by side when the window is wide enough,
         // otherwise one loud line saying which key shows them.
+        // Once a phone is on the network, the class's activity matters more
+        // than the codes, which on a short window crowded out everything
+        // (the owner, 2026-09-24: "no way to get back to the main screen").
+        // j still shows them, for latecomers.
         if let Some(h) = &self.hotspot {
-            self.draw_scan_codes(f, &h.ssid.clone());
+            if self.joined.is_empty() {
+                self.draw_scan_codes(f, &h.ssid.clone());
+            } else {
+                f.blank();
+                f.push("  More phones to join? Press j to show the codes.");
+            }
         }
         // Two loud states a USB drive causes. The folder is often a flash
         // drive kept as the teacher's failsafe, and it gets unplugged, filled
@@ -1877,13 +1909,14 @@ impl App {
         // the words. The words of a private message never appear here at all,
         // and when a trusted adult other than the teacher receives them, not
         // even the count does.
-        let unread = crate::chat::unread(false);
         let private_unread = if crate::chat::receiver() == crate::chat::Receiver::Teacher {
             crate::chat::unread(true)
         } else {
             0
         };
-        let note_rows = usize::from(unread > 0) + usize::from(private_unread > 0) * 2;
+        // HELP and ordinary messages are drawn at the top of the screen (see
+        // the start of draw_sending); only the legacy private count is here.
+        let note_rows = usize::from(private_unread > 0) * 2;
         // Capped by what is left on screen, and what was dropped is said out
         // loud. A list that silently stops at ten reads as "ten devices".
         let room = f.rows.saturating_sub(f.used() + 3 + note_rows);
@@ -1892,19 +1925,6 @@ impl App {
         }
         if rows.len() > room {
             f.push_dim(&format!("  and {} more not shown, the window is too short", rows.len() - room));
-        }
-        let help = crate::chat::help_waiting();
-        if help > 0 {
-            f.push(&format!(
-                "  {} ASKED FOR HELP. Press m.",
-                if help == 1 { "A CHILD".to_string() } else { format!("{help} CHILDREN") }
-            ));
-        }
-        if unread > 0 {
-            f.push(&format!(
-                "  {unread} NEW MESSAGE{} FROM THE CLASS. Press m to read and answer.",
-                if unread == 1 { "" } else { "S" }
-            ));
         }
         if private_unread > 0 {
             f.push(&format!(
@@ -4677,6 +4697,26 @@ mod tests {
         assert!(matches!(&app.screen, Screen::Thread { key, .. } if key == "kB"), "enter opens the child who asked");
         crate::chat::adult_opened("kB", false); // what draw() does while it is on screen
         assert_eq!(crate::chat::help_waiting(), 0, "opening the conversation answers the alarm");
+        crate::chat::clear();
+    }
+
+    /// The HELP alarm is at the top of the handing-out screen and the key
+    /// line stays at the bottom, even with a phone on and a small window.
+    #[test]
+    fn the_help_alarm_is_first_on_the_handing_out_screen() {
+        let _c = crate::chat::tests::LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::chat::clear();
+        crate::chat::from_child("kB", "Joseph [an Android phone]", "", crate::chat::Kind::NeedToTalk, false, "t9");
+        let mut app = App::new();
+        app.cable = false;
+        app.screen = Screen::Sending;
+        app.joined = vec![net::Joined { ip: std::net::Ipv4Addr::new(192, 168, 137, 72), name: None }];
+        let mut f = crate::term::Frame::new(24, 80);
+        app.draw_sending(&mut f);
+        let text = f.text();
+        let first = text.lines().skip(1).find(|l| !l.trim().is_empty()).unwrap_or("");
+        assert!(first.contains("A CHILD ASKED FOR HELP. Press m."), "first line was {first:?}:\n{text}");
+        assert!(text.contains("q stop"), "the key line must stay:\n{text}");
         crate::chat::clear();
     }
 
