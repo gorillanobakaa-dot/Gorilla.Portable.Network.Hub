@@ -1095,6 +1095,9 @@ hub serve  -  hand out the files in a folder to every device in the room
                 // Whether the number is a channel this radio may use is
                 // hotspot_up's judgement, against the kernel's list.
                 channel = value().and_then(|v| v.parse::<u16>().ok());
+                // Without this the loop never moved past --channel and the
+                // program hung before doing anything, silently.
+                i += 2;
             }
             "--helpers" | "--workers" => {
                 helpers = value().and_then(|v| v.parse().ok()).unwrap_or(helpers).clamp(1, 512);
@@ -1211,6 +1214,15 @@ hub serve  -  hand out the files in a folder to every device in the room
         // Only the hotspot's: this laptop may be on another network too, one
         // nobody on the hotspot can reach.
         Some(a) => vec![a],
+        // Windows' hotspot is always 192.168.137.1, even while it is still
+        // being given it. Falling back to every address printed the phone
+        // network's 172.22.x and a 169.254 one instead, on 2026-09-24: two
+        // addresses nobody on the hotspot could reach, and not the one they
+        // could.
+        None if hotspot.is_some() && cfg!(windows) => {
+            println!("  (the network is still starting; this address works in a few seconds)");
+            vec![std::net::Ipv4Addr::new(192, 168, 137, 1)]
+        }
         None => crate::net::local_addresses(),
     };
     for ip in to_tell {
@@ -1755,7 +1767,21 @@ fn send_file(out: &mut BufWriter<TcpStream>, path: &Path, range: Option<&str>, p
         if n == 0 {
             break;
         }
-        out.write_all(&buf[..n])?;
+        if let Err(e) = out.write_all(&buf[..n]) {
+            // A download the phone broke off used to leave no trace at all, so
+            // a bench could not tell one 10 GB download from a phone that
+            // started over three times. Measured 2026-09-24: Windows counted
+            // 14.1 GB out for a 10.6 GB file and nothing here said why.
+            if !QUIET.load(Ordering::Relaxed) {
+                let secs = t0.elapsed().as_secs_f64().max(0.001);
+                let done = len - left;
+                println!(
+                    "{peer} broke off after {done} of {len} bytes (from byte {start}) in {secs:.1}s = {:.2} MB/s",
+                    done as f64 / secs / 1_048_576.0
+                );
+            }
+            return Err(e);
+        }
         left -= n as u64;
         note(peer, &name, n as u64, total);
     }

@@ -1,4 +1,4 @@
-<!-- Version: 1.4.0 · updated 26-08-25-12-00 -->
+<!-- Version: 1.5.0 · updated 26-09-24-14-00 -->
 # Why this exists
 
 Draft of the layman track, written 2026-08-24, destined for the repository
@@ -26,11 +26,15 @@ hand the folder to the whole class at once.
 |---|---|
 | Moved a 4 GB file with no router and no internet | **6.1 MB/s**, completed |
 | Peak speed off a 2012 laptop's wifi card | **56 Mbit/s** |
-| Efficiency against the hardware's theoretical maximum | **78%** (typical is 55 to 65) |
+| Efficiency against the hardware's theoretical maximum | **73%** held, **78%** at its best second (typical is 55 to 65) |
 | Speed of broadcasting to a whole room, before the fix | 1 Mbit/s |
 | After changing **one line** of configuration | **54 Mbit/s** |
+| A 2022 laptop's Wi-Fi 6 card, on Windows, to a Wi-Fi 6 phone | **191 Mbit/s**, 67% of its link, at 4% of the processor |
 
-That last row is the whole day in miniature. The laptop was broadcasting at one
+The first five rows are the 2012 laptop on Linux, August 2026; the last is a
+2022 laptop on Windows, September 2026 ([the Windows results](../bench/RESULTS-WINDOWS.md)).
+
+The broadcast rows are the whole day in miniature. The laptop was broadcasting at one
 megabit because the default is written to accommodate a device from 1999 that
 nobody has owned in twenty years. **The hardware was never the limit. The
 defaults were.**

@@ -1,4 +1,4 @@
-<!-- Version: 1.6.0 · updated 26-09-24-10-30 -->
+<!-- Version: 1.7.0 · updated 26-09-24-14-00 -->
 # Gorilla Portable Network Hub
 
 <!-- WHO-THIS-IS-FOR: managed block, do not edit by hand -->
@@ -27,6 +27,29 @@ Written for somebody who has never opened a terminal, with a picture of every
 screen.
 
 ---
+
+## New in 0.9.10: it explains itself
+
+<a href="docs/screenshots/gallery/phone-0.9.10-class-page.png"><img src="docs/screenshots/gallery/phone-0.9.10-class-page.png" width="260" align="right" alt="The class page on a phone in 0.9.10: three numbered parts, each with a line saying what its buttons do"></a>
+
+- **The phone page reads like instructions.** Three numbered parts, a line
+  under each saying what its buttons do, a send button that counts up
+  (*SENDING... 40% - KEEP THIS PAGE OPEN*), and a result that says what
+  happened and what to do next.
+- **The teacher's screens explain themselves** where the question comes up:
+  what each first-screen choice does, what each start-screen line is for,
+  what the tick marks mean, and **h** for one page of help while handing out.
+- **The network no longer drops when the room goes quiet.** Windows switches
+  its hotspot off after five minutes with no phone on it; the hub stops it
+  doing that, and puts the setting back when it ends.
+- **Measured on a 2022 laptop:** about **23 MB every second** to a Wi-Fi 6
+  phone, three and a half times the 2012 laptop's speed, at 4% processor.
+  [bench/RESULTS-WINDOWS.md](bench/RESULTS-WINDOWS.md).
+
+In plain language: [docs/0.9.10-WHAT-CHANGED.md](docs/0.9.10-WHAT-CHANGED.md).
+For developers: [docs/0.9.10-DEVELOPER-NOTES.md](docs/0.9.10-DEVELOPER-NOTES.md).
+
+<br clear="right">
 
 ## New in 0.9.9 (Windows)
 
@@ -133,7 +156,8 @@ the same connection immediately ran a third faster. A crowded lane looks fine
 from the front of the room; it is just slow. So the teacher got the dial, and
 the list of lanes it offers is read from the radio and the country, never
 assumed. The full hunt, with every suspect and every number, is in
-[bench/RESULTS.md](bench/RESULTS.md).
+[bench/RESULTS.md](bench/RESULTS.md). (That dial is on Linux. On Windows,
+Windows picks the channel; the hub chooses the band and shows the channel.)
 
 ### The receipt
 
@@ -146,7 +170,9 @@ The screen looking bored is the point.
 
 ---
 
-## It runs at 73% of what the radio can physically do
+## How fast it is, measured on two laptops
+
+### A 2012 Sony on Linux: 73% of what the radio can physically do
 
 This laptop's wifi is a 1x1 Atheros AR9485 from 2012. Its hardware ceiling,
 read from the driver, is **72.2 Mbit/s**. Nothing can go faster than that on
@@ -167,6 +193,26 @@ lowest variance, not for being fastest.
 
 Full sweeps, the method, and what is NOT proven: [bench/RESULTS.md](bench/RESULTS.md).
 
+### A 2022 ThinkPad on Windows: three and a half times faster, 67% of the radio
+
+An Intel Wi-Fi 6 AX201 (two antenna streams), Windows 11, the network made by
+the hub on 2.4 GHz, to a Wi-Fi 6 phone two metres away. The link's top rate,
+as Windows reports it, is **286.8 Mbit/s**. Figures are the phone's own count
+of what arrived.
+
+| | measured | of the 286.8 Mbit/s link |
+|---|---|---|
+| **one connection, best 30 seconds** | **23.86 MB/s** (191 Mbit/s) | **66.6%** |
+| one connection, whole 2 minutes | 22.93 MB/s (183 Mbit/s) | 64.0% |
+| four connections, best 30 seconds | 22.63 MB/s (181 Mbit/s) | 63.1% |
+| the laptop's processor while doing it | about 4% | |
+
+**85% was the goal and was not reached.** On Windows the radio is driven by
+Intel's closed driver, and the settings that pack the air more tightly are not
+reachable from outside it; on the Sony they were, through the open driver and
+the owner's own kernel. What was tried, what was not, and why:
+[bench/RESULTS-WINDOWS.md](bench/RESULTS-WINDOWS.md).
+
 **Status: not finished.** What works and is measured: the laptop becomes a
 properly configured access point, whole folders move across it either as one
 streamed download or file by file with resume and per-piece verification, and
@@ -178,8 +224,9 @@ machine.
 
 | | |
 |---|---|
-| [bench/RESULTS.md](bench/RESULTS.md) | **the numbers, on one page.** What it achieves, against what the hardware can physically do, and what is NOT proven |
-| [docs/HOW-TO.md](docs/HOW-TO.md) | **start here if you want to use it.** The step-by-step guide for 0.9.9, with a picture of every screen and every key on one page, written for somebody who has never opened a terminal |
+| [bench/RESULTS.md](bench/RESULTS.md) | **the numbers, on one page**, for the 2012 laptop on Linux. What it achieves, against what the hardware can physically do, and what is NOT proven |
+| [bench/RESULTS-WINDOWS.md](bench/RESULTS-WINDOWS.md) | the same for a 2022 laptop on Windows, with both laptops' specifications side by side |
+| [docs/HOW-TO.md](docs/HOW-TO.md) | **start here if you want to use it.** The step-by-step guide for 0.9.10, with a picture of every screen and every key on one page, written for somebody who has never opened a terminal |
 | [docs/WHY-THIS-EXISTS.md](docs/WHY-THIS-EXISTS.md) | the layman track. What the problem is and what was proved, in plain language |
 | [docs/DEVELOPER.md](docs/DEVELOPER.md) | the developer track. Architecture, wire format, every measurement with its method |
 | [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) | every screen, photographed on real hardware |
@@ -192,6 +239,8 @@ machine.
 | [docs/0.9.1-DEVELOPER-NOTES.md](docs/0.9.1-DEVELOPER-NOTES.md) | the same, as an audit trail: the diagnostic, the measurements, and what is still not proven |
 | [docs/0.9.9-WHAT-CHANGED.md](docs/0.9.9-WHAT-CHANGED.md) | Windows makes its own wifi network, phones find it and land on the page, in plain language |
 | [docs/0.9.9-DEVELOPER-NOTES.md](docs/0.9.9-DEVELOPER-NOTES.md) | a day of field testing with real phones: each fault, how it was measured, and where the fix is |
+| [docs/0.9.10-WHAT-CHANGED.md](docs/0.9.10-WHAT-CHANGED.md) | the pages and screens explain themselves; the network stays up in a quiet room; how fast a newer laptop is, in plain language |
+| [docs/0.9.10-DEVELOPER-NOTES.md](docs/0.9.10-DEVELOPER-NOTES.md) | each change and how it was checked, the Windows bench tools, and what is not yet seen working |
 | [docs/0.9.8-WHAT-CHANGED.md](docs/0.9.8-WHAT-CHANGED.md) | one fewer thing to type, because somebody actually checked |
 | [docs/0.9.8-DEVELOPER-NOTES.md](docs/0.9.8-DEVELOPER-NOTES.md) | settling a judgement call with a controlled experiment, and why over-reporting is unfalsifiable |
 | [docs/0.9.7-WHAT-CHANGED.md](docs/0.9.7-WHAT-CHANGED.md) | the laptop is not broken, somebody switched part of it off: in plain language |
@@ -380,12 +429,12 @@ assembled to spec and structurally verified on a Debian machine; it has not yet
 been installed on an Arch one, and that is exactly the kind of thing worth
 telling us about.
 
-**Windows 10 and 11:** unzip `hub-0.9.9-windows-x86_64.zip` and double-click
+**Windows 10 and 11:** unzip `hub-0.9.10-windows-x86_64.zip` and double-click
 `hub.exe`. From 0.9.9 the hub switches Windows' hotspot on itself; nothing to
 set up in Settings. If the first screen says the computer is not ready, choose
 *Fix problems with this computer* and say Yes to Windows' permission prompt.
 
-The newest Linux packages are 0.9.5; the Linux build of 0.9.9 is being tested.
+The newest Linux packages are 0.9.5; the Linux build of 0.9.10 is being tested.
 
 **From this repository:**
 
@@ -509,15 +558,26 @@ seconds that the network is really there and switches it, and the laptop's wifi
 radio, back on if Windows or anyone else drops it. A small watchman process
 switches the network off when the hub ends, however it ends, including the
 window's X. Every outage and Windows' answer is written to `network.log`.
+Windows' own habit of switching the network off after five minutes with no
+phone on it is turned off while the hub runs, and turned back on when it
+ends.
 
 ## The one-line summary of the field days
 
-Day one: the broadcast rate went from **1 Mbit/s to 54** by changing one line
-of configuration, and a fourteen-year-old laptop sustained **56 Mbit/s at 78%
-efficiency** while being the network. Day two: the same laptop handed **5.7 GB
-to a bare browser** in one piece, and the 2 MB/s that had gone missing turned
-out to be a channel number nobody chose. **The hardware was never the limit.
-The defaults were.**
+**On the 2012 Sony, on Linux, August 2026.** Day one: the broadcast rate went
+from **1 Mbit/s to 54** by changing one line of `hostapd` configuration, and a
+fourteen-year-old laptop held **52.6 Mbit/s, 73% of its radio**, peaking at
+**56 Mbit/s (78%)**, while being the network. Day two: the same laptop handed
+**5.7 GB to a bare browser** in one piece, and the 2 MB/s that had gone missing
+turned out to be a channel number nobody chose. **The hardware was never the
+limit. The defaults were.**
+
+**On a 2022 ThinkPad, on Windows, September 2026.** The same hub, making its
+own network, gave a Wi-Fi 6 phone **191 Mbit/s, 67% of the link**, at 4% of the
+processor: three and a half times the Sony. Here the defaults were not ours to
+change: the broadcast rate and the channel belong to Windows, and the radio's
+packing to Intel's driver. The one setting that could be switched, Throughput
+Booster, made no difference.
 
 ## Name
 

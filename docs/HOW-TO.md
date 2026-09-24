@@ -2,7 +2,7 @@
 
 This guide is for the person standing at the front of the room. You do not
 need to know what a terminal is, and you do not need to install anything on the
-children's phones. It describes **version 0.9.9**.
+children's phones. It describes **version 0.9.10**.
 
 Every picture is a real screen. Click any of them to see it full size. The
 pictures of Windows use a made-up teacher's folder and a made-up password.
@@ -51,7 +51,7 @@ wifi switched off there is nothing to broadcast from.
 
 1. Go to the
    [releases page](https://github.com/gorillanobakaa-dot/Gorilla.Portable.Network.Hub/releases)
-   and download `hub-0.9.9-windows-x86_64.zip`.
+   and download `hub-0.9.10-windows-x86_64.zip`.
 2. Right-click the zip and choose **Extract All**. Put it anywhere: a USB drive
    is fine.
 3. Open the folder it made and double-click **hub.exe**.
@@ -59,20 +59,23 @@ wifi switched off there is nothing to broadcast from.
    any program without a paid signing certificate. Choose **More info**, then
    **Run anyway**, or do not run it. Both are reasonable.
 
-The first screen appears. The top line says `Gorilla Portable Network Hub 0.9.9`
+The first screen appears. The top line says `Gorilla Portable Network Hub 0.9.10`
 and the date the program was built. (In a terminal, `hub --version` prints
-`hub 0.9.9` and the same date.)
+`hub 0.9.10` and the same date.)
 
-[![The first screen: four choices, and the line "This computer is ready: everything the hub needs is switched on"](screenshots/gallery/windows-0.9.9-first-screen.png)](screenshots/gallery/windows-0.9.9-first-screen.png)
+[![The first screen: four choices; under them, what the highlighted one does ("Makes a wifi network from this laptop. Phones and laptops join it, get the files you choose, and can send work back. No internet needed."), and "This computer is ready"](screenshots/gallery/windows-0.9.10-first-screen.png)](screenshots/gallery/windows-0.9.10-first-screen.png)
 
 Use the **up and down arrow keys** to choose, and **Enter** to open. **q**
-quits.
+quits. Under the four choices, two lines say **what the highlighted one
+does**; move up and down to read each.
 
 ### If it says THIS COMPUTER IS NOT READY YET
 
 Many laptops, especially second-hand ones, have had parts of Windows switched
 off to "speed them up". Nothing looks wrong until the wifi network fails in
 front of the class. The hub checks as soon as it opens, and tells you.
+(The three pictures in this section are from 0.9.9. In 0.9.10 the first screen
+also has the two lines saying what the highlighted choice does.)
 
 [![The first screen saying THIS COMPUTER IS NOT READY YET: Windows Mobile Hotspot Service and Internet Connection Sharing are switched off, choose Fix problems with this computer, Windows will ask permission, say Yes](screenshots/gallery/windows-0.9.9-not-ready.png)](screenshots/gallery/windows-0.9.9-not-ready.png)
 
@@ -101,7 +104,7 @@ You can open it any time. It says, in one line each, whether the parts of
 Windows the hub needs are on, whether the firewall has been opened for the hub,
 and **what this laptop's wifi card can do**, read from the card itself.
 
-[![Fix problems with this computer: Windows parts all switched on; the firewall; the wifi card can make a network on 2.4 or 5 GHz, not 6 GHz, one network at a time; the two buttons](screenshots/gallery/windows-0.9.9-fix-problems.png)](screenshots/gallery/windows-0.9.9-fix-problems.png)
+[![Fix problems with this computer: Windows parts all switched on; the firewall; the wifi card can make a network on 2.4 or 5 GHz, not 6 GHz, one network at a time; the two buttons](screenshots/gallery/windows-0.9.10-fix-problems.png)](screenshots/gallery/windows-0.9.10-fix-problems.png)
 
 Do **both** buttons once on every new laptop, even if it seems to work fine:
 
@@ -112,7 +115,7 @@ Do **both** buttons once on every new laptop, even if it seems to work fine:
 
 ### On Linux
 
-The newest Linux packages are **0.9.5**; the Linux build of 0.9.9 is being
+The newest Linux packages are **0.9.5**; the Linux build of 0.9.10 is being
 tested. 0.9.5 works as described here, except where this guide says *Windows*.
 
 On Debian, Ubuntu or Mint, download `gorilla-portable-network-hub_0.9.5_amd64.deb`
@@ -144,9 +147,11 @@ You choose what the class may actually see in step 4.
 
 The start screen appears.
 
-[![The start screen: folder to hand out, wifi network Gorilla Hub, password, Wifi band 2.4 GHz (every phone sees it), connections, and where received files go, then Start handing out](screenshots/gallery/windows-0.9.9-start-screen-band.png)](screenshots/gallery/windows-0.9.9-start-screen-band.png)
+[![The start screen: folder to hand out, wifi network Gorilla Hub, password, Wifi band 2.4 GHz (every phone sees it), connections, and where received files go, then Start handing out; under them, what the band line means](screenshots/gallery/windows-0.9.10-start-screen-band.png)](screenshots/gallery/windows-0.9.10-start-screen-band.png)
 
 Move with the **up and down arrows**, press **Enter** to change a line.
+**While you stand on a line, the screen explains it underneath**, so the
+table below is only for reading ahead.
 
 | Line | What it means | What to do |
 |---|---|---|
@@ -160,12 +165,18 @@ Move with the **up and down arrows**, press **Enter** to change a line.
 
 ### Step 3: choose *Start handing out*
 
+Standing on it, the screen says what comes next: you tick the files, then the
+network switches on and two codes appear.
+
+[![Start handing out, highlighted, with: Next you tick which files the class may see. Then the wifi network switches on and two codes appear for the class to scan](screenshots/gallery/windows-0.9.10-start-screen-start.png)](screenshots/gallery/windows-0.9.10-start-screen-start.png)
+
 ### Step 4: choose what the class may see
 
 The list shows **one folder at a time**: the folders inside it with how many
-files each holds, then its own files.
+files each holds, then its own files. The top of the screen says what the marks
+mean.
 
-[![What gets handed out: Past papers (36 files), Photos, Reading, Videos, then five files, all unticked, and CONTINUE at the top](screenshots/gallery/windows-0.9.9-folder-view.png)](screenshots/gallery/windows-0.9.9-folder-view.png)
+[![What gets handed out: "Tick what the class may see", what [x], [ ] and [~] mean, then Past papers (36 files), Photos, Reading, Videos and five files, all unticked, and CONTINUE at the top](screenshots/gallery/windows-0.9.10-folder-view.png)](screenshots/gallery/windows-0.9.10-folder-view.png)
 
 - **Space** ticks or unticks what the cursor is on. `[x]` means handed out,
   `[ ]` means not, `[~]` means some of the files inside a folder.
@@ -179,7 +190,7 @@ files each holds, then its own files.
 **A big folder asks first.** Ticking a folder with many files, which could be
 thousands, stops and says exactly how many:
 
-[![Space again ticks ALL 36 files inside Past papers, every folder inside included. Some may be files you did not know were there. Space again: tick them all. Enter: go inside and choose instead](screenshots/gallery/windows-0.9.9-big-folder-question.png)](screenshots/gallery/windows-0.9.9-big-folder-question.png)
+[![Space again ticks ALL 36 files inside Past papers, every folder inside included. Some may be files you did not know were there. Space again: tick them all. Enter: go inside and choose instead](screenshots/gallery/windows-0.9.10-big-folder-question.png)](screenshots/gallery/windows-0.9.10-big-folder-question.png)
 
 Press **space again** to tick them all, or **Enter** to go inside and choose.
 Any other key cancels.
@@ -195,7 +206,7 @@ press Enter.
 On Windows the hub switches the wifi network on itself, a few seconds, no
 Settings, no administrator. The screen shows everything the class needs:
 
-[![Handing out: wifi network Gorilla Hub, the password, broadcasting on 2.4 GHz channel 11, the address, gorilla.local, and two codes: 1. Scan to join the wifi, 2. Then scan to open the page](screenshots/gallery/windows-0.9.9-handing-out-codes.png)](screenshots/gallery/windows-0.9.9-handing-out-codes.png)
+[![Handing out: wifi network Gorilla Hub, the password, broadcasting on 2.4 GHz channel 11, the address, gorilla.local, and two codes: 1. Scan to join the wifi, 2. Then scan to open the page; at the bottom, h HELP and the other keys](screenshots/gallery/windows-0.9.10-handing-out-codes.png)](screenshots/gallery/windows-0.9.10-handing-out-codes.png)
 
 - **Wifi network** and **Password**: read them out or write them on the board.
 - **Broadcasting on**: the band and channel the laptop is really using, read
@@ -204,9 +215,20 @@ Settings, no administrator. The screen shows everything the class needs:
   pointed at it. **Code 2** opens the class page.
 - **Received files go to**: where the children's work will be. **o** opens it.
 
-If the network goes off for any reason (Windows switches it off when the last
-phone leaves; somebody switches the laptop's wifi off), the hub notices within
-seconds, switches it back on, and says so on this screen while it does.
+If the network goes off for any reason (somebody switches the laptop's wifi
+off; Windows switches it off by itself), the hub notices within seconds,
+switches it back on, and says so on this screen while it does. Windows
+normally switches its network off when no phone has been connected for five
+minutes; while the hub runs it tells Windows not to, and puts that setting
+back when you stop.
+
+### Press h for help
+
+On this screen, **h** opens one page that explains every key, what the class
+does step by step, and what to do if something goes wrong. Enter brings you
+back.
+
+[![Help: handing out files. What the class does in four steps, the keys on this screen, and if something goes wrong](screenshots/gallery/windows-0.9.10-help.png)](screenshots/gallery/windows-0.9.10-help.png)
 
 ---
 
@@ -222,23 +244,46 @@ seconds, switches it back on, and says so on this screen while it does.
 The first thing the page asks is their **name**, once. Everything they send is
 filed under it: thirty identical phones are otherwise impossible to tell apart.
 
-Then each file has **READ** (look at it now) and **GET IT** (keep a copy), and
-there is one purple **GET EVERYTHING** button for the whole lot at once.
+<a href="screenshots/gallery/phone-0.9.10-name.png"><img src="screenshots/gallery/phone-0.9.10-name.png" width="300" alt="Welcome to the class page. First, type your name. Use the name your teacher calls you. THAT'S ME. You only do this once; the page works with no internet."></a>
 
-### Handing work in
+Then the page is in **three numbered parts**, and each says in one line what
+its buttons do. The children can read their way through it without you.
 
-Under *Hand in your work*, **Choose Files** opens the phone's own file picker.
-They can choose several at once, and choose again to add more. Every chosen
-file is listed with a red **REMOVE** button, so a wrong picture can be taken
-back before sending. **START AGAIN** clears the lot.
+<a href="screenshots/gallery/phone-0.9.10-class-page.png"><img src="screenshots/gallery/phone-0.9.10-class-page.png" width="300" alt="The class page: 1. Files from your teacher, with READ, GET IT and GET EVERYTHING; 2. Send your work to your teacher, in three steps; 3. Send a note to your teacher"></a>
 
-[![The class page on a phone: two chosen files, each with a red REMOVE button, 2 files will be sent, SEND IT TO YOUR TEACHER and START AGAIN](screenshots/gallery/phone-0.9.9-choose-and-remove.png)](screenshots/gallery/phone-0.9.9-choose-and-remove.png)
+**1. Files from your teacher.** **READ** or **PLAY** looks at a file now;
+**GET IT** keeps a copy on the phone; the purple **GET EVERYTHING** takes the
+whole lot at once. A child who cannot find what they got taps *Where do the
+files I GET go?*:
 
-Then **SEND IT TO YOUR TEACHER**. They can also **send you a note**.
+<a href="screenshots/gallery/phone-0.9.10-where-downloads.png"><img src="screenshots/gallery/phone-0.9.10-where-downloads.png" width="300" alt="Where do the files I GET go? Android: the Files app (on Samsung, My Files), then Downloads. iPhone: the Files app, then Downloads."></a>
 
-If the phone opened the page in its small "sign in" window and *Choose Files*
-does nothing, the page says so and offers a button to open it in the phone's
-real browser.
+**2. Send your work to your teacher.** Three numbered steps on the page:
+**Choose files** opens the phone's own file picker (several at once, and
+choose again to add more); every chosen file is listed with a red **REMOVE**
+button, so a wrong picture can be taken back; then **SEND IT TO YOUR
+TEACHER**. **START AGAIN** clears the lot.
+
+<a href="screenshots/gallery/phone-0.9.10-choose-and-remove.png"><img src="screenshots/gallery/phone-0.9.10-choose-and-remove.png" width="300" alt="Send your work to your teacher: three steps, two chosen files each with a red REMOVE button, 2 files will be sent, SEND IT TO YOUR TEACHER and START AGAIN"></a>
+
+While it sends, the button counts up and says to keep the page open, so
+nobody taps it again or closes the page halfway. When it has arrived, a green
+box says so:
+
+<a href="screenshots/gallery/phone-0.9.10-sending.png"><img src="screenshots/gallery/phone-0.9.10-sending.png" width="300" alt="The button reading SENDING... 30% - KEEP THIS PAGE OPEN"></a>
+<a href="screenshots/gallery/phone-0.9.10-arrived.png"><img src="screenshots/gallery/phone-0.9.10-arrived.png" width="300" alt="Green box: Your work arrived. It is on your teacher's laptop now, waiting for your teacher to accept it. You can send more, or close this page."></a>
+
+If something goes wrong the box is red and says what to do: nothing chosen,
+a file over 1 GB, or your laptop unable to keep it (and that nothing was lost
+from the phone).
+
+**3. Send a note to your teacher.** A question, for example "I can't open the
+file". It appears on your screen.
+
+If a phone opened the page in its small "sign in to wifi" window, tapping
+*Choose files* does nothing there. The page has a fold for exactly that,
+*Tapping Choose files does nothing?*, with a button that opens the page in the
+phone's normal browser. The phone stays on the class wifi.
 
 ---
 
@@ -247,11 +292,11 @@ real browser.
 Nothing a child sends lands on your computer straight away. It waits, and the
 handing-out screen tells you:
 
-[![The handing-out screen showing 1 on the network, 3 PIECES OF WORK WAITING FOR YOU. Press w to look, and a file arriving](screenshots/gallery/windows-0.9.9-work-arrived.png)](screenshots/gallery/windows-0.9.9-work-arrived.png)
+[![The handing-out screen showing PIECES OF WORK WAITING FOR YOU. Press w to look](screenshots/gallery/windows-0.9.10-work-arrived.png)](screenshots/gallery/windows-0.9.10-work-arrived.png)
 
 Press **w**.
 
-[![Work waiting for you: three pieces from Amina, with where accepted work goes, and the keys a, e, p, r, o](screenshots/gallery/windows-0.9.9-waiting-accept-all.png)](screenshots/gallery/windows-0.9.9-waiting-accept-all.png)
+[![Work waiting for you: five pieces from Amina and Joseph; "Nothing is kept until you accept it"; o looks at it first, a accepts it, e accepts ALL, p all from them, r refuses it: moved aside, never deleted](screenshots/gallery/windows-0.9.10-waiting-accept-all.png)](screenshots/gallery/windows-0.9.10-waiting-accept-all.png)
 
 | Key | Does |
 |---|---|
@@ -259,9 +304,9 @@ Press **w**.
 | **p** | Accept everything from the **person** under the cursor |
 | **a** | Accept just the one under the cursor |
 | **r** | Refuse it. Refused work is **kept** in a *refused* folder, never deleted: it may be evidence |
-| **o** | Open it and look first |
+| **o** | Look at it first, before deciding |
 
-[![Accepted 3 pieces of work. They are in ... Gorilla Hub received. Press o on the sending screen to open that folder](screenshots/gallery/windows-0.9.9-accepted-all.png)](screenshots/gallery/windows-0.9.9-accepted-all.png)
+[![Accepted 5 pieces of work. They are in ... Gorilla Hub received. Press o on the sending screen to open that folder](screenshots/gallery/windows-0.9.10-accepted-all.png)](screenshots/gallery/windows-0.9.10-accepted-all.png)
 
 Accepted work is in **Documents\Gorilla Hub received** (or the folder you chose
 on the start screen). On the handing-out screen, **o** opens that folder.
@@ -280,8 +325,9 @@ All from the handing-out screen:
 
 | Key | Does |
 |---|---|
+| **h** | Help: every key explained, and what the class does |
 | **f** | Change which files are handed out, live: tick to publish now, untick to withdraw |
-| **n** | Put a notice at the top of every child's page (the blackboard, on thirty screens) |
+| **n** | A message at the top of every child's page (the blackboard, on thirty screens) |
 | **w** | Work waiting for you |
 | **o** | Open the received folder |
 | **c** | Who is on the network, by name |
@@ -374,6 +420,8 @@ picks up only those.
 | The address on screen ends in `:8080` | Another program on the laptop holds the page phones look for | Close that program, or tell the class to type the address with `:8080` |
 | Hand-in is off | The received folder cannot be written to | Check the USB drive has room and is not write-protected, or choose another folder |
 | The window is too small for the codes | The codes need room | Make the window bigger (maximise it), or press **j** |
+| A phone's list shows only a few files | The list is a box on the page | Slide the list itself up and down; the page says so |
+| A phone's SEND stays on the same percentage | A weak signal | Move closer to the laptop and keep the page open; if it fails, the page says so and they tap SEND again |
 | On Linux: *will not let a normal account create a network* | Making a network needs administrator rights there | Start it with `sudo hub` |
 
 If none of these match, run `hub doctor` in a terminal (or look at *Fix problems
@@ -390,6 +438,17 @@ with this computer*) and send us what it says.
   and any crash to `crash.log` in the same folder.
 - By hand, the two parts are *Windows Mobile Hotspot Service* (`icssvc`) and
   *Internet Connection Sharing* (`SharedAccess`), set to Manual.
+
+---
+
+## How fast is it?
+
+On a 2022 laptop with an Intel Wi-Fi 6 card, a Wi-Fi 6 phone two metres away
+downloaded at **about 23 MB every second**: a 1 GB video in under 45 seconds.
+Older laptops and older phones are slower; a 2012 laptop with a one-antenna
+card managed about 6.5. Every measurement, and how to repeat it, is in
+[bench/RESULTS-WINDOWS.md](../bench/RESULTS-WINDOWS.md) (Windows) and
+[bench/RESULTS.md](../bench/RESULTS.md) (the 2012 laptop, Linux).
 
 ---
 
@@ -415,8 +474,8 @@ with this computer*) and send us what it says.
 | Everywhere | **up/down arrows** move, **Enter** chooses, **Esc** goes back |
 | First screen | **q** quits |
 | Choosing files | **Space** tick/untick, **Enter** open a folder, **Backspace** out of it, **a** all here, **n** none here, **Page Up/Down**, **Home/End** |
-| Handing out | **f** files, **n** notice, **w** work waiting, **o** received folder, **c** who is on, **j** join code, **q** stop |
-| Work waiting | **e** accept all, **p** all from this person, **a** accept one, **r** refuse, **o** open |
+| Handing out | **h** help, **f** files, **n** message, **w** work waiting, **o** received folder, **c** who is on, **j** join code, **q** stop |
+| Work waiting | **o** look first, **a** accept one, **e** accept all, **p** all from this person, **r** refuse |
 | Who is on | **Space** pause/unpause, **p** new wifi password |
 
 ---

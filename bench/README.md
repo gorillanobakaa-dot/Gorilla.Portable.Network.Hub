@@ -1,4 +1,4 @@
-<!-- Version: 1.1.0 · updated 26-08-22-17-12 -->
+<!-- Version: 1.2.0 · updated 26-09-24-14-10 -->
 # Burst transfer notes: what LocalSend does, what it cannot do, and what to build instead
 
 Working notes from a brainstorming session on 2026-08-22. Source read,
@@ -74,3 +74,21 @@ appended rather than edited in place, so the change of mind stays visible.
 The next step is `05-open-questions.md` item 7, confirming the Go platform
 support cutoffs. It is a ten minute job and it gates the toolchain for
 everything built afterwards.
+
+## The measuring tools in this folder (added 2026-09-24)
+
+This folder also holds the tools that produced the published numbers, kept so
+anybody can repeat them. Results: [RESULTS.md](RESULTS.md) (the 2012 laptop,
+Linux) and [RESULTS-WINDOWS.md](RESULTS-WINDOWS.md) (a 2022 laptop, Windows).
+
+| tool | system | what it does |
+|---|---|---|
+| `transfer-watch.py` | Linux | samples the kernel's counters, `iw` station dump, CPU, temperature and power once a second during a transfer |
+| `transfer-watch-windows.py` | Windows | the same from Windows' interface counters (psutil): the hotspot adapter, CPU, the hub's CPU, mains or battery |
+| `phone-speedtest.html` | any phone | served by the hub; pulls a big file into memory over 1 to 8 connections for a set time and counts every byte that arrived. Nothing is saved on the phone |
+| `download-meter.py` | any | the same pull from Python; run on the hub laptop against 127.0.0.1 it measures how fast the software can go without a radio |
+| `console-read.cs` | Windows | copies a console window's text by process number, to read the hub's own log lines without redirecting it |
+| `hotspot-*.ps1` | Windows | the hotspot's guard, close, channel and restart tests, and a read-only monitor |
+| `screenshot-tour.ps1`, `console-keys.cs`, `screenshot-phone-page.py` | Windows | the release pictures, taken from the real program |
+
+Each file says at the top what it needs and how to run it.

@@ -1558,6 +1558,18 @@ try {
       if ($changed -and $mgr.TetheringOperationalState -ne 'Off') { $null = Op ($mgr.StopTetheringAsync()) }
       if ($changed) { $cfg.Ssid = $env:HUB_SSID; $cfg.Passphrase = $env:HUB_PASS; try { $cfg.Band = $band } catch { }; Act ($mgr.ConfigureAccessPointAsync($cfg)) }
       "HUB_BAND $($mgr.GetCurrentAccessPointConfiguration().Band)"
+      # Windows switches its hotspot off after five minutes with no phone on
+      # it (network.log, 2026-09-24: 09:00 and 09:05 by its clock, between two tests). In a
+      # lesson that is any quiet moment. The same switch as Settings' "turn
+      # off when no devices are connected", allowed without administrator.
+      # A note file says it was on, so stopping puts it back, and only then.
+      try {
+        if ($TM::IsNoConnectionsTimeoutEnabled()) {
+          $TM::DisableNoConnectionsTimeout()
+          $null = New-Item -ItemType File -Force -Path $env:HUB_TIMEOUT_NOTE
+          'HUB_TIMEOUT switched off'
+        }
+      } catch { "HUB_TIMEOUT failed $($_.Exception.Message)" }
       if ($mgr.TetheringOperationalState -ne 'On') {
         $r = Op ($mgr.StartTetheringAsync())
         "HUB_START $($r.Status) $($r.AdditionalErrorMessage)"
@@ -1592,6 +1604,11 @@ public static class HubWlan {
       foreach ($q in $NI::GetConnectionProfiles()) {
         try { $m = $TM::CreateFromConnectionProfile($q) } catch { continue }
         if ($m.TetheringOperationalState -ne 'Off') { $r = Op ($m.StopTetheringAsync()); "HUB_STOP $($r.Status)" }
+      }
+      # Put Windows' five-minute switch-off back, if the hub was the one
+      # that took it away.
+      if ($env:HUB_TIMEOUT_NOTE -and (Test-Path $env:HUB_TIMEOUT_NOTE)) {
+        try { $TM::EnableNoConnectionsTimeout(); Remove-Item $env:HUB_TIMEOUT_NOTE; 'HUB_TIMEOUT switched back on' } catch { "HUB_TIMEOUT failed $($_.Exception.Message)" }
       }
       "HUB_STATE $($mgr.TetheringOperationalState)"
     }
@@ -1751,6 +1768,18 @@ pub(crate) fn card_summary_from(drivers: &str, caps: &str) -> Option<String> {
     Some(s)
 }
 
+/// The note that says the hub switched off Windows' five-minute hotspot
+/// timeout, so that stopping puts it back. A file rather than memory because
+/// the watchman, which does the stopping after a crash or the window's X, is
+/// another process.
+#[cfg(windows)]
+fn timeout_note() -> std::path::PathBuf {
+    let base = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
+    let dir = base.join("PortableNetworkHub");
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join("hotspot-timeout-was-on")
+}
+
 /// Run the hotspot script and return its `HUB_*` lines as (key, rest).
 #[cfg(windows)]
 fn win_hotspot(action: &str, ssid: &str, password: &str) -> Result<Vec<(String, String)>, String> {
@@ -1761,6 +1790,7 @@ fn win_hotspot(action: &str, ssid: &str, password: &str) -> Result<Vec<(String, 
         .env("HUB_SSID", ssid)
         .env("HUB_PASS", password)
         .env("HUB_BAND", if WIFI_BAND_5.load(std::sync::atomic::Ordering::Relaxed) { "5" } else { "2.4" })
+        .env("HUB_TIMEOUT_NOTE", timeout_note())
         .stdin(std::process::Stdio::null())
         .output()
         .map_err(|e| format!("Could not ask Windows to switch the hotspot: {e}"))?;
@@ -1818,6 +1848,7 @@ fn arm_watchman() {
         std::process::Command::new("powershell")
             .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", &encoded])
             .env("HUB_ACTION", "stop")
+            .env("HUB_TIMEOUT_NOTE", timeout_note())
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -1874,6 +1905,8 @@ fn guard_hotspot() {
         let mut misses = 0;
         let mut beats = 0u32;
         let mut down_since: Option<std::time::Instant> = None;
+        // Starts Windows accepted that still brought no address.
+        let mut empty_starts = 0u32;
         loop {
             // Two seconds while the network is missing, three while it is up.
             let pause = if misses > 0 { 2 } else { 3 };
@@ -1912,6 +1945,18 @@ fn guard_hotspot() {
             if HOTSPOT_WANTED.lock().unwrap_or_else(|e| e.into_inner()).is_none() {
                 continue;
             }
+            // A start Windows accepted, twice, and still no address: switch
+            // it fully off first. Seen 2026-09-24 after the services had been
+            // switched off and on: Windows said On through about two minutes of
+            // restarts, the address never came, and a stop then start brought
+            // it up at once. (The stop is the hub's own restart, done by hand
+            // that morning; this has not yet been seen to cure it by itself.)
+            if empty_starts >= 2 {
+                let _ = win_hotspot("stop", "", "");
+                network_log("still no address after two starts: switched fully off, starting again");
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                empty_starts = 0;
+            }
             let lines = win_hotspot("start", &ssid, &pass).unwrap_or_default();
             let said: Vec<String> = lines.iter().map(|(k, v)| format!("{k} {v}")).collect();
             network_log(&format!("switching back on; Windows said: {}", said.join(" | ")));
@@ -1935,7 +1980,11 @@ fn guard_hotspot() {
                     std::thread::sleep(std::time::Duration::from_millis(250));
                 }
             }
+            if accepted && !up {
+                empty_starts += 1;
+            }
             if up {
+                empty_starts = 0;
                 if let Some(t) = down_since.take() {
                     network_log(&format!("network back after {} s", t.elapsed().as_secs()));
                 }
@@ -1998,6 +2047,9 @@ pub fn hotspot_up(ssid: &str, password: &str, _channel: Option<u16>) -> Result<H
     }
     let _op = HOTSPOT_OP.lock().unwrap_or_else(|e| e.into_inner());
     let lines = win_hotspot("start", ssid, password)?;
+    if let Some(t) = win_get(&lines, "TIMEOUT") {
+        network_log(&format!("Windows' five-minute switch-off: {t}"));
+    }
     let state = win_get(&lines, "STATE").unwrap_or("");
     if state != "On" {
         let why = win_get(&lines, "ERR")
@@ -2187,9 +2239,12 @@ impl Hotspot {
     pub fn down(&self) {
         *HOTSPOT_WANTED.lock().unwrap_or_else(|e| e.into_inner()) = None;
         let _op = HOTSPOT_OP.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = win_hotspot("stop", "", "");
+        let lines = win_hotspot("stop", "", "").unwrap_or_default();
         set_problem("");
         network_log("network switched off: stopped in the hub");
+        if let Some(t) = win_get(&lines, "TIMEOUT") {
+            network_log(&format!("Windows' five-minute switch-off: {t}"));
+        }
     }
 
     #[cfg(not(any(target_os = "linux", windows)))]

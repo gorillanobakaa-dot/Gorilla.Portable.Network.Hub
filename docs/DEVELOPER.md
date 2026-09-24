@@ -1,4 +1,4 @@
-<!-- Version: 1.4.0 · updated 26-08-25-12-01 -->
+<!-- Version: 1.5.0 · updated 26-09-24-14-10 -->
 # Gorilla Portable Network Hub: the developer track
 
 Companion to `WHY-THIS-EXISTS.md`, which is the layman track and is not a
@@ -1587,3 +1587,63 @@ passed its own test while no code it drew could be read, and OpenCV found it in
 one run. And never drive the screen with `SendKeys`: Windows will not bring a
 background window forward, so the keys land wherever the person at the laptop
 is typing.
+
+## 15. Pages that explain themselves, and measuring the radio on Windows (0.9.10)
+
+The per-change notes are in [0.9.10-DEVELOPER-NOTES.md](0.9.10-DEVELOPER-NOTES.md).
+This section is the map.
+
+### 15.1 The explanation lives where the question comes up
+
+The rule for every screen and page since 0.9.10: say what a control does next
+to it, only while it is the one in use, and say what happened after it was
+used. Concretely:
+
+- **Phone page** (`page.rs class_page`): numbered sections with a `.hint` line;
+  a result box per `done` tag (`.done` green, `.bad` red), each ending with
+  what to do next; `<details>` for the rare questions (where downloads go; the
+  sign-in window) so they cost one line until opened. `SEND_SCRIPT` sends the
+  hand-in with XHR for a progress count, falling back to the plain post.
+- **Teacher's screens** (`tui.rs`): help lines appear under the row the cursor
+  is on (`draw_home`, `draw_send`, `draw_files`), never all at once, because the
+  row budget is shared with the content; `SENDING_HELP` is one page behind `h`,
+  shown with the existing `note()` screen.
+- Button words are stable: THAT'S ME, READ, GET IT, SEND IT TO YOUR TEACHER.
+  `bench/screenshot-phone-page.py` and the guide depend on them.
+
+`page::tests::the_page_explains_itself_and_every_result` holds the phone
+page's promises; when rewording, keep what it checks true.
+
+### 15.2 The Windows radio bench
+
+`transfer-watch.py` reads `/sys`, `iw` and RAPL, none of which exist on
+Windows. The Windows set, all in `bench/`:
+
+| tool | role |
+|---|---|
+| `phone-speedtest.html` | payload ground truth: N Range requests on the phone, into memory, counted |
+| `transfer-watch-windows.py` | Windows' counters for the hotspot adapter (the one holding 192.168.137.1), once a second |
+| `download-meter.py` | software ceiling on loopback (756 MB/s on one connection on the L15) |
+| `console-read.cs` | the hub window's own log lines, by PID |
+
+What the first day established, in [bench/RESULTS-WINDOWS.md](../bench/RESULTS-WINDOWS.md):
+
+- Windows' byte counter reads 5 to 7% above payload (headers and
+  retransmissions); its one-second deltas are bursty, so no single-second peak
+  is reported.
+- Windows gives no per-client rate for its hotspot. The virtual adapter's link
+  speed with one client connected (287 Mbit/s = HE, 2 SS, 20 MHz, MCS 11) is
+  the denominator used.
+- The ceiling was 191 Mbit/s, 66.6%, at one connection, and moved with nothing
+  reachable from outside Intel's driver (connections, Throughput Booster).
+- Untested: the laptop joined to nothing, 5 GHz, MIMO power save, upload, many
+  clients.
+
+### 15.3 The five-minute timeout
+
+Windows' Mobile Hotspot switches itself off after five minutes with no client.
+`WIN_HOTSPOT start` calls `DisableNoConnectionsTimeout` (no elevation needed)
+and records that it did in a note file; `stop` re-enables it only when the
+note exists. The watchman runs `stop` too, so a crash or the window's X still
+puts the setting back. Anything else that changes Windows settings should
+follow the same pattern: record, change, restore only what was recorded.

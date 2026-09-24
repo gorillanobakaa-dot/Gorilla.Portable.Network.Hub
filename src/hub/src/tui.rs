@@ -630,6 +630,37 @@ impl App {
             }
         }
         f.blank();
+        // What the highlighted choice does, before anyone presses enter on it.
+        // The four lines name the choices; they cannot also say what each one
+        // is FOR, or what it needs (a cable, another computer running the
+        // hub). Two lines, for the one under the bar only, so the screen does
+        // not become a manual.
+        let what: [&str; 2] = match self.row {
+            0 => [
+                "  Makes a wifi network from this laptop. Phones and laptops join it,",
+                "  get the files you choose, and can send work back. No internet needed.",
+            ],
+            1 => [
+                "  For one other computer joined to this one by a network cable.",
+                "  The fastest way to move a lot at once, like a folder of videos.",
+            ],
+            2 => [
+                "  Takes files from another computer that is running this hub,",
+                "  on the same wifi or over a cable.",
+            ],
+            _ if cfg!(windows) => [
+                "  Checks the parts of Windows the hub needs, the firewall and the wifi",
+                "  card, and switches back on whatever is off. One permission prompt.",
+            ],
+            _ => [
+                "  Checks this computer's wifi, cable and firewall, and says what",
+                "  to change if something would stop the hub working.",
+            ],
+        };
+        for line in what {
+            f.push(line);
+        }
+        f.blank();
         // Said on the FIRST screen, and not as a one-liner. A laptop that
         // has been "sped up" looks perfectly fine: nothing tells its owner
         // that the hotspot or the cable will fail, and the person who ran
@@ -858,6 +889,36 @@ impl App {
             f.push_dim("  phones cannot see it. If phones cannot find the network, use 2.4.");
             f.push_dim("  Windows picks the channel itself; the screen shows which one.");
         }
+        // The rows that had no explanation at all: the folder, the name, the
+        // password and the button. A first-time teacher stands on each of
+        // them wondering what it wants.
+        if self.editing.is_none() {
+            let why: &[&str] = match (self.cable, self.row) {
+                (_, 0) => &[
+                    "  The folder with the lesson's files; a USB drive is fine. Press",
+                    "  enter to find it. After Start you tick which files the class sees.",
+                ],
+                (false, 1) => &[
+                    "  The name phones see in their wifi list. Anything you like; the",
+                    "  class looks for this name.",
+                ],
+                (false, 2) => &[
+                    "  At least 8 letters or numbers. The class does not have to type it:",
+                    "  they scan a code. Write it on the board for phones that cannot scan.",
+                ],
+                (false, r) if r == fields.len() => &[
+                    "  Next you tick which files the class may see. Then the wifi network",
+                    "  switches on and two codes appear for the class to scan.",
+                ],
+                (true, r) if r == fields.len() => &[
+                    "  Next you tick which files to send. Plug the cable in first.",
+                ],
+                _ => &[],
+            };
+            for line in why {
+                f.push_dim(line);
+            }
+        }
         if self.row == fields.len() - 1 && self.editing.is_none() {
             f.push_dim("  Everything people send you lands in this one folder. Press");
             f.push_dim("  enter to choose another. On the next screen, o opens it.");
@@ -919,6 +980,10 @@ impl App {
 
     fn draw_tick(&self, f: &mut Frame, pre: bool) {
         self.title(f, "What gets handed out");
+        // What the marks mean, said once at the top: [~] is not a symbol
+        // anybody outside a file manager has been taught.
+        f.push("  Tick what the class may see; only ticked files reach the phones.");
+        f.push_dim("  [x] handed out    [ ] not handed out    [~] some of the files inside");
         if self.tick_dir.is_empty() {
             f.push_dim("  In: the folder you chose (top level)");
         } else {
@@ -1039,9 +1104,10 @@ impl App {
     /// The same numbers for drawing and for moving, so a key never moves to a
     /// place the screen did not show.
     fn tick_grid(&self, cells: &[String], rows: usize, cols: usize) -> crate::grid::Grid {
-        // Title 2, "In:" 2, fixed rows, and below: blank, up to 4 warning
-        // lines, status, count, the mid-lesson line and the hint row.
-        let room = rows.saturating_sub(4 + self.tick_fixed() + 10).max(3);
+        // Title 2, what the marks mean 2, "In:" 2, fixed rows, and below:
+        // blank, up to 4 warning lines, status, count, the mid-lesson line and
+        // the hint row.
+        let room = rows.saturating_sub(6 + self.tick_fixed() + 10).max(3);
         let widest = cells.iter().map(|c| term::width(c)).max().unwrap_or(10);
         let sel = self.row.saturating_sub(self.tick_fixed());
         crate::grid::Grid::lay(cells.len(), widest, cols, room, sel, self.tick_first)
@@ -1114,7 +1180,7 @@ impl App {
             })
             .collect();
         let w = term::group_width(&lines);
-        let room = f.rows.saturating_sub(f.used() + 6).max(1);
+        let room = f.rows.saturating_sub(f.used() + 7).max(1);
         // The page follows the cursor. This used to draw the first rows only,
         // so work beyond the bottom of the window could be selected and
         // accepted or refused without ever being seen.
@@ -1139,12 +1205,15 @@ impl App {
             f.push_dim(&format!("  sent {}", p.at));
         }
         f.blank();
+        // Every key said with what it does to the work, because "refuse"
+        // sounds like "delete" and nobody would press it if it did.
         f.push(&format!(
-            "  {} waiting. Press e to accept ALL of them at once, or p for all from",
+            "  {} waiting. Nothing is kept until you accept it.",
             items.len()
         ));
-        f.push("  the person under the cursor. Accepted work goes to the folder above.");
-        self.hints(f, "  a accept  e ALL  p all from them  r refuse  o open  esc back");
+        f.push("  o looks at it first   a accepts it   e accepts ALL   p all from them");
+        f.push("  r refuses it: moved aside, never deleted. Accepted work goes above.");
+        self.hints(f, "  o look  a accept  e ALL  p all from them  r refuse  esc back");
     }
 
 }
@@ -1781,7 +1850,10 @@ impl App {
                 f.push_dim(&format!("  {}: {}", term::truncate(who, 18), text));
             }
         }
-        self.hints(f, "  f files  n notice  w waiting  o received  c who is on  j code  q stop");
+        // h first: the one key that explains all the others. The rest are
+        // named by what they are for ("message", "work"), not by the
+        // program's own words for them ("notice", "waiting").
+        self.hints(f, "  h HELP  f files  n message  w work  o received  c who  j code  q stop");
     }
 
     fn draw_receive(&self, f: &mut Frame) {
@@ -1872,7 +1944,7 @@ impl App {
         if self.files.is_empty() {
             f.push("  That computer is not handing out any files.");
         }
-        let room = f.rows.saturating_sub(f.used() + 3);
+        let room = f.rows.saturating_sub(f.used() + 6);
         for (i, e) in self.files.iter().enumerate().take(room) {
             let line = format!("  {:<34}{:>10}", e.name, human(e.size));
             if self.row == i + settings.len() {
@@ -1887,6 +1959,22 @@ impl App {
         if let Some(h) = &self.tab_hint {
             f.blank();
             f.push_dim(&format!("  {h}"));
+        }
+        // The three settings, said in words, only while standing on one.
+        // "Connections per file" is the mechanism's name; what a person needs
+        // to know is that leaving it alone is the right answer.
+        if self.editing.is_none() && self.tab_hint.is_none() {
+            f.blank();
+            if self.row < settings.len() {
+                f.push_dim(match self.row {
+                    0 => "  The folder on THIS computer the files are saved into. Enter to change it.",
+                    1 => "  How many pieces of one file come at once. Leave it unless told otherwise.",
+                    _ => "  How many files come at once. Leave it unless told otherwise.",
+                });
+            } else {
+                f.push_dim("  Enter gets the file under the bar; a gets them all. A download that");
+                f.push_dim("  breaks off carries on from where it stopped the next time.");
+            }
         }
         if self.editing.is_some() {
             self.hints(f, "  type to change    tab completes a path    enter to keep it    esc to leave it");
@@ -2713,6 +2801,10 @@ impl App {
 
     fn sending_key(&mut self, k: Key) -> bool {
         match k {
+            Key::Char('h') | Key::Char('?') => {
+                self.note(SENDING_HELP);
+                return false;
+            }
             Key::Char('f') => {
                 self.open_tick(false);
                 return false;
@@ -2749,7 +2841,10 @@ impl App {
                 // back to the menu and starting again on the same port is the
                 // one case that would fail. Said plainly rather than hidden.
                 self.forget_session();
-                self.note("Stopped handing out.\n\nThe network has been put back the way it was.\n\nWhat you chose to send has been forgotten, so the next one starts from nothing.\n\nTo hand out a different folder, close this and start it again.");
+                // "Close this and start it again" was true before 0.9.9, when
+                // Stop could not stop the server. It can now, so the way on is
+                // the menu, not a restart.
+                self.note("Stopped handing out.\n\nThe wifi network is off, and the phones can no longer reach the class page.\n\nWhat you chose to send has been forgotten, so the next lesson starts from nothing.\n\nTo hand out again, choose \"Hand out files to the class over wifi\" on the first screen.");
                 self.back = Screen::Home;
             }
             Key::Quit => return true,
@@ -3843,6 +3938,37 @@ impl App {
 }
 
 // ---------------------------------------------------------------- formatting
+
+/// The h key on the handing-out screen: every key there, and what the class
+/// does, in words for somebody who has never seen the program.
+///
+/// Asked for by the owner, 2026-09-24: the tool "is getting quite complex to
+/// use", and the bottom line of this screen was seven letters and seven words
+/// ("f files  n notice  w waiting...") that only make sense once you know them.
+/// One page, reachable from the screen where the question comes up, rather
+/// than a manual nobody has with them in the bush.
+const SENDING_HELP: &str = "HELP: HANDING OUT FILES
+
+WHAT THE CLASS DOES
+1. Switch wifi ON. Mobile data can stay off.
+2. Scan code 1 with the phone's camera and tap what appears: the phone joins the class wifi. A phone that cannot scan: join the network named at the top by hand, and type the password shown there.
+3. The class page opens by itself. If it does not, scan code 2, or type the address shown at the top.
+4. On the page they type their name once. Then READ or GET IT for your files, send their work to you, or send you a note.
+
+THE KEYS ON THIS SCREEN
+f   Files: tick or untick what the class can see. It changes on the phones at once.
+n   Message: a line shown at the top of every phone's page, for example \"Open lesson 2\".
+w   Work: what the class has sent you. Accept it into your received folder, or refuse it.
+o   Opens your received folder, where accepted work is kept.
+c   Who is connected: pause a device that misbehaves, or change the wifi password.
+j   One big code to join the wifi, easier to scan from the back of the room.
+q   Stop: switches the wifi network off. The phones lose the class page.
+
+IF SOMETHING GOES WRONG
+A phone cannot see the network: stand closer; walls and metal block wifi. On Windows, stop and check that the band on the start screen says 2.4 GHz.
+The page does not open by itself: scan code 2, or type the address.
+Choose files does nothing on a phone: that phone opened the page in its small sign-in window. The page tells them how to open it in the normal browser.
+The network went off: the hub switches it back on by itself within seconds, and says so on this screen.";
 
 fn transfer_row(who: &str, t: &serve::Transfer) -> String {
     let pct = if t.total > 0 { t.done as f64 / t.total as f64 } else { 0.0 };

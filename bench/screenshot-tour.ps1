@@ -1,4 +1,4 @@
-# Version: 1.1.0 · updated 26-09-24-09-30
+# Version: 1.2.0 · updated 26-09-24-12-30
 #
 # A tour of the hub's screens on real Windows, photographed for the release
 # pages: drives the real program with keypresses and photographs its window.
@@ -21,11 +21,15 @@
 # no focus and cannot reach any other window, and Keys refuses to type at all
 # unless the hub this tour started is still running.
 #
-# Steps: first screen; the fix screen; the start screen on the band row; the
-# file list (columns, then the big-folder question); handing out with the
-# codes and the measured channel; work sent in from this laptop through the
-# page (curl, as a phone would); the phone page (screenshot-phone-page.py);
-# the waiting screen; accept all. Then Stop and quit.
+# Steps: first screen; the fix screen; the start screen on the band row and on
+# Start; the file list (columns, then the big-folder question); handing out
+# with the codes and the measured channel; the h help page; work sent in from
+# this laptop through the page (curl, as a phone would); the phone pages
+# (screenshot-phone-page.py: name, page, downloads help, choosing, sending,
+# arrived); the waiting screen; accept all. Then Stop and quit.
+#
+# Pictures are named windows-<version>-<step>.png and phone-<version>-<step>.png
+# with the version read from the hub itself. 1.1.0 had 0.9.9 written in.
 #
 #   powershell -ExecutionPolicy Bypass -File bench\screenshot-tour.ps1 -Hub <hub.exe> -Demo C:\GorillaHubDemo -OutDir docs\screenshots\gallery
 #
@@ -41,9 +45,13 @@ param(
     [int]$Rows = 44,
     # 'main' (the tour above) or 'not-ready' (first screen with services
     # switched off, the offer to fix, and the result). See the not-ready block.
-    [ValidateSet('main', 'not-ready')] [string]$Scene = 'main'
+    [ValidateSet('main', 'not-ready')] [string]$Scene = 'main',
+    # Read from `hub --version` when not given.
+    [string]$Ver = ''
 )
 $ErrorActionPreference = 'Stop'
+if (-not $Ver) { $Ver = ((& $Hub --version) -split '\s+')[1] }
+"pictures for hub $Ver"
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $OutDir = (Resolve-Path $OutDir).Path
 Add-Type -AssemblyName System.Drawing
@@ -112,7 +120,14 @@ $saved = @((powershell -NoProfile -ExecutionPolicy Bypass -File $hsFile 2>$null)
 $home_ = Join-Path $Demo 'Teacher'
 $lesson = Join-Path $home_ 'Documents\Year 7 science'
 $title = 'HUB-SCREENSHOT-TOUR'
-$inner = "title $title & mode con: cols=$Cols lines=$Rows & set USERPROFILE=$home_& cd /d `"$lesson`" & `"$Hub`""
+# PSModuleAnalysisCachePath: with USERPROFILE moved, the PowerShell the hub
+# runs wrote its module cache to Microsoft\Windows\PowerShell in the CURRENT
+# folder, which here is the lesson folder, and the next tour photographed a
+# "Microsoft" folder among the lesson's files (2026-09-24). Only under the
+# tour's moved profile; normal runs leave nothing behind. Sent to TEMP instead.
+$stray = Join-Path $lesson 'Microsoft\Windows\PowerShell\ModuleAnalysisCache'
+if (Test-Path $stray) { Remove-Item $stray; Remove-Item (Join-Path $lesson 'Microsoft') -Recurse -Force }
+$inner = "title $title & mode con: cols=$Cols lines=$Rows & set USERPROFILE=$home_& set PSModuleAnalysisCachePath=$env:TEMP\tour-ps-cache& cd /d `"$lesson`" & `"$Hub`""
 $proc = Start-Process conhost.exe -ArgumentList "cmd.exe /c `"$inner`"" -PassThru
 try {
     $tries = 0
@@ -134,22 +149,22 @@ try {
         # Run after `hub services --put-back` has switched the hotspot
         # services off, as a tweak list leaves them. The fix itself raises a
         # Windows permission prompt that the person at the laptop answers.
-        Shot 'windows-0.9.9-not-ready'
+        Shot "windows-$Ver-not-ready"
         Keys '\r' 1500                                       # wifi: stops at the offer to fix
-        Shot 'windows-0.9.9-fix-offer'
+        Shot "windows-$Ver-fix-offer"
         Keys '\r' 1000                                       # switch them on: UAC appears
         "  waiting for the permission prompt to be answered..."
         $t0 = Get-Date
         do { Start-Sleep -Seconds 2; $done = (& $Hub services) -match 'Everything the hub needs is switched on' } until ($done -or ((Get-Date) - $t0).TotalSeconds -gt 180)
         Start-Sleep -Seconds 3
-        Shot 'windows-0.9.9-fix-done'
+        Shot "windows-$Ver-fix-done"
         Keys '\r' 800; Keys '\e' 1200; Keys 'q' 2000
         return
     }
 
-    Shot 'windows-0.9.9-first-screen'
+    Shot "windows-$Ver-first-screen"
     Keys '\d\d\d\r' 3000                                     # Fix problems with this computer
-    Shot 'windows-0.9.9-fix-problems'
+    Shot "windows-$Ver-fix-problems"
     Keys '\e' 1200
     Keys '\u\u\u\r' 1500                                     # Hand out files over wifi
     # A demo password, typed, so the owner's real one never appears.
@@ -157,18 +172,23 @@ try {
     Keys ('\b' * 30)
     Keys 'leafy7green\r'
     Keys '\d' 800                                            # the Wifi band row
-    Shot 'windows-0.9.9-start-screen-band'
-    Keys '\d\d\d\r' 2500                                     # Start handing out -> what gets handed out
+    Shot "windows-$Ver-start-screen-band"
+    Keys '\d\d\d' 800                                        # onto Start, which says what happens next
+    Shot "windows-$Ver-start-screen-start"
+    Keys '\r' 2500                                           # Start handing out -> what gets handed out
     Keys 'n' 800                                             # untick all, to show choosing
-    Shot 'windows-0.9.9-folder-view'
+    Shot "windows-$Ver-folder-view"
     Keys '\d' 500
     Keys ' ' 800                                             # a folder of 36 files: asks first
-    Shot 'windows-0.9.9-big-folder-question'
+    Shot "windows-$Ver-big-folder-question"
     Keys ' ' 800                                             # yes, all of them
     Keys 'a' 500; Keys 'a' 800                               # and everything else here (asks, yes)
     Keys '\u\u\u\u\u\u' 500                                  # up to CONTINUE
     Keys '\r' 18000                                          # the network comes up; the channel is measured
-    Shot 'windows-0.9.9-handing-out-codes'
+    Shot "windows-$Ver-handing-out-codes"
+    Keys 'h' 1000                                            # the help page: every key in words
+    Shot "windows-$Ver-help"
+    Keys '\r' 800
 
     # Work sent in from this laptop, through the page, as a phone would.
     $jar = Join-Path $env:TEMP 'tour-cookies.txt'
@@ -179,13 +199,13 @@ try {
     foreach ($n in 'Leaf drawing.jpg', 'Photosynthesis answers.docx', 'Label the leaf.pdf') { Set-Content (Join-Path $tmp $n) ('demo ' * 2000) }
     curl.exe -s -o NUL -c $jar -b $jar -F "token=$token" -F "work=@$tmp\Leaf drawing.jpg" -F "work=@$tmp\Photosynthesis answers.docx" -F "work=@$tmp\Label the leaf.pdf" http://127.0.0.1/handin
     "  sent three pieces of work through the page"
-    python (Join-Path $PSScriptRoot 'screenshot-phone-page.py') --url http://127.0.0.1/ --out (Join-Path $OutDir 'phone-0.9.9-choose-and-remove.png')
+    python (Join-Path $PSScriptRoot 'screenshot-phone-page.py') --url http://127.0.0.1/ --prefix (Join-Path $OutDir "phone-$Ver")
     Start-Sleep -Seconds 3
-    Shot 'windows-0.9.9-work-arrived'
+    Shot "windows-$Ver-work-arrived"
     Keys 'w' 1200
-    Shot 'windows-0.9.9-waiting-accept-all'
+    Shot "windows-$Ver-waiting-accept-all"
     Keys 'e' 1500
-    Shot 'windows-0.9.9-accepted-all'
+    Shot "windows-$Ver-accepted-all"
     Keys '\r' 800
     Keys '\e' 1200
     Keys 'q' 4000                                            # Stop

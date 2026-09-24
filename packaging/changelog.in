@@ -1,5 +1,35 @@
 gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
 
+  * THE PAGES AND SCREENS EXPLAIN THEMSELVES. The class page has numbered
+    sections with a line each on what the buttons do, a hand-in that shows
+    its progress (XHR upload, "SENDING... N% - KEEP THIS PAGE OPEN"), a result
+    box for every outcome saying what to do next, and help for "where did my
+    download go". The sign-in-window help is folded under its symptom. The
+    teacher's screens describe the highlighted menu choice, every start-screen
+    row, the tick marks, and the waiting-work keys; h on the handing-out
+    screen opens one page of help.
+  * THE NETWORK NO LONGER DROPS WHEN THE ROOM IS QUIET. Windows switches its
+    hotspot off after five minutes with no client; the hub disables that
+    (DisableNoConnectionsTimeout, no administrator needed) and puts it back on
+    stop, including through the watchman, using a note file.
+  * The guard switches the hotspot fully off before restarting it when two
+    accepted starts brought no address (seen once, after the services were
+    switched off and on). Not yet seen working.
+  * hub serve --channel hung forever: the argument loop never moved past it.
+  * Downloads a client breaks off are logged, not only finished ones.
+  * hub serve on Windows prints 192.168.137.1 while the hotspot is starting,
+    not the laptop's other networks' addresses.
+  * hub --help no longer says Windows needs an administrator for the wifi.
+  * READ-THIS-FIRST in the Windows zip rewritten as a six-step start.
+  * bench: transfer-watch-windows.py, phone-speedtest.html, download-meter.py,
+    console-read.cs; results in bench/RESULTS-WINDOWS.md (ThinkPad L15, Intel
+    AX201: 191 Mbit/s best 30 s to a Wi-Fi 6 phone, 66.6% of the link).
+  * Windows only, as 0.9.9. The Linux build has not been run on hardware.
+
+ -- gorillanobakaa <gorillanobakaa@gmail.com>  @DATE@
+
+gorilla-portable-network-hub (0.9.9) unstable; urgency=medium
+
   * WINDOWS MAKES ITS OWN WIFI NETWORK NOW. Choosing "Hand out files over
     wifi" switches Mobile Hotspot on through the WinRT tethering manager, run
     via PowerShell (-EncodedCommand; name, password and band in environment

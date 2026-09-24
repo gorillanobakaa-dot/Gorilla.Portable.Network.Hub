@@ -1,0 +1,95 @@
+<!doctype html>
+<!-- Version: 1.0.0 · updated 26-09-24-13-30 -->
+<!--
+phone-speedtest.html - measure the hub's wifi from a phone's browser, without
+filling the phone.
+
+Put this file and one big file in the folder the hub serves, open it on the
+phone from the class page, and press START. It pulls the big file over 1, 2, 4
+or 8 connections at once (HTTP Range, each its own slice) for a fixed time,
+reads every byte into memory and throws it away, and shows MB/s each second.
+
+WHY IN THE BROWSER: a real download also measures the phone's storage and its
+download manager, which restarted pieces of a 10 GB download on 2026-09-24 and
+made Windows count 14.1 GB for a 10.6 GB file. This counts exactly the bytes
+that arrived, which is the figure to check Windows' own counter against
+(bench/transfer-watch-windows.py samples that counter at the same time).
+-->
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hub speed test</title>
+<style>
+body{font-family:sans-serif;margin:0;padding:12px;max-width:620px}
+button{background:#1a6b1a;color:#fff;border:0;border-radius:6px;padding:14px 22px;font-size:1.1em}
+select,input{font-size:1.1em;padding:6px;margin:4px 0}
+#now{font-size:2.4em;font-weight:bold;margin:12px 0}
+#log{font-family:monospace;font-size:.9em;white-space:pre-wrap}
+.big{font-size:1.1em;line-height:1.6}
+</style></head><body>
+<h1>Hub speed test</h1>
+<div class="big">
+File: <select id="file"></select><br>
+Connections: <select id="conns"><option>1</option><option>2</option><option selected>4</option><option>8</option></select><br>
+Seconds: <input id="secs" type="number" value="60" min="10" max="600" style="width:5em"><br>
+</div>
+<button id="go">START</button>
+<div id="now">-</div>
+<div id="sum" class="big"></div>
+<div id="log"></div>
+<script>
+const $ = id => document.getElementById(id);
+// The class page's file frame (/files) links each file as href="/name?dl=1".
+fetch('/files', { cache: 'no-store' }).then(r => r.text()).then(t => {
+  const names = [...t.matchAll(/href="\/([^"?#]+)\?dl=1"/g)].map(m => decodeURIComponent(m[1]))
+    .filter(n => !/\.html?$/.test(n));
+  for (const n of [...new Set(names)]) { const o = document.createElement('option'); o.textContent = n; $('file').appendChild(o); }
+  if (!names.length) { const o = document.createElement('option'); o.textContent = 'big-video-10GB.mkv'; $('file').appendChild(o); }
+});
+
+async function pull(url, start, end, deadline, count, ctl) {
+  const r = await fetch(url, { headers: { Range: `bytes=${start}-${end}` }, cache: 'no-store', signal: ctl.signal });
+  const rd = r.body.getReader();
+  while (performance.now() < deadline) {
+    const { done, value } = await rd.read();
+    if (done) break;
+    count.n += value.length;
+  }
+  try { ctl.abort(); } catch (e) {}
+}
+
+$('go').onclick = async () => {
+  $('go').disabled = true;
+  const name = $('file').value, url = '/' + encodeURIComponent(name);
+  const conns = +$('conns').value, secs = +$('secs').value;
+  const head = await fetch(url, { method: 'HEAD', cache: 'no-store' });
+  const size = +head.headers.get('Content-Length');
+  const slice = Math.floor(size / conns);
+  const count = { n: 0 }, per = [];
+  const t0 = performance.now(), deadline = t0 + secs * 1000;
+  const jobs = [];
+  for (let i = 0; i < conns; i++) {
+    const ctl = new AbortController();
+    jobs.push(pull(url, i * slice, i === conns - 1 ? size - 1 : (i + 1) * slice - 1, deadline, count, ctl).catch(() => {}));
+  }
+  let last = 0, lastT = t0;
+  const tick = setInterval(() => {
+    const now = performance.now(), n = count.n;
+    const mbs = (n - last) / ((now - lastT) / 1000) / 1e6;
+    per.push(mbs); last = n; lastT = now;
+    $('now').textContent = mbs.toFixed(1) + ' MB/s';
+    $('log').textContent = per.map((v, i) => `${String(i + 1).padStart(4)}s ${v.toFixed(2)}`).reverse().slice(0, 15).join('\n');
+  }, 1000);
+  await Promise.all(jobs);
+  clearInterval(tick);
+  const took = (performance.now() - t0) / 1000;
+  const sorted = [...per].sort((a, b) => a - b);
+  const med = sorted[Math.floor(sorted.length / 2)] || 0;
+  let best30 = 0;
+  for (let i = 0; i + 30 <= per.length; i++) best30 = Math.max(best30, per.slice(i, i + 30).reduce((a, b) => a + b) / 30);
+  $('sum').innerHTML = `<b>${conns} connection(s), ${took.toFixed(0)} s</b><br>` +
+    `bytes received: <b>${count.n.toLocaleString()}</b><br>` +
+    `mean ${(count.n / took / 1e6).toFixed(2)} MB/s = ${(count.n * 8 / took / 1e6).toFixed(0)} Mbit/s<br>` +
+    `median second ${med.toFixed(2)} MB/s, best 30 s ${per.length >= 30 ? best30.toFixed(2) + " MB/s" : "(run too short)"}, best second ${Math.max(...per).toFixed(2)} MB/s`;
+  $('go').disabled = false;
+};
+</script>
+</body></html>

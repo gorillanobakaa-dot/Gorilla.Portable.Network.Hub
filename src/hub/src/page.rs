@@ -164,38 +164,61 @@ fn token_already_used(peer_ip: &str, token: &str) -> bool {
 /// script does nothing and the plain file button and START AGAIN still work.
 const PICK_LIST_SCRIPT: &str = "<script>(function(){var p=document.getElementById('pick'),box=document.getElementById('chosen');if(!p||!box||!window.DataTransfer)return;var kept=[];function size(n){return n>1e6?(n/1e6).toFixed(1)+' MB':Math.max(1,Math.round(n/1e3))+' KB';}function sync(){var dt=new DataTransfer();kept.forEach(function(f){dt.items.add(f);});p.files=dt.files;show();}function show(){box.innerHTML='';kept.forEach(function(f,i){var d=document.createElement('div');d.className='pickrow';var n=document.createElement('span');n.textContent=f.name+'  ('+size(f.size)+')';d.appendChild(n);var x=document.createElement('button');x.type='button';x.className='remove';x.textContent='REMOVE';x.onclick=function(){kept.splice(i,1);sync();};d.appendChild(x);box.appendChild(d);});if(kept.length){var c=document.createElement('div');c.className='count';c.textContent=kept.length+(kept.length==1?' file':' files')+' will be sent.';box.appendChild(c);}}p.addEventListener('change',function(){for(var i=0;i<p.files.length;i++){var f=p.files[i];if(!kept.some(function(k){return k.name==f.name&&k.size==f.size;}))kept.push(f);}sync();});p.form.addEventListener('reset',function(){kept=[];setTimeout(show,0);});})();</script>\n";
 
+/// Sending shows itself. A plain form post shows nothing on the page while a
+/// big file goes up, and a child who sees nothing happen taps SEND again, or closes the
+/// page. So the send goes through XMLHttpRequest with a percentage on the
+/// button and "keep this page open" beside it; the server's answer is the same
+/// redirect as before, followed to the same result box. A phone without
+/// FormData or XHR gets the plain form post it always had. Pressing SEND with
+/// nothing chosen is answered on the spot instead of with a round trip.
+const SEND_SCRIPT: &str = "<script>(function(){var f=document.getElementById('handin');if(!f)return;var b=document.getElementById('sendbtn'),m=document.getElementById('sendmsg');function say(t){if(m){m.textContent=t;m.style.display='block';}}f.addEventListener('submit',function(e){var p=document.getElementById('pick');if(p&&p.files&&p.files.length===0){e.preventDefault();say('Choose your work first: tap the Choose files button above and pick a file.');return;}if(m)m.style.display='none';b.disabled=true;b.textContent='SENDING... KEEP THIS PAGE OPEN';if(!window.FormData||!window.XMLHttpRequest)return;e.preventDefault();var x=new XMLHttpRequest();x.open('POST','/handin');if(x.upload)x.upload.onprogress=function(ev){if(ev.lengthComputable)b.textContent='SENDING... '+Math.floor(ev.loaded*100/ev.total)+'% - KEEP THIS PAGE OPEN';};x.onload=function(){var u=x.responseURL||'';location.href=u.indexOf('done=')>=0?u:'/';};x.onerror=function(){b.disabled=false;b.textContent='SEND IT TO YOUR TEACHER';say('It did not arrive. Check that this phone is still joined to the class wifi, then tap SEND IT TO YOUR TEACHER again.');};x.send(new FormData(f));});})();</script>\n";
+
 /// The whole page. `done` names a just-finished action so the reloaded page
 /// can say so (the POST answered with a redirect here; refresh never
 /// resubmits).
+///
+/// WRITTEN FOR A CHILD WHO HAS NEVER SEEN IT, reading in a second language.
+/// Every section is numbered and says in one line what its buttons do; every
+/// result says what happened AND what to do next. Asked for by the owner,
+/// 2026-09-24: "impossible not to understand how to use it". The button words
+/// did not change (THAT'S ME, READ, GET IT, SEND IT TO YOUR TEACHER), because
+/// the guide and the teachers already use them.
 pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, here: &str) -> String {
     let notice = notice();
-    let mut s = String::with_capacity(4096);
+    let mut s = String::with_capacity(8192);
     s.push_str(
         "<!doctype html><html><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
-         <title>Class files</title><style>\
-         body{font-family:sans-serif;margin:0;padding:12px;background:#fff;color:#111;max-width:620px}\
-         h1{font-size:1.3em}\
+         <title>Class page</title><style>\
+         body{font-family:sans-serif;margin:0;padding:12px;background:#fff;color:#111;max-width:620px;line-height:1.4}\
+         h1{font-size:1.35em;margin:4px 0 8px}\
+         h2{font-size:1.15em;margin:22px 0 4px;padding-top:12px;border-top:2px solid #ddd}\
+         .hint{margin:4px 0 8px;color:#333}\
+         .small{font-size:.9em;color:#555}\
          .notice{background:#fff8d6;border:2px solid #d9c65a;padding:10px;font-size:1.15em;margin:10px 0;white-space:pre-wrap}\
          .done{background:#e2f7e2;border:2px solid #58a758;padding:10px;font-size:1.1em;margin:10px 0}\
+         .bad{background:#fdecea;border:2px solid #c0392b;padding:10px;font-size:1.1em;margin:10px 0}\
          .file{margin:14px 0}\
          .name{font-size:1.1em;word-break:break-all}\
          .size{color:#666;font-size:.9em;margin-left:6px}\
          a.btn,button{display:inline-block;background:#1a6b1a;color:#fff;border:0;border-radius:6px;\
          padding:12px 20px;font-size:1.05em;text-decoration:none;margin:4px 8px 0 0}\
+         button[disabled]{background:#6a8f6a}\
          a.read{background:#28527a}\
          textarea,input[type=file]{width:100%;font-size:1em;margin:6px 0}\
          textarea{height:4em}\
-         form{margin:18px 0;border-top:1px solid #ddd;padding-top:12px}\
+         input,textarea{box-sizing:border-box;max-width:100%}\
+         ol.steps{margin:6px 0 8px;padding-left:1.4em}ol.steps li{margin:4px 0}\
+         details{margin:8px 0}summary{cursor:pointer;font-weight:bold;color:#28527a}\
          .escape{background:#fff3cd;border:2px solid #d9a441;padding:10px;margin:8px 0}\
          .escapebtn{background:#b34700;font-size:1.15em;display:block;text-align:center;margin:10px 0}\
          .escapealt{background:#555;display:block;text-align:center;margin:6px 0}\
-         iframe{width:100%;border:0;min-height:340px}\
+         iframe{width:100%;border:1px solid #ddd;border-radius:6px;height:65vh;min-height:340px}\
          .pickrow{display:flex;justify-content:space-between;align-items:center;border:1px solid #ccc;border-radius:6px;padding:6px 8px;margin:6px 0;word-break:break-all}\
          button.remove{background:#a11;padding:8px 12px;font-size:.95em;margin:0 0 0 8px}\
          button.again{background:#555}\
          .count{margin:6px 0;font-weight:bold}\
-         </style></head><body>\n<h1>Class files</h1>\n",
+         </style></head><body>\n",
     );
     // WHO ARE YOU comes before everything else. Thirty identical phones make
     // device models useless to a teacher, so the first thing a device is
@@ -206,12 +229,16 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, 
     if claimed.is_none() || rename {
         let current = claimed.unwrap_or_default();
         s.push_str(&format!(
-            "<form method=\"post\" action=\"/name\">\
-             <b>Before you start: type your name.</b><br>\
-             Your teacher needs to know whose work is whose.<br>\
+            "<h1>Welcome to the class page</h1>\
+             <form method=\"post\" action=\"/name\">\
+             <b>First, type your name.</b><br>\
+             Use the name your teacher calls you. When you send work, your teacher \
+             sees this name on it.<br>\
              <input type=\"text\" name=\"who\" value=\"{}\" maxlength=\"24\" \
              style=\"width:100%;font-size:1.2em;margin:8px 0;padding:8px\"><br>\
-             <button type=\"submit\">THAT'S ME</button></form>\n",
+             <button type=\"submit\">THAT'S ME</button></form>\n\
+             <p class=small>You only do this once. This page comes from your teacher's \
+             laptop through the class wifi. It works with no internet.</p>\n",
             html_escape(&current)
         ));
         s.push_str("</body></html>\n");
@@ -219,15 +246,29 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, 
     }
     let me = claimed.unwrap_or_default();
     s.push_str(&format!(
-        "<p>You are <b>{}</b>. <a href=\"/?rename=1\">Not you?</a></p>\n",
+        "<h1>Class page</h1>\n<p>You are <b>{}</b>. <a href=\"/?rename=1\">Not you? Tap here to change it.</a></p>\n",
         html_escape(&me)
     ));
     match done {
-        Some("handin") => s.push_str("<div class=done>Handed in. Your teacher has it.</div>\n"),
-        Some("note") => s.push_str("<div class=done>Sent. Your teacher can see it.</div>\n"),
-        Some("empty") => s.push_str("<div class=done>Nothing was chosen, so nothing was sent.</div>\n"),
-        Some("toobig") => s.push_str("<div class=done>That file is too big to hand in this way.</div>\n"),
-        Some("cantsave") => s.push_str("<div class=done>It could not be saved on the teacher's computer. Tell your teacher.</div>\n"),
+        Some("handin") => s.push_str(
+            "<div class=done><b>Your work arrived.</b> It is on your teacher's laptop now, \
+             waiting for your teacher to accept it. You can send more, or close this page.</div>\n",
+        ),
+        Some("note") => s.push_str(
+            "<div class=done><b>Your note arrived.</b> Your teacher can read it on the laptop.</div>\n",
+        ),
+        Some("empty") => s.push_str(
+            "<div class=bad><b>Nothing was sent</b>, because no file was chosen. Under \
+             \"Send your work\", tap Choose files and pick your work first.</div>\n",
+        ),
+        Some("toobig") => s.push_str(
+            "<div class=bad><b>That file is too big to send this way</b> (more than 1 GB). \
+             Ask your teacher what to do.</div>\n",
+        ),
+        Some("cantsave") => s.push_str(
+            "<div class=bad><b>Your teacher's laptop could not keep it.</b> Nothing is lost: \
+             your work is still on your phone. Tell your teacher.</div>\n",
+        ),
         _ => {}
     }
     if !notice.is_empty() {
@@ -239,19 +280,38 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, 
     // The list lives in its own frame so IT can refresh while a half-typed
     // note on the page below survives. Frames are older than the parents of
     // the kids using this.
-    s.push_str("<iframe src=\"/files\"></iframe>\n");
+    s.push_str(
+        "<h2>1. Files from your teacher</h2>\n\
+         <p class=hint><b>READ</b> or <b>PLAY</b>: look at it now. <b>GET IT</b>: keep a copy \
+         on this phone. Slide the list up and down to see every file; new files appear by themselves.</p>\n\
+         <iframe src=\"/files\"></iframe>\n\
+         <details><summary>Where do the files I GET go?</summary>\
+         <p><b>Android:</b> open the <b>Files</b> app (on Samsung: <b>My Files</b>), then \
+         <b>Downloads</b>.<br><b>iPhone:</b> open the <b>Files</b> app, then <b>Downloads</b>.<br>\
+         <b>Any phone:</b> your browser's menu (the three dots) has <b>Downloads</b> too.</p>\
+         </details>\n",
+    );
+    let mut section = 2;
     if serve::handin_available() {
         let token = fresh_token();
         s.push_str(&format!(
-            "<form method=\"post\" action=\"/handin\" enctype=\"multipart/form-data\">\
-             <b>Hand in your work</b><br>\
+            "<h2>{section}. Send your work to your teacher</h2>\n\
+             <ol class=steps>\
+             <li>Tap <b>Choose files</b> below (some phones say <b>Browse</b>) and pick your \
+             work: a photo of your page, a document, a drawing.</li>\
+             <li>Check the list. Picked the wrong one? Tap <b>REMOVE</b> next to it.</li>\
+             <li>Tap <b>SEND IT TO YOUR TEACHER</b>. Keep this page open until the green box \
+             says it arrived.</li></ol>\n\
+             <form method=\"post\" action=\"/handin\" enctype=\"multipart/form-data\" id=\"handin\">\
              <input type=\"hidden\" name=\"token\" value=\"{token}\">\
              <input type=\"file\" name=\"work\" id=\"pick\" multiple><br>\
              <div id=\"chosen\"></div>\
              <small>You can pick more than one, and pick again to add more.</small><br>\
-             <button type=\"submit\">SEND IT TO YOUR TEACHER</button>\
-             <button type=\"reset\" class=\"again\">START AGAIN</button></form>\n"
+             <button type=\"submit\" id=\"sendbtn\">SEND IT TO YOUR TEACHER</button>\
+             <button type=\"reset\" class=\"again\">START AGAIN</button>\
+             <div id=\"sendmsg\" class=\"bad\" style=\"display:none\"></div></form>\n"
         ));
+        section += 1;
         // A chosen file could not be taken back. The browser's own file
         // button shows "3 files" and nothing else: no list, no way to take
         // one off, and picking again REPLACED the choice instead of adding
@@ -260,6 +320,7 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, 
         // picking again adds. START AGAIN is a plain reset button, which
         // clears the choice even on a phone too old to run the script.
         s.push_str(PICK_LIST_SCRIPT);
+        s.push_str(SEND_SCRIPT);
         // The escape hatch: a BUTTON, not an address to type.
         //
         // Printing "go to 10.42.0.1" was useless in the field. Mobile
@@ -282,31 +343,44 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, 
         //      it at least navigates without anyone typing.
         //   3. The menu instruction, which always exists even when both
         //      links are swallowed.
+        //
+        // Folded away under the symptom itself since 2026-09-24. Shown open,
+        // it told every child in an ordinary browser "you are in the wifi
+        // sign-in window", which is false in any ordinary browser; the page cannot
+        // tell the two apart reliably, the child can: Choose files did nothing.
         let bare = here.split(':').next().unwrap_or(here);
         s.push_str(&format!(
-            "<div class=escape><b>Can't pick a file?</b><br>\
-             You are in the wifi sign-in window. It can show and download \
-             files, but it cannot send them.<br>\
+            "<details class=escape><summary>Tapping Choose files does nothing?</summary>\
+             Then this page is open in the small wifi sign-in window some phones use. \
+             That window can show and download files, but it cannot send them. Open the \
+             page in your normal browser instead; you stay on the class wifi.<br>\
              <a class=\"btn escapebtn\" \
              href=\"intent://{bare}/#Intent;scheme=http;action=android.intent.action.VIEW;end\">\
              OPEN THIS IN MY BROWSER</a>\
              <a class=\"btn escapealt\" href=\"http://{}/\">or tap here</a>\
              <br><small>If neither opens your browser: tap the three dots at \
              the top of this window and choose \"Open in browser\" or \"Use \
-             this network as is\". You stay on the class wifi either way.</small>\
-             </div>\n",
+             this network as is\".</small>\
+             </details>\n",
             html_escape(here),
             bare = html_escape(bare)
         ));
     }
     let token2 = fresh_token();
     s.push_str(&format!(
-        "<form method=\"post\" action=\"/note\">\
-         <b>Send a note to your teacher</b><br>\
+        "<h2>{section}. Send a note to your teacher</h2>\n\
+         <p class=hint>A question or a message, for example \"I can't open the file\". \
+         Your teacher sees it on the laptop screen.</p>\n\
+         <form method=\"post\" action=\"/note\">\
          <input type=\"hidden\" name=\"token\" value=\"{token2}\">\
-         <textarea name=\"text\" placeholder=\"type here\"></textarea><br>\
+         <textarea name=\"text\" placeholder=\"Type your note here\"></textarea><br>\
          <button type=\"submit\">SEND THE NOTE</button></form>\n"
     ));
+    s.push_str(
+        "<p class=small>This page comes from your teacher's laptop through the class wifi, \
+         and works with no internet. If it stops working, check that your phone is still \
+         joined to the class wifi, then reload the page.</p>\n",
+    );
     let _ = root;
     s.push_str("</body></html>\n");
     s
@@ -335,7 +409,8 @@ pub fn files_frame(root: &Path) -> String {
     }
     let files = serve::visible_files(root);
     if files.is_empty() && root.exists() {
-        s.push_str("<p>Nothing is being handed out right now. This page checks by itself, just wait.</p>\n");
+        s.push_str("<p>Your teacher is not sharing any files yet. Just wait: this list \
+                    checks again every 10 seconds by itself.</p>\n");
     }
     // The one button a browser CAN take a whole folder with. A browser
     // downloads exactly one thing per click, so the folder has to become one
@@ -345,7 +420,7 @@ pub fn files_frame(root: &Path) -> String {
     if files.len() > 1 {
         let bytes: u64 = files.iter().map(|(_, b)| b).sum();
         s.push_str(&format!(
-            "<div class=file><a class=btn href=\"/everything.zip\"              style=\"background:#7a2882\">GET EVERYTHING              ({} files, {})</a><br><span class=size>One download. Your computer              opens it like a folder. Do not switch the machine off while it              runs.</span></div>\n",
+            "<div class=file><a class=btn href=\"/everything.zip\"              style=\"background:#7a2882\">GET EVERYTHING              ({} files, {})</a><br><span class=size>All the files in one download. A computer opens it              like a folder; on a phone, open it from the Files app. Keep the              phone or computer on until it has finished.</span></div>\n",
             files.len(),
             human(bytes)
         ));
@@ -1404,7 +1479,8 @@ mod tests {
         let dir = tmpdir();
         let before = class_page(&dir, None, "10.42.0.201", false, "10.42.0.1");
         assert!(before.contains("type your name"), "an unnamed device must be asked first");
-        assert!(!before.contains("Hand in your work"), "no forms before a name");
+        assert!(!before.contains("Send your work"), "no forms before a name");
+        assert!(!before.contains("action=\"/handin\""), "no hand-in form before a name");
         claim_name("10.42.0.201", "who=Amina+N.");
         let after = class_page(&dir, None, "10.42.0.201", false, "10.42.0.1");
         assert!(after.contains("You are <b>Amina N.</b>"), "{after}");
@@ -1444,6 +1520,28 @@ mod tests {
                 "the teacher marks names, not phone models");
     }
 
+    /// Every section says what its buttons do, every result says what to do
+    /// next, and a send shows that it is happening. The wording may change;
+    /// these are the promises it must keep.
+    #[test]
+    fn the_page_explains_itself_and_every_result() {
+        let dir = tmpdir();
+        assert!(crate::serve::probe_handin(&dir), "temp dir should be writable");
+        claim_name("10.42.0.211", "who=Amina");
+        let page = class_page(&dir, None, "10.42.0.211", false, "10.42.0.1");
+        for want in ["1. Files from your teacher", "2. Send your work to your teacher",
+                     "3. Send a note to your teacher", "Where do the files I GET go?",
+                     "KEEP THIS PAGE OPEN", "id=\"sendbtn\"", "works with no internet"] {
+            assert!(page.contains(want), "missing {want:?}");
+        }
+        for tag in ["handin", "note", "empty", "toobig", "cantsave"] {
+            let p = class_page(&dir, Some(tag), "10.42.0.211", false, "10.42.0.1");
+            assert!(p.contains("class=done") || p.contains("class=bad"), "no result box for {tag}");
+        }
+        let bad = class_page(&dir, Some("cantsave"), "10.42.0.211", false, "10.42.0.1");
+        assert!(bad.contains("still on your phone"), "a failure must say nothing was lost");
+    }
+
     #[test]
     fn the_page_tells_a_sign_in_window_where_to_go_instead() {
         let dir = tmpdir();
@@ -1453,6 +1551,8 @@ mod tests {
         claim_name("10.42.0.210", "who=Amina");
         let page = class_page(&dir, None, "10.42.0.210", false, "10.42.0.1");
         assert!(page.contains("it cannot send them"), "the escape hatch must be on the page");
+        assert!(page.contains("<summary>Tapping Choose files does nothing?"),
+                "folded under the symptom, not telling every browser it is a sign-in window");
         // A tappable link, never an address to type: mobile browsers rewrite
         // typed addresses from their own history.
         assert!(page.contains("href=\"http://10.42.0.1/\""), "needs a real link: {page}");

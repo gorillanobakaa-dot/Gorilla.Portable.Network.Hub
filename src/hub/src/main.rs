@@ -51,9 +51,10 @@ Gorilla Portable Network Hub
 
   hub <command> --help      detail for one command
 
-Everything works with no internet. Making a wifi network needs administrator
-rights; joining one that already exists needs nothing at all. A cable between
-two computers needs neither, and is the fastest way to move a lot at once.";
+Everything works with no internet. On Windows the hub makes its own wifi
+network with no administrator rights; on Linux making one may ask for your
+password. Joining a network that already exists needs nothing at all. A cable
+between two computers needs neither, and is the fastest way to move a lot.";
 
 /// A path a person can read, with Windows' verbatim prefix taken off.
 ///

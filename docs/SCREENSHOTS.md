@@ -274,6 +274,52 @@ three files chosen, the wrong one removed.
 
 [![The class page on a phone: two chosen files listed with REMOVE buttons, "2 files will be sent", SEND IT TO YOUR TEACHER and START AGAIN](screenshots/gallery/phone-0.9.9-choose-and-remove.png)](screenshots/gallery/phone-0.9.9-choose-and-remove.png)
 
+## Windows, 24 September 2026 (0.9.10)
+
+A ThinkPad L15 Gen 3 (2022, Intel Wi-Fi 6 AX201) with a made-up teacher's
+folder and a demo password, photographed by `bench/screenshot-tour.ps1`. The
+phone pictures are Edge at a phone's size (`bench/screenshot-phone-page.py`);
+the send is real and the upload was slowed on purpose so the counting button
+could be caught.
+
+### The teacher's screens explain themselves
+
+The first screen, with what the highlighted choice does:
+
+[![The first screen with, under the four choices, "Makes a wifi network from this laptop. Phones and laptops join it, get the files you choose, and can send work back. No internet needed."](screenshots/gallery/windows-0.9.10-first-screen.png)](screenshots/gallery/windows-0.9.10-first-screen.png)
+
+The start screen on its Start line, saying what comes next:
+
+[![Start handing out, with "Next you tick which files the class may see. Then the wifi network switches on and two codes appear for the class to scan"](screenshots/gallery/windows-0.9.10-start-screen-start.png)](screenshots/gallery/windows-0.9.10-start-screen-start.png)
+
+Choosing files, with what the marks mean:
+
+[![What gets handed out, with "Tick what the class may see; only ticked files reach the phones" and what [x], [ ] and [~] mean](screenshots/gallery/windows-0.9.10-folder-view.png)](screenshots/gallery/windows-0.9.10-folder-view.png)
+
+Handing out, with **h HELP** first on the bottom line; both codes decode with
+OpenCV from this picture (`WIFI:T:WPA;S:Gorilla Hub;P:leafy7green;;` and
+`http://192.168.137.1`):
+
+[![Handing out: network, password, channel 11, address, gorilla.local and the two codes; bottom line h HELP f files n message w work o received c who j code q stop](screenshots/gallery/windows-0.9.10-handing-out-codes.png)](screenshots/gallery/windows-0.9.10-handing-out-codes.png)
+
+The help page behind **h**:
+
+[![Help: handing out files. What the class does, the keys on this screen, if something goes wrong](screenshots/gallery/windows-0.9.10-help.png)](screenshots/gallery/windows-0.9.10-help.png)
+
+Work waiting, with what each key does to it:
+
+[![Work waiting: five pieces from Amina and Joseph; nothing is kept until you accept it; o looks at it first, a accepts it, e accepts ALL, p all from them, r refuses it: moved aside, never deleted](screenshots/gallery/windows-0.9.10-waiting-accept-all.png)](screenshots/gallery/windows-0.9.10-waiting-accept-all.png)
+
+### The class page on a phone
+
+<a href="screenshots/gallery/phone-0.9.10-name.png"><img src="screenshots/gallery/phone-0.9.10-name.png" width="240" alt="Welcome to the class page. First, type your name."></a>
+<a href="screenshots/gallery/phone-0.9.10-class-page.png"><img src="screenshots/gallery/phone-0.9.10-class-page.png" width="240" alt="The class page in three numbered parts"></a>
+<a href="screenshots/gallery/phone-0.9.10-where-downloads.png"><img src="screenshots/gallery/phone-0.9.10-where-downloads.png" width="240" alt="Where do the files I GET go? opened"></a>
+
+<a href="screenshots/gallery/phone-0.9.10-choose-and-remove.png"><img src="screenshots/gallery/phone-0.9.10-choose-and-remove.png" width="240" alt="Two files chosen, each with REMOVE"></a>
+<a href="screenshots/gallery/phone-0.9.10-sending.png"><img src="screenshots/gallery/phone-0.9.10-sending.png" width="240" alt="SENDING... 30% - KEEP THIS PAGE OPEN"></a>
+<a href="screenshots/gallery/phone-0.9.10-arrived.png"><img src="screenshots/gallery/phone-0.9.10-arrived.png" width="240" alt="Your work arrived"></a>
+
 ## Still missing
 
 - **The paused page**, as it appears on the child's phone.
