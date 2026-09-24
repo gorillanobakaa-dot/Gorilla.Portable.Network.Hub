@@ -122,6 +122,12 @@ enum Screen {
     /// person meet the failure later in front of the class.
     FixOffer,
     Note(String),
+    /// Every conversation with a child, and every child who could be written
+    /// to first (0.9.10).
+    Messages,
+    /// One conversation. `private` is the help channel, shown here only when
+    /// the teacher is the one receiving it.
+    Thread { key: String, label: String, private: bool },
 }
 
 /// Getting a whole folder rather than one file.
@@ -259,6 +265,8 @@ struct App {
     /// The notice editor borrows the same editing buffer as the form fields;
     /// this flag says which thing a commit belongs to.
     editing_notice: bool,
+    /// The reply being typed on a conversation screen.
+    draft: String,
     /// The replacement password being typed on the change-password screen.
     ///
     /// Deliberately NOT the shared `editing` buffer. Anything in `editing` is
@@ -452,6 +460,7 @@ impl App {
             tick_confirm: None,
             tick_said: String::new(),
             editing_notice: false,
+            draft: String::new(),
             new_password: String::new(),
             tab_hint: None,
             found: Arc::new(Mutex::new(None)),
@@ -497,6 +506,8 @@ impl App {
         self.mdns_live = Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.taken_live = Arc::new(std::sync::atomic::AtomicBool::new(false));
         serve::forget_session();
+        crate::chat::clear();
+        self.draft.clear();
     }
 
     fn shutdown(&mut self) {
@@ -538,6 +549,11 @@ impl App {
         if self.hotspot.is_some() {
             self.refresh_joined();
         }
+        // A conversation on screen has been seen, including messages that
+        // arrive while it is open: the child's page shows "seen" from this.
+        if let Screen::Thread { key, private, .. } = &self.screen {
+            crate::chat::adult_opened(key, *private);
+        }
         // A message's scroll position, kept inside the text for this window.
         if let Screen::Note(text) = &self.screen {
             let max = note_lines(text, cols).len().saturating_sub(Self::note_room(rows));
@@ -560,6 +576,8 @@ impl App {
             Screen::Checkup => self.draw_checkup(&mut f),
             Screen::FixOffer => self.draw_fixoffer(&mut f),
             Screen::Note(_) => self.draw_note(&mut f),
+            Screen::Messages => self.draw_messages(&mut f),
+            Screen::Thread { .. } => self.draw_thread(&mut f),
         }
         f.draw();
     }
@@ -1838,8 +1856,17 @@ impl App {
             f.push_dim("  The #tag after each name tells those devices apart.");
             f.blank();
         }
-        let notes = crate::page::notes(4);
-        let note_rows = if notes.is_empty() { 0 } else { notes.len() + 1 };
+        // Messages from the children: a count and where to read them, never
+        // the words. The words of a private message never appear here at all,
+        // and when a trusted adult other than the teacher receives them, not
+        // even the count does.
+        let unread = crate::chat::unread(false);
+        let private_unread = if crate::chat::receiver() == crate::chat::Receiver::Teacher {
+            crate::chat::unread(true)
+        } else {
+            0
+        };
+        let note_rows = usize::from(unread > 0) + usize::from(private_unread > 0) * 2;
         // Capped by what is left on screen, and what was dropped is said out
         // loud. A list that silently stops at ten reads as "ten devices".
         let room = f.rows.saturating_sub(f.used() + 3 + note_rows);
@@ -1849,16 +1876,23 @@ impl App {
         if rows.len() > room {
             f.push_dim(&format!("  and {} more not shown, the window is too short", rows.len() - room));
         }
-        if !notes.is_empty() {
-            f.blank();
-            for (who, text) in &notes {
-                f.push_dim(&format!("  {}: {}", term::truncate(who, 18), text));
-            }
+        if unread > 0 {
+            f.push(&format!(
+                "  {unread} NEW MESSAGE{} FROM THE CLASS. Press m to read and answer.",
+                if unread == 1 { "" } else { "S" }
+            ));
+        }
+        if private_unread > 0 {
+            f.push(&format!(
+                "  {private_unread} PRIVATE MESSAGE{}. Press m, but only when nobody else can see",
+                if private_unread == 1 { "" } else { "S" }
+            ));
+            f.push("  this screen.");
         }
         // h first: the one key that explains all the others. The rest are
         // named by what they are for ("message", "work"), not by the
         // program's own words for them ("notice", "waiting").
-        self.hints(f, "  h HELP  f files  n message  w work  o received  c who  j code  q stop");
+        self.hints(f, "  h HELP  m messages  f files  n notice  w work  c who  j code  q stop");
     }
 
     fn draw_receive(&self, f: &mut Frame) {
@@ -2120,6 +2154,270 @@ impl App {
     }
 }
 
+// ---------------------------------------------------------------- messages
+
+/// One line on the Messages screen.
+struct MsgRow {
+    key: String,
+    label: String,
+    private: bool,
+    unread: usize,
+    last_at: String,
+    last_text: String,
+    needs_talk: bool,
+}
+
+impl App {
+    /// Every conversation, then every child on the network who has not
+    /// written yet, so the teacher can write first. Private conversations
+    /// come first and only when the teacher is the one receiving them.
+    ///
+    /// ONE function for drawing and for keys: the row the cursor is on and
+    /// the row enter opens have to be the same row.
+    fn message_rows(&self) -> Vec<MsgRow> {
+        let mut rows: Vec<MsgRow> = Vec::new();
+        if crate::chat::receiver() == crate::chat::Receiver::Teacher {
+            for c in crate::chat::conversations(true) {
+                rows.push(MsgRow {
+                    key: c.key,
+                    label: c.label,
+                    private: true,
+                    unread: c.unread,
+                    last_at: c.last_at,
+                    // Never the words, until the conversation is opened.
+                    last_text: if c.needs_talk { "ASKED TO TALK".into() } else { "(open to read)".into() },
+                    needs_talk: c.needs_talk,
+                });
+            }
+        }
+        for c in crate::chat::conversations(false) {
+            rows.push(MsgRow {
+                key: c.key,
+                label: c.label,
+                private: false,
+                unread: c.unread,
+                last_at: c.last_at,
+                last_text: c.last_text,
+                needs_talk: false,
+            });
+        }
+        for r in self.class_rows() {
+            if let (Some(ip), Some(key)) = (r.ip, r.key) {
+                if !rows.iter().any(|m| !m.private && m.key == key) {
+                    rows.push(MsgRow {
+                        key,
+                        label: serve::roster_label(&ip),
+                        private: false,
+                        unread: 0,
+                        last_at: String::new(),
+                        last_text: "(no messages yet: enter to write first)".into(),
+                        needs_talk: false,
+                    });
+                }
+            }
+        }
+        rows
+    }
+
+    fn draw_messages(&self, f: &mut Frame) {
+        self.title(f, "Messages");
+        let rows = self.message_rows();
+        let teacher_private = crate::chat::receiver() == crate::chat::Receiver::Teacher;
+        f.push_dim("  A conversation with each child. Enter opens one; you can also write first.");
+        f.blank();
+        if rows.is_empty() {
+            f.push("  Nobody has written yet, and no phone is on the network.");
+            f.blank();
+            f.push_dim("  When a child writes from the class page, it appears here with their");
+            f.push_dim("  name. Children on the network appear here too, so you can write first.");
+            self.hints(f, "  esc to go back");
+            return;
+        }
+        let name_w = f.cols.saturating_sub(40).clamp(16, 34);
+        let lines: Vec<String> = rows
+            .iter()
+            .map(|r| {
+                let who = if r.private { format!("PRIVATE {}", r.label) } else { r.label.clone() };
+                let new = if r.unread > 0 { format!("{} new", r.unread) } else { String::new() };
+                format!(
+                    "  {:<name_w$} {:<7} {:<6} {}",
+                    term::truncate(&who, name_w.saturating_sub(1)),
+                    new,
+                    r.last_at,
+                    r.last_text
+                )
+            })
+            .collect();
+        let w = term::group_width(&lines).min(f.cols);
+        let room = f.rows.saturating_sub(f.used() + 5).max(1);
+        let top = self.row.saturating_sub(room - 1).min(lines.len().saturating_sub(room));
+        for (i, line) in lines.iter().enumerate().skip(top).take(room) {
+            if i == self.row {
+                f.push_selected_within(line, w);
+            } else {
+                f.push(line);
+            }
+        }
+        if lines.len() > room {
+            f.push_dim(&format!("  {} to {} of {}. The arrow keys show the rest.", top + 1, (top + room).min(lines.len()), lines.len()));
+        }
+        f.blank();
+        match rows.get(self.row) {
+            Some(r) if r.private => {
+                f.push("  PRIVATE: open it only when nobody else can see this screen.");
+                if r.needs_talk {
+                    f.push_dim("  This child asked to talk. Find a safe, private moment; do not call them out.");
+                }
+            }
+            Some(_) if teacher_private => {
+                f.push_dim("  p opens a PRIVATE conversation with this child instead, for help that");
+                f.push_dim("  nobody else should see. It arrives quietly on their HELP page.");
+            }
+            _ => {}
+        }
+        let hint = if teacher_private {
+            "  up and down to choose    enter opens    p private    esc back"
+        } else {
+            "  up and down to choose    enter opens    esc back"
+        };
+        self.hints(f, hint);
+    }
+
+    fn messages_key(&mut self, k: Key) -> bool {
+        let rows = self.message_rows();
+        self.move_row(k, rows.len().max(1));
+        match k {
+            Key::Enter => {
+                if let Some(r) = rows.get(self.row) {
+                    self.screen = Screen::Thread { key: r.key.clone(), label: r.label.clone(), private: r.private };
+                    self.row = 0;
+                    self.draft.clear();
+                }
+            }
+            Key::Char('p') if crate::chat::receiver() == crate::chat::Receiver::Teacher => {
+                if let Some(r) = rows.get(self.row) {
+                    self.screen = Screen::Thread { key: r.key.clone(), label: r.label.clone(), private: true };
+                    self.row = 0;
+                    self.draft.clear();
+                }
+            }
+            Key::Esc | Key::Char('q') => {
+                self.screen = Screen::Sending;
+                self.row = 0;
+            }
+            Key::Quit => return true,
+            _ => {}
+        }
+        false
+    }
+
+    fn draw_thread(&self, f: &mut Frame) {
+        let Screen::Thread { key, label, private } = &self.screen else { return };
+        if *private {
+            self.title(f, &format!("PRIVATE: {label}"));
+            f.push("  Only you should see this screen. What is written here is kept locked.");
+        } else {
+            self.title(f, &format!("Talking with {label}"));
+            f.push_dim("  They see your answer on their class page within a few seconds.");
+        }
+        f.blank();
+        let msgs = crate::chat::thread(key, *private);
+        let measure = f.cols.saturating_sub(12).max(24);
+        let mut lines: Vec<String> = Vec::new();
+        for m in &msgs {
+            let who = if m.from_child {
+                label.split(" [").next().unwrap_or(label).to_string()
+            } else {
+                "You".to_string()
+            };
+            let seen = if !m.from_child && m.seen { "   (seen)" } else { "" };
+            let text = crate::chat::describe(m);
+            for (i, chunk) in wrap(&format!("{who}: {text}{seen}"), measure).into_iter().enumerate() {
+                if i == 0 {
+                    lines.push(format!("  {:<6}{chunk}", m.at));
+                } else {
+                    lines.push(format!("        {chunk}"));
+                }
+            }
+        }
+        if lines.is_empty() {
+            lines.push("  No messages yet. Type below to write first.".into());
+        }
+        // Newest at the bottom, next to where the reply is typed. self.row is
+        // how far the view has been scrolled back.
+        let room = f.rows.saturating_sub(f.used() + 5).max(1);
+        let back = self.row.min(lines.len().saturating_sub(room));
+        let end = lines.len() - back;
+        let start = end.saturating_sub(room);
+        if start > 0 {
+            f.push_dim(&format!("  ...{start} earlier lines: the up arrow shows them"));
+        }
+        for l in &lines[start..end] {
+            f.push(l);
+        }
+        f.blank();
+        f.push(&format!("  Your answer: {}\x1b[7m \x1b[0m", self.draft));
+        if *private {
+            self.hints(f, "  type, enter sends    tab asks to talk (quietly)    up/down scroll    esc back");
+        } else {
+            self.hints(f, "  type your answer    enter sends    up and down scroll    esc back");
+        }
+    }
+
+    fn thread_key(&mut self, k: Key) -> bool {
+        let Screen::Thread { key, label, private } = &self.screen else { return false };
+        let (key, label, private) = (key.clone(), label.clone(), *private);
+        match k {
+            Key::Char(c) => self.draft.push(c),
+            Key::Backspace => {
+                self.draft.pop();
+            }
+            Key::Enter => {
+                if !self.draft.trim().is_empty() {
+                    let text = std::mem::take(&mut self.draft);
+                    self.adult_says(&key, &label, &text, crate::chat::Kind::Text, private);
+                    self.row = 0;
+                }
+            }
+            // The quiet request: it waits on the child's HELP page until they
+            // answer, with nothing that rings or pops up.
+            Key::Tab if private => {
+                self.adult_says(&key, &label, "", crate::chat::Kind::AdultAsks, true);
+                self.row = 0;
+            }
+            Key::Up => self.row += 1,
+            Key::Down => self.row = self.row.saturating_sub(1),
+            Key::PageUp => self.row += 10,
+            Key::PageDown => self.row = self.row.saturating_sub(10),
+            Key::Esc => {
+                self.draft.clear();
+                self.screen = Screen::Messages;
+                self.row = 0;
+            }
+            Key::Quit => return true,
+            _ => {}
+        }
+        false
+    }
+
+    /// Send, and keep the record: ordinary messages in the clear beside the
+    /// received work, private ones only in the locked record.
+    fn adult_says(&mut self, key: &str, label: &str, text: &str, kind: crate::chat::Kind, private: bool) {
+        let Some(m) = crate::chat::from_adult(key, text, kind, private) else { return };
+        if private {
+            crate::record::keep(&m);
+            return;
+        }
+        let dir = crate::page::handed_in_dir(&PathBuf::from(shellexpand(&self.folder)));
+        if std::fs::create_dir_all(&dir).is_ok() {
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("messages.txt")) {
+                use std::io::Write as _;
+                let _ = writeln!(f, "{}  teacher -> {label}: {}", crate::net::timestamp(), m.text);
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------- keys
 
 impl App {
@@ -2143,6 +2441,8 @@ impl App {
             Screen::Receive => self.receive_key(k),
             Screen::ReceiveFiles => self.files_key(k),
             Screen::Receiving => self.receiving_key(k),
+            Screen::Messages => self.messages_key(k),
+            Screen::Thread { .. } => self.thread_key(k),
             Screen::Note(_) => {
                 // Scrolling; draw() keeps the row inside the text.
                 match k {
@@ -2833,6 +3133,11 @@ impl App {
         match k {
             Key::Char('h') | Key::Char('?') => {
                 self.note(SENDING_HELP);
+                return false;
+            }
+            Key::Char('m') => {
+                self.screen = Screen::Messages;
+                self.row = 0;
                 return false;
             }
             Key::Char('f') => {
@@ -3986,8 +4291,9 @@ WHAT THE CLASS DOES
 4. On the page they type their name once. Then READ or GET IT for your files, send their work to you, or send you a note.
 
 THE KEYS ON THIS SCREEN
+m   Messages: read what the children wrote and answer each one. You can also write first.
 f   Files: tick or untick what the class can see. It changes on the phones at once.
-n   Message: a line shown at the top of every phone's page, for example \"Open lesson 2\".
+n   Notice: a line shown at the top of every phone's page, for example \"Open lesson 2\".
 w   Work: what the class has sent you. Accept it into your received folder, or refuse it.
 o   Opens your received folder, where accepted work is kept.
 c   Who is connected: pause a device that misbehaves, or change the wifi password.
@@ -4233,6 +4539,59 @@ mod tests {
             shown.contains(env!("CARGO_PKG_VERSION")),
             "the home screen does not name the version:\n{shown}"
         );
+    }
+
+    /// The teacher sees who wrote and how many are new, opens the
+    /// conversation, types an answer and sends it; the answer is the child's.
+    #[test]
+    fn the_teacher_reads_and_answers_a_child() {
+        let _c = crate::chat::tests::LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::chat::clear();
+        crate::chat::set_receiver(crate::chat::Receiver::Off);
+        crate::chat::from_child("kA", "Amina [an Android phone]", "Lesson 2 will not open", crate::chat::Kind::Text, false, "t");
+        let mut app = App::new();
+        let dir = std::env::temp_dir().join(format!("hub-chat-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        app.folder = dir.to_string_lossy().into_owned();
+        app.screen = Screen::Messages;
+        let mut f = crate::term::Frame::new(24, 80);
+        app.draw_messages(&mut f);
+        let list = f.text();
+        assert!(list.contains("Amina") && list.contains("1 new") && list.contains("Lesson 2"), "{list}");
+        app.key(Key::Enter);
+        assert!(matches!(app.screen, Screen::Thread { .. }));
+        for c in "Try READ, q is fine".chars() {
+            app.key(Key::Char(c));
+        }
+        app.key(Key::Enter);
+        let t = crate::chat::thread("kA", false);
+        assert_eq!(t.last().map(|m| (m.from_child, m.text.as_str())), Some((false, "Try READ, q is fine")),
+                   "typing q in an answer must type it, not quit");
+        let mut f = crate::term::Frame::new(24, 80);
+        app.draw_thread(&mut f);
+        assert!(f.text().contains("You: Try READ"), "{}", f.text());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The words of a private message are never on the list, and when a
+    /// trusted adult other than the teacher receives them, the teacher's
+    /// screen does not show that they exist.
+    #[test]
+    fn private_words_never_show_on_the_teachers_list() {
+        let _c = crate::chat::tests::LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::chat::clear();
+        crate::chat::from_child("kB", "Baraka", "something private", crate::chat::Kind::Text, true, "p");
+        let mut app = App::new();
+        app.screen = Screen::Messages;
+        crate::chat::set_receiver(crate::chat::Receiver::Teacher);
+        let mut f = crate::term::Frame::new(24, 80);
+        app.draw_messages(&mut f);
+        assert!(f.text().contains("PRIVATE Baraka") && !f.text().contains("something private"), "{}", f.text());
+        crate::chat::set_receiver(crate::chat::Receiver::TrustedAdult);
+        let mut f = crate::term::Frame::new(24, 80);
+        app.draw_messages(&mut f);
+        assert!(!f.text().contains("PRIVATE") && !f.text().contains("Baraka"), "{}", f.text());
+        crate::chat::set_receiver(crate::chat::Receiver::Off);
     }
 
     /// The help page is longer than a small window. Before 0.9.10 a message

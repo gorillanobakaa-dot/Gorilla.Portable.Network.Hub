@@ -123,7 +123,7 @@ pub fn is_foreign_host(host: Option<&str>, ours: &[String]) -> bool {
 
 // ---------------------------------------------------------------- the page
 
-fn html_escape(s: &str) -> String {
+pub(crate) fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
@@ -218,6 +218,11 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, 
          button.remove{background:#a11;padding:8px 12px;font-size:.95em;margin:0 0 0 8px}\
          button.again{background:#555}\
          .count{margin:6px 0;font-weight:bold}\
+         .thread{border:1px solid #ddd;border-radius:6px;padding:8px;max-height:45vh;overflow-y:auto;margin:8px 0}\
+         .msg{margin:6px 0;padding:8px;border-radius:8px;white-space:pre-wrap;word-break:break-word}\
+         .me{background:#e8f0fe;margin-left:15%}.them{background:#eef7ee;margin-right:15%}\
+         .who{font-size:.8em;color:#555}\
+         a.helpbtn{background:#28527a;display:block;text-align:center;font-size:1.2em}\
          </style></head><body>\n",
     );
     // WHO ARE YOU comes before everything else. Thirty identical phones make
@@ -366,16 +371,11 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, 
             bare = html_escape(bare)
         ));
     }
-    let token2 = fresh_token();
-    s.push_str(&format!(
-        "<h2>{section}. Send a note to your teacher</h2>\n\
-         <p class=hint>A question or a message, for example \"I can't open the file\". \
-         Your teacher sees it on the laptop screen.</p>\n\
-         <form method=\"post\" action=\"/note\">\
-         <input type=\"hidden\" name=\"token\" value=\"{token2}\">\
-         <textarea name=\"text\" placeholder=\"Type your note here\"></textarea><br>\
-         <button type=\"submit\">SEND THE NOTE</button></form>\n"
-    ));
+    // Talking both ways replaced the one-way note in 0.9.10. The old /note
+    // address still works for pages loaded before the change.
+    s.push_str(&talk_section(peer_ip, section));
+    section += 1;
+    s.push_str(&help_door(peer_ip, section));
     s.push_str(
         "<p class=small>This page comes from your teacher's laptop through the class wifi, \
          and works with no internet. If it stops working, check that your phone is still \
@@ -384,6 +384,215 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, 
     let _ = root;
     s.push_str("</body></html>\n");
     s
+}
+
+// ---------------------------------------------------------------- talking
+
+/// The conversation, as HTML, for the page and for each poll. `private`
+/// picks the help conversation instead of the ordinary one.
+pub fn talk_fragment(key: &str, private: bool) -> String {
+    let msgs = crate::chat::thread(key, private);
+    let mut s = String::new();
+    // The adult's quiet request, answered with one tap. Inside the fragment,
+    // so a request that arrives while the page is open appears by itself.
+    if private && crate::chat::open_request(key) {
+        let t = fresh_token();
+        s.push_str(&format!(
+            "<div class=ask><b>A trusted adult would like to talk to you.</b> Is that all right? \
+             Only they will see your answer.<br>{}{}{}</div>",
+            answer_form(&format!("{t}a"), "yes", "YES", ""),
+            answer_form(&format!("{t}b"), "later", "LATER", " class=no"),
+            answer_form(&format!("{t}c"), "no", "NO", " class=no"),
+        ));
+    }
+    if msgs.is_empty() {
+        s.push_str(if private {
+            "<p class=small>Nothing here yet. Only you and the trusted adult can see this.</p>"
+        } else {
+            "<p class=small>No messages yet. Write to your teacher below.</p>"
+        });
+        return s;
+    }
+    let adult = if private { "Trusted adult" } else { "Teacher" };
+    for m in &msgs {
+        let (class, who) = if m.from_child { ("me", "You") } else { ("them", adult) };
+        let seen = if m.from_child && m.seen {
+            if private { " &middot; read" } else { " &middot; seen by your teacher" }
+        } else {
+            ""
+        };
+        s.push_str(&format!(
+            "<div class=\"msg {class}\"><span class=who>{who} &middot; {}{seen}</span><br>{}</div>",
+            html_escape(&m.at),
+            html_escape(&crate::chat::describe(m))
+        ));
+    }
+    s
+}
+
+fn answer_form(token: &str, kind: &str, label: &str, class: &str) -> String {
+    format!(
+        "<form method=post action=\"/talk\" class=talk style=\"display:inline\">\
+         <input type=hidden name=token value=\"{token}\"><input type=hidden name=kind value={kind}>\
+         <input type=hidden name=p value=1><button type=submit{class}>{label}</button></form>"
+    )
+}
+
+/// Phones ask for new messages with this, every four seconds, and send with
+/// it. XMLHttpRequest rather than fetch: Android 4.x browsers have the first
+/// and not the second. Polls stop while the page is hidden, so a phone in a
+/// pocket costs nothing. One listener for every send form, so the answer
+/// buttons work even when they arrived after the page loaded. A new token per
+/// send, so the server's retry protection does not swallow the next message.
+/// Without script, the forms post normally and the page reloads.
+const TALK_SCRIPT: &str = r#"<script>(function(){var box=document.getElementById('thread');if(!box||!window.XMLHttpRequest||!document.addEventListener)return;var v=+box.getAttribute('data-v'),p=box.getAttribute('data-p');function down(){box.scrollTop=box.scrollHeight;}down();function say(id,t){var m=document.getElementById(id);if(m){if(t){m.textContent=t;m.style.display='block';}else{m.style.display='none';}}}function poll(){if(document.hidden)return;var x=new XMLHttpRequest();x.open('GET','/talk?p='+p+'&v='+v+'&r='+Math.random());x.onload=function(){if(x.status==200){var t=x.responseText,i=t.indexOf('\n');v=+t.slice(0,i);box.innerHTML=t.slice(i+1);down();}};x.send();}setInterval(poll,4000);document.addEventListener('submit',function(e){var f=e.target;if(!f||!/(^| )talk( |$)/.test(f.className))return;var ta=f.elements['text'],k=f.elements['kind'].value;e.preventDefault();if(k=='text'&&(!ta||!ta.value.replace(/\s/g,''))){say('talkmsg','Nothing was sent: write something first.');return;}f.elements['token'].value=Math.random().toString(36).slice(2);var body=[];for(var j=0;j<f.elements.length;j++){var el=f.elements[j];if(el.name)body.push(encodeURIComponent(el.name)+'='+encodeURIComponent(el.value));}var b=f.getElementsByTagName('button')[0];b.disabled=true;var x=new XMLHttpRequest();x.open('POST','/talk');x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');x.setRequestHeader('X-Hub','1');x.onload=function(){b.disabled=false;if(x.responseText=='sent'){if(ta)ta.value='';say('talkmsg','');if(k=='need')say('talkok','Sent. A trusted adult will find a safe moment to talk to you.');poll();}else{say('talkmsg',x.responseText=='toofast'?'That was a lot of messages. Wait one minute, then send again.':'Nothing was sent: write something first.');}};x.onerror=function(){b.disabled=false;say('talkmsg','It did not arrive. Check that this phone is still on the class wifi, then send again.');};x.send(body.join('&'));},false);})();</script>
+"#;
+
+/// The ordinary conversation, as the class page's third part.
+pub fn talk_section(peer_ip: &str, section: usize) -> String {
+    let key = crate::serve::device_key(peer_ip);
+    crate::chat::child_saw(&key, false);
+    let v = crate::chat::version(&key, false);
+    format!(
+        "<h2 id=talk>{section}. Talk to your teacher</h2>\n\
+         <p class=hint>Write a question or a message. Your teacher reads it on the laptop and \
+         can answer you here. New answers appear by themselves.</p>\n\
+         <div id=thread class=thread data-v=\"{v}\" data-p=\"0\">{}</div>\n\
+         <form method=\"post\" action=\"/talk\" class=talk>\
+         <input type=\"hidden\" name=\"token\" value=\"{}\">\
+         <input type=\"hidden\" name=\"kind\" value=\"text\"><input type=\"hidden\" name=\"p\" value=\"0\">\
+         <textarea name=\"text\" autocomplete=\"off\" placeholder=\"Type your message here\"></textarea><br>\
+         <button type=\"submit\">SEND</button></form>\n\
+         <div id=talkmsg class=bad style=\"display:none\"></div>\n{TALK_SCRIPT}",
+        talk_fragment(&key, false),
+        fresh_token()
+    )
+}
+
+/// The door to private help, at the foot of the class page. It is on every
+/// child's page, so having it says nothing about anybody. A dot appears when
+/// the trusted adult has written or asked; nothing rings, nothing pops up.
+pub fn help_door(peer_ip: &str, section: usize) -> String {
+    if !crate::chat::private_on() {
+        return String::new();
+    }
+    let key = crate::serve::device_key(peer_ip);
+    let waiting = crate::chat::waiting_for_child(&key, true) > 0 || crate::chat::open_request(&key);
+    let dot = if waiting { " &#9679;" } else { "" };
+    format!(
+        "<h2>{section}. HELP</h2>\n\
+         <p class=hint>If something is wrong and you do not want to say it in front of others, \
+         you can talk privately to a trusted adult. Nobody else sees it.</p>\n\
+         <a class=\"btn helpbtn\" href=\"/page2\" onclick=\"location.replace('/page2');return false;\">\
+         &#9995; HELP{dot}</a>\n"
+    )
+}
+
+/// The private help page. Kept plain on purpose: the title and address say
+/// nothing about help (a browser's history lists both), nothing is cached,
+/// the words are not kept by the phone, and HIDE replaces the page with the
+/// class page without leaving a step to go back to.
+pub fn help_page(peer_ip: &str) -> String {
+    let key = crate::serve::device_key(peer_ip);
+    crate::chat::child_saw(&key, true);
+    let v = crate::chat::version(&key, true);
+    let mut s = String::with_capacity(8192);
+    s.push_str(
+        "<!doctype html><html><head><meta charset=\"utf-8\">\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+         <meta name=\"referrer\" content=\"no-referrer\">\
+         <title>Class page</title><style>\
+         body{font-family:sans-serif;margin:0;padding:12px;background:#fff;color:#111;max-width:620px;line-height:1.4}\
+         h1{font-size:1.3em;margin:4px 0 8px}\
+         .hide{position:sticky;top:0;display:block;background:#555;color:#fff;text-align:center;\
+         padding:12px;font-size:1.1em;border-radius:6px;text-decoration:none;margin:0 0 12px}\
+         .hint{color:#333}.small{font-size:.9em;color:#555}\
+         button{background:#1a6b1a;color:#fff;border:0;border-radius:6px;padding:12px 20px;font-size:1.05em;margin:4px 8px 4px 0}\
+         button.need{background:#28527a;font-size:1.2em;width:100%;padding:18px}\
+         button.no{background:#555}\
+         textarea{width:100%;box-sizing:border-box;height:5em;font-size:1em;margin:6px 0}\
+         .thread{border:1px solid #ddd;border-radius:6px;padding:8px;max-height:45vh;overflow-y:auto;margin:8px 0}\
+         .msg{margin:6px 0;padding:8px;border-radius:8px;white-space:pre-wrap;word-break:break-word}\
+         .me{background:#e8f0fe;margin-left:15%}.them{background:#eef7ee;margin-right:15%}\
+         .who{font-size:.8em;color:#555}\
+         .ask{background:#fff8d6;border:2px solid #d9c65a;padding:10px;margin:10px 0}\
+         .bad{background:#fdecea;border:2px solid #c0392b;padding:10px;margin:10px 0}\
+         .ok{background:#e2f7e2;border:2px solid #58a758;padding:10px;margin:10px 0}\
+         </style></head><body>\n\
+         <a class=hide href=\"/\" onclick=\"location.replace('/');return false;\">&#8592; HIDE THIS (back to the files)</a>\n\
+         <h1>Talk privately</h1>\n\
+         <p class=hint>Only you and a trusted adult see this. Your teacher's screen does not show \
+         what you write. Nothing is kept on this phone: when you press HIDE, it is gone from here.</p>\n",
+    );
+    let t1 = fresh_token();
+    let t2 = fresh_token();
+    s.push_str(&format!(
+        "<form method=post action=\"/talk\" class=talk><input type=hidden name=token value=\"{t1}\">\
+         <input type=hidden name=kind value=need><input type=hidden name=p value=1>\
+         <button type=submit class=need>&#9995; I NEED TO TALK TO SOMEONE</button></form>\n\
+         <p class=small>One tap is enough. You do not have to write anything. The trusted adult \
+         will find a safe moment to talk to you.</p>\n\
+         <div id=talkok class=ok style=\"display:none\"></div>\n\
+         <div id=thread class=thread data-v=\"{v}\" data-p=\"1\">{}</div>\n\
+         <form method=post action=\"/talk\" class=talk><input type=hidden name=token value=\"{t2}\">\
+         <input type=hidden name=kind value=text><input type=hidden name=p value=1>\
+         <textarea name=text autocomplete=off placeholder=\"Or write here, if you want to\"></textarea><br>\
+         <button type=submit>SEND PRIVATELY</button></form>\n\
+         <div id=talkmsg class=bad style=\"display:none\"></div>\n",
+        talk_fragment(&key, true)
+    ));
+    s.push_str(TALK_SCRIPT);
+    s.push_str("</body></html>\n");
+    s
+}
+
+/// A child's message arriving on /talk. Returns the outcome word the page
+/// shows ("sent", "empty", "toofast"). Ordinary messages go to the permanent
+/// record in the clear, like the old notes; private ones go to the locked
+/// record and nowhere else.
+pub fn take_talk(peer_ip: &str, body: &str, root: &Path) -> &'static str {
+    let mut token = String::new();
+    let mut text = String::new();
+    let mut kind = String::from("text");
+    let mut private = false;
+    for pair in body.split('&') {
+        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+        match k {
+            "token" => token = form_decode(v),
+            "text" => text = form_decode(v),
+            "kind" => kind = form_decode(v),
+            "p" => private = v == "1",
+            _ => {}
+        }
+    }
+    // Private help only exists while somebody has locked the record.
+    if private && !crate::chat::private_on() {
+        return "empty";
+    }
+    use crate::chat::Kind;
+    let kind = match (kind.as_str(), private) {
+        ("need", true) => Kind::NeedToTalk,
+        ("yes", true) => Kind::AnswerYes,
+        ("later", true) => Kind::AnswerLater,
+        ("no", true) => Kind::AnswerNo,
+        _ => Kind::Text,
+    };
+    let key = crate::serve::device_key(peer_ip);
+    let label = crate::serve::roster_label(peer_ip);
+    let (said, msg) = crate::chat::from_child(&key, &label, &text, kind, private, &token);
+    if let Some(m) = msg {
+        if private {
+            crate::record::keep(&m);
+        } else {
+            let dir = handed_in_dir(root);
+            if std::fs::create_dir_all(&dir).is_ok() {
+                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("messages.txt")) {
+                    let _ = writeln!(f, "{}  {} -> teacher: {}", crate::net::timestamp(), crate::serve::full_label(peer_ip), m.text);
+                }
+            }
+        }
+    }
+    said
 }
 
 /// The refreshing file list inside the iframe. Big buttons, two verbs:
@@ -686,6 +895,9 @@ pub fn take_note(peer_ip: &str, body: &str, root: &Path) -> &'static str {
         }
         n.push((peer_ip.to_string(), shown.clone(), text.clone()));
     }
+    // A note from a page loaded before 0.9.10 joins the conversation, so the
+    // teacher answers it in the same place as every other message.
+    let _ = crate::chat::from_child(&crate::serve::device_key(peer_ip), &crate::serve::roster_label(peer_ip), &text, crate::chat::Kind::Text, false, "");
     // The permanent copy, with EVERYTHING known about the sender. Thirty kids
     // sending the same message for kicks are thirty separate lines here, each
     // carrying the claimed name, the device and the address. The roster shows
@@ -1484,7 +1696,7 @@ mod tests {
         claim_name("10.42.0.201", "who=Amina+N.");
         let after = class_page(&dir, None, "10.42.0.201", false, "10.42.0.1");
         assert!(after.contains("You are <b>Amina N.</b>"), "{after}");
-        assert!(after.contains("Send a note") || after.contains("Hand in"), "the page must open up after the name");
+        assert!(after.contains("Talk to your teacher"), "the page must open up after the name");
     }
 
     #[test]
@@ -1530,7 +1742,7 @@ mod tests {
         claim_name("10.42.0.211", "who=Amina");
         let page = class_page(&dir, None, "10.42.0.211", false, "10.42.0.1");
         for want in ["1. Files from your teacher", "2. Send your work to your teacher",
-                     "3. Send a note to your teacher", "Where do the files I GET go?",
+                     "3. Talk to your teacher", "Where do the files I GET go?",
                      "KEEP THIS PAGE OPEN", "id=\"sendbtn\"", "works with no internet"] {
             assert!(page.contains(want), "missing {want:?}");
         }
@@ -1540,6 +1752,60 @@ mod tests {
         }
         let bad = class_page(&dir, Some("cantsave"), "10.42.0.211", false, "10.42.0.1");
         assert!(bad.contains("still on your phone"), "a failure must say nothing was lost");
+    }
+
+    /// Two-way messages through the page, and the permanent record of the
+    /// ordinary ones.
+    #[test]
+    fn a_child_and_the_teacher_talk_through_the_page() {
+        let _c = crate::chat::tests::LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::serve::SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::chat::clear();
+        let dir = tmpdir();
+        claim_name("10.42.0.220", "who=Amina");
+        let said = take_talk("10.42.0.220", "token=t1&kind=text&p=0&text=Lesson+2+will+not+open", &dir);
+        assert_eq!(said, "sent");
+        let key = crate::serve::device_key("10.42.0.220");
+        crate::chat::from_adult(&key, "Try the READ button", crate::chat::Kind::Text, false).unwrap();
+        let page = class_page(&dir, None, "10.42.0.220", false, "10.42.0.1");
+        assert!(page.contains("Lesson 2 will not open") && page.contains("Try the READ button"), "both sides on the page");
+        let rec = std::fs::read_to_string(handed_in_dir(&dir).join("messages.txt")).unwrap();
+        assert!(rec.contains("Amina") && rec.contains("Lesson 2 will not open"), "{rec}");
+        assert_eq!(take_talk("10.42.0.220", "token=t2&kind=text&p=0&text=+++", &dir), "empty");
+    }
+
+    /// Private help does not exist until a record lock is set, never shows on
+    /// the ordinary page or in the clear record, and its page gives nothing
+    /// away in its title or address.
+    #[test]
+    fn private_help_is_off_until_locked_and_stays_off_the_ordinary_page() {
+        let _c = crate::chat::tests::LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::serve::SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::chat::clear();
+        let dir = tmpdir();
+        claim_name("10.42.0.221", "who=Baraka");
+        crate::chat::set_receiver(crate::chat::Receiver::Off);
+        let page = class_page(&dir, None, "10.42.0.221", false, "10.42.0.1");
+        assert!(!page.contains("/page2"), "no help door while the channel is off");
+        assert_eq!(take_talk("10.42.0.221", "token=a&kind=text&p=1&text=secret", &dir), "empty");
+        crate::chat::set_receiver(crate::chat::Receiver::Teacher);
+        let page = class_page(&dir, None, "10.42.0.221", false, "10.42.0.1");
+        assert!(page.contains("/page2") && page.contains("HELP"), "the door is there once it is on");
+        assert_eq!(take_talk("10.42.0.221", "token=b&kind=text&p=1&text=something+private", &dir), "sent");
+        assert_eq!(take_talk("10.42.0.221", "token=c&kind=need&p=1", &dir), "sent");
+        let page = class_page(&dir, None, "10.42.0.221", false, "10.42.0.1");
+        assert!(!page.contains("something private"), "never on the ordinary page");
+        let help = help_page("10.42.0.221");
+        assert!(help.contains("something private") && help.contains("I NEED TO TALK"));
+        assert!(help.contains("<title>Class page</title>"), "the title says nothing about help");
+        assert!(help.contains("HIDE THIS") && help.contains("location.replace('/')"), "quick exit leaves no step back");
+        let rec = std::fs::read_to_string(handed_in_dir(&dir).join("messages.txt")).unwrap_or_default();
+        assert!(!rec.contains("something private"), "never in the clear record");
+        let key = crate::serve::device_key("10.42.0.221");
+        crate::chat::from_adult(&key, "", crate::chat::Kind::AdultAsks, true).unwrap();
+        assert!(help_page("10.42.0.221").contains("would like to talk to you"), "the quiet request shows on the help page");
+        assert!(class_page(&dir, None, "10.42.0.221", false, "10.42.0.1").contains("HELP &#9679;"), "and only a dot on the class page");
+        crate::chat::set_receiver(crate::chat::Receiver::Off);
     }
 
     #[test]

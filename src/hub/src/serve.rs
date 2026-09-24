@@ -1501,6 +1501,11 @@ fn serve_one(
             let mut sink = vec![0u8; len.min(64 * 1024)];
             let _ = reader.read_exact(&mut sink);
         }
+        // A paused phone's page keeps asking for new messages: "nothing new",
+        // or the paused page would land inside its message box.
+        if method == "GET" && path_only == "/talk" {
+            return respond(&mut out, 204, "text/plain", b"").map(|_| keep);
+        }
         let page = crate::page::paused_page();
         respond_fresh(&mut out, "text/html; charset=utf-8", page.as_bytes())?;
         return Ok(false);
@@ -1540,6 +1545,29 @@ fn serve_one(
         if path_only == "/handin" {
             let outcome = crate::page::take_upload(reader, &text, &peer_ip, root)?;
             crate::page::redirect_done(&mut out, outcome.tag)?;
+            return Ok(false);
+        }
+        // A message, both kinds. The page's script asks with X-Hub and gets
+        // one word back; a phone without script posts the form and is sent
+        // back to where it was.
+        if path_only == "/talk" {
+            let len: usize = text
+                .lines()
+                .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
+                .and_then(|l| l.split_once(':'))
+                .and_then(|(_, v)| v.trim().parse().ok())
+                .unwrap_or(0);
+            let mut body = vec![0u8; len.min(64 * 1024)];
+            reader.read_exact(&mut body)?;
+            let body = String::from_utf8_lossy(&body).into_owned();
+            let said = crate::page::take_talk(&peer_ip, &body, root);
+            if text.to_ascii_lowercase().contains("\r\nx-hub: 1") {
+                respond(&mut out, 200, "text/plain; charset=utf-8", said.as_bytes())?;
+            } else {
+                let back = if body.contains("p=1") { "/page2" } else { "/#talk" };
+                write!(out, "HTTP/1.1 303 See Other\r\nLocation: {back}\r\nContent-Length: 0\r\n\r\n")?;
+                out.flush()?;
+            }
             return Ok(false);
         }
         crate::page::redirect_done(&mut out, "empty")?;
@@ -1630,6 +1658,38 @@ fn serve_one(
         return Ok(false);
     }
 
+    // Anything new in this device's conversation? The phone sends the version
+    // it has; the answer is "nothing" (204) or the version and the whole
+    // conversation. Finishes at once, so it never holds a worker.
+    if path_only == "/talk" {
+        let private = query.split('&').any(|p| p == "p=1");
+        if private && !crate::chat::private_on() {
+            return respond(&mut out, 204, "text/plain", b"").map(|_| keep);
+        }
+        let have: u64 = query
+            .split('&')
+            .find_map(|p| p.strip_prefix("v="))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        let key = device_key(&peer_ip);
+        let now = crate::chat::version(&key, private);
+        if now == have {
+            return respond(&mut out, 204, "text/plain", b"").map(|_| keep);
+        }
+        crate::chat::child_saw(&key, private);
+        let body = format!("{now}\n{}", crate::page::talk_fragment(&key, private));
+        return respond_fresh(&mut out, "text/html; charset=utf-8", body.as_bytes()).map(|_| keep);
+    }
+    // The private help page. Not cached, not named for what it is.
+    if path_only == "/page2" {
+        mark_page_seen(&peer_ip);
+        if !crate::chat::private_on() {
+            write!(out, "HTTP/1.1 303 See Other\r\nLocation: /\r\nContent-Length: 0\r\n\r\n")?;
+            out.flush()?;
+            return Ok(false);
+        }
+        return respond_fresh(&mut out, "text/html; charset=utf-8", crate::page::help_page(&peer_ip).as_bytes()).map(|_| keep);
+    }
     if path_only == "/files" {
         mark_page_seen(&peer_ip);
         return respond_fresh(&mut out, "text/html; charset=utf-8", crate::page::files_frame(root).as_bytes()).map(|_| keep);
@@ -1822,6 +1882,7 @@ fn parse_range(r: &str, total: u64) -> Option<(u64, u64)> {
 fn respond(out: &mut BufWriter<TcpStream>, code: u16, ctype: &str, body: &[u8]) -> std::io::Result<()> {
     let why = match code {
         200 => "OK",
+        204 => "No Content",
         206 => "Partial Content",
         403 => "Forbidden",
         404 => "Not Found",

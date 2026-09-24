@@ -32,6 +32,8 @@ mod serve;
 mod sums;
 mod services;
 mod grid;
+mod chat;
+mod record;
 
 const USAGE: &str = "\
 Gorilla Portable Network Hub
