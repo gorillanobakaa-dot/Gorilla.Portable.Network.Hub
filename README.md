@@ -306,7 +306,7 @@ it.
 | 0.9.3 built for Linux, static, with musl-gcc rather than zig | 992,592 |
 | the same 0.9.3 built for Windows | not measured yet |
 | **0.9.10, pages and screens that explain themselves** | |
-| **0.9.10 built for Windows, as published** | **829,440** |
+| **0.9.10 built for Windows, as published** | **830,464** |
 | **0.9.9, Windows makes its own wifi network; codes that scan** | |
 | **0.9.9 built for Windows, as published** | **819,200** |
 | 0.9.9 built for Linux, cross-built here with zig, never published | 984,128 |
@@ -334,9 +334,9 @@ table: the numbers now match what the release page actually serves. 0.9.1 adds
 nothing to either binary, which is what a release touching only comments and
 test code should do, and is why the figures repeat.
 
-0.9.10 costs 10,240 bytes on Windows over 0.9.9 (819,200 to 829,440), for the help page, the
+0.9.10 costs 11,264 bytes on Windows over 0.9.9 (819,200 to 830,464), for the help page, the
 explanations on each screen, the phone page's instructions and its upload script, and the
-timeout switch. How that splits between text and code was not measured.
+timeout switch, and scrolling for long messages. How that splits between text and code was not measured.
 
 0.9.9 is 23,552 bytes smaller on Windows than 0.9.8 (842,752 to 819,200) while adding a
 good deal of code: the Windows hotspot, the services fix, the column lists. That is
