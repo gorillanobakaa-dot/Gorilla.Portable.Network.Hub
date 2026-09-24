@@ -34,6 +34,8 @@ mod services;
 mod grid;
 mod chat;
 mod record;
+mod crypto;
+mod adult;
 
 const USAGE: &str = "\
 Gorilla Portable Network Hub
@@ -50,6 +52,7 @@ Gorilla Portable Network Hub
   hub services              find parts of Windows the hub needs that are switched off
   hub services --fix        switch them back on (Windows asks permission once)
   hub services --put-back   put them back exactly as they were
+  hub private-record [dir]  read the locked record of private help (asks the password)
 
   hub <command> --help      detail for one command
 
@@ -139,6 +142,7 @@ fn main() {
         "services" | "fix-services" => services::run(rest),
         "get" | "fetch" => fetch::run(rest),
         "sums" => sums::run(rest),
+        "private-record" => record::run(rest),
         "screen" | "tui" => tui::run(),
         "doctor" => doctor(),
         "-h" | "--help" | "help" => println!("{USAGE}"),

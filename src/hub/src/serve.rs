@@ -1040,6 +1040,9 @@ hub serve  -  hand out the files in a folder to every device in the room
   --name <network>      create a wifi network with this name and serve over it
   --notice <text>       a message shown at the top of every kid's page
   --password <word>     password for that network (at least 8 characters)
+  --help-password <pw>  switch on private help for children; a trusted adult
+                        signs in at /adult with this (at least 8 characters)
+  --second-password <pw> a second adult who may also sign in and read the record
   --band <2.4|5>        Windows: which band to make it on (2.4 unless 5)
   --channel <1-13>      which wifi channel to broadcast on (default: automatic)
   --helpers <number>    how many devices to serve at once (default: 8 per core)
@@ -1074,6 +1077,8 @@ hub serve  -  hand out the files in a folder to every device in the room
     let mut channel: Option<u16> = None;
     let mut ssid: Option<String> = None;
     let mut password: Option<String> = None;
+    let mut help_pw: Option<String> = None;
+    let mut second_pw: Option<String> = None;
 
     let mut i = 1;
     let mut positional = 0;
@@ -1089,6 +1094,11 @@ hub serve  -  hand out the files in a folder to every device in the room
                 i += 2;
             }
             "--password" => { password = value(); i += 2; }
+            // Private help, to a trusted adult who signs in at /adult. The
+            // screen can also send it to the teacher; from the command line
+            // there is no screen, so it always goes to the adult's page.
+            "--help-password" => { help_pw = value(); i += 2; }
+            "--second-password" => { second_pw = value(); i += 2; }
             // Windows: 5 for 5 GHz; anything else, or nothing, is 2.4 GHz.
             "--band" => { crate::net::set_wifi_band_5(value().as_deref() == Some("5")); i += 2; }
             "--channel" => {
@@ -1161,6 +1171,22 @@ hub serve  -  hand out the files in a folder to every device in the room
     probe_handin(&root);
     if crate::page::sender().is_empty() {
         println!("received files go to  {}", crate::page::handed_in_dir(&root).display());
+    }
+    // Private help, locked. Never switched on without a lock for its record.
+    if let Some(pw) = help_pw.filter(|p| p.chars().count() >= 8) {
+        let mut adults: Vec<(&str, &str)> = vec![("trusted adult", pw.as_str())];
+        let second = second_pw.unwrap_or_default();
+        if second.chars().count() >= 8 {
+            adults.push(("second adult", second.as_str()));
+        }
+        match crate::record::start(&crate::page::handed_in_dir(&root), &adults) {
+            Ok(path) => {
+                crate::chat::set_receiver(crate::chat::Receiver::TrustedAdult);
+                println!("private help is on: the trusted adult signs in at /adult");
+                println!("  its locked record  {}", path.display());
+            }
+            Err(e) => println!("private help is OFF: {e}"),
+        }
     }
     if let Some(h) = &hotspot {
         println!("network \"{}\" is up on {}", h.ssid, h.iface);
@@ -1471,6 +1497,68 @@ fn serve_one(
 
     let path_only = raw_path.split('?').next().unwrap_or("/");
     let query = raw_path.split_once('?').map(|(_, q)| q).unwrap_or("");
+
+    // The trusted adult's page (adult.rs). Before the pause check on purpose:
+    // a teacher pausing the trusted adult's phone must not be able to cut a
+    // child's private help off, since the whole point of a separate adult is
+    // that the teacher may be part of the problem.
+    if path_only == "/adult" || path_only.starts_with("/adult/") {
+        let body = if method == "POST" {
+            let len: usize = text
+                .lines()
+                .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
+                .and_then(|l| l.split_once(':'))
+                .and_then(|(_, v)| v.trim().parse().ok())
+                .unwrap_or(0);
+            let mut b = vec![0u8; len.min(16 * 1024)];
+            reader.read_exact(&mut b)?;
+            String::from_utf8_lossy(&b).into_owned()
+        } else {
+            String::new()
+        };
+        let who = crate::adult::signed_in(&text);
+        let key = crate::adult::field(if method == "POST" { &body } else { query }, "c");
+        let back = if key.is_empty() { "/adult".to_string() } else { format!("/adult?c={}", crate::page::urlencode(&key)) };
+        fn see_other(out: &mut BufWriter<TcpStream>, to: &str, cookie: &str) -> std::io::Result<()> {
+            write!(out, "HTTP/1.1 303 See Other\r\nLocation: {to}\r\n{cookie}Cache-Control: no-store\r\nContent-Length: 0\r\n\r\n")?;
+            out.flush()
+        }
+        match (method, path_only, who) {
+            ("POST", "/adult/in", _) => match crate::adult::sign_in(&peer_ip, &body) {
+                Some(token) => see_other(&mut out, "/adult", &format!("Set-Cookie: hubadult={token}; Path=/adult; HttpOnly; SameSite=Strict\r\n"))?,
+                None => see_other(&mut out, "/adult?bad=1", "")?,
+            },
+            ("POST", "/adult/out", _) => {
+                crate::adult::sign_out(&text);
+                see_other(&mut out, "/adult", "Set-Cookie: hubadult=; Path=/adult; Max-Age=0\r\n")?;
+            }
+            ("POST", "/adult/send", Some(_)) if !key.is_empty() => {
+                let words = crate::adult::field(&body, "text");
+                if let Some(m) = crate::chat::from_adult(&key, &words, crate::chat::Kind::Text, true) {
+                    crate::record::keep(&m);
+                }
+                see_other(&mut out, &back, "")?;
+            }
+            ("POST", "/adult/ask", Some(_)) if !key.is_empty() => {
+                if let Some(m) = crate::chat::from_adult(&key, "", crate::chat::Kind::AdultAsks, true) {
+                    crate::record::keep(&m);
+                }
+                see_other(&mut out, &back, "")?;
+            }
+            ("GET", "/adult/frame", Some(_)) if !key.is_empty() => {
+                respond_fresh(&mut out, "text/html; charset=utf-8", crate::adult::frame(&key).as_bytes())?;
+            }
+            ("GET", "/adult", Some(name)) if crate::chat::private_on() => {
+                let page = if key.is_empty() { crate::adult::inbox_page(&name) } else { crate::adult::thread_page(&key) };
+                respond_fresh(&mut out, "text/html; charset=utf-8", page.as_bytes())?;
+            }
+            _ => {
+                let page = crate::adult::login_page(query.contains("bad=1"), &peer_ip);
+                respond_fresh(&mut out, "text/html; charset=utf-8", page.as_bytes())?;
+            }
+        }
+        return Ok(false);
+    }
 
     // Paused by the teacher.
     //

@@ -750,7 +750,7 @@ pub(crate) fn human(bytes: u64) -> String {
     }
 }
 
-fn urlencode(s: &str) -> String {
+pub(crate) fn urlencode(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
         match b {
@@ -912,7 +912,7 @@ pub fn take_note(peer_ip: &str, body: &str, root: &Path) -> &'static str {
     "note"
 }
 
-fn form_decode(s: &str) -> String {
+pub(crate) fn form_decode(s: &str) -> String {
     crate::serve::percent_decode(&s.replace('+', " "))
 }
 

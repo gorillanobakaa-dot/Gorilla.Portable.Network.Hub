@@ -253,6 +253,16 @@ struct App {
     picking_receive: bool,
     /// Windows: make the network on 5 GHz instead of 2.4 GHz.
     band5: bool,
+    /// Who receives private help: 0 nobody, 1 the teacher here, 2 a trusted
+    /// adult on their own phone. The owner's decision, 2026-09-24: chosen at
+    /// the start of each lesson.
+    private_to: u8,
+    /// Locks the record of private help, and is the trusted adult's sign-in.
+    private_pw: String,
+    /// Optional: a second adult who may also read the record.
+    second_pw: String,
+    /// Why private help did not switch on, for the sending screen.
+    private_note: String,
     /// The folder being looked at on the tick screen, relative to what is
     /// handed out, "" for the top. The list shows one folder at a time.
     tick_dir: String,
@@ -455,6 +465,10 @@ impl App {
             receive_dir: crate::page::default_receive_dir(),
             picking_receive: false,
             band5: false,
+            private_to: 0,
+            private_pw: String::new(),
+            second_pw: String::new(),
+            private_note: String::new(),
             tick_dir: String::new(),
             tick_first: 0,
             tick_confirm: None,
@@ -508,6 +522,11 @@ impl App {
         serve::forget_session();
         crate::chat::clear();
         self.draft.clear();
+        // Private help ends with the lesson: the record's key is forgotten and
+        // the trusted adults are signed out.
+        crate::chat::set_receiver(crate::chat::Receiver::Off);
+        crate::record::stop();
+        crate::adult::forget();
     }
 
     fn shutdown(&mut self) {
@@ -833,6 +852,30 @@ impl App {
                     self.channel.clone()
                 },
             ) },
+            (
+                "Private help goes to".into(),
+                match self.private_to {
+                    1 => "the teacher, on this laptop".into(),
+                    2 => "a trusted adult, on their own phone".into(),
+                    _ => "nobody: private help is off".into(),
+                },
+            ),
+            (
+                "Private help password".into(),
+                match self.private_pw.chars().count() {
+                    0 => "not set".into(),
+                    n if n < 8 => format!("too short ({n} of at least 8 characters)"),
+                    n => format!("set ({n} characters, hidden)"),
+                },
+            ),
+            (
+                "Second adult's password".into(),
+                match self.second_pw.chars().count() {
+                    0 => "none (optional)".into(),
+                    n if n < 8 => format!("too short ({n} of at least 8 characters)"),
+                    n => format!("set ({n} characters, hidden)"),
+                },
+            ),
             ("Connections to serve at once".into(), self.helpers.to_string()),
             ("Received files go to".into(), self.receive_dir.display().to_string())
         ]
@@ -859,6 +902,10 @@ impl App {
         for (i, (label, value)) in fields.iter().enumerate() {
             let editing_here = self.row == i && self.editing.is_some();
             let shown = if let (true, Some(buf)) = (self.row == i, &self.editing) {
+                // The private help passwords are never drawn, even while
+                // typed: this screen may be on a projector, or facing the
+                // room. One star per character, so typing can be followed.
+                let buf = if !self.cable && (i == 5 || i == 6) { "*".repeat(buf.chars().count()) } else { buf.clone() };
                 // A reverse-video space is the cursor. The real cursor is
                 // hidden because it flickers across a full redraw.
                 format!("{buf}\x1b[7m \x1b[0m")
@@ -928,6 +975,18 @@ impl App {
                 (false, 2) => &[
                     "  At least 8 letters or numbers. The class does not have to type it:",
                     "  they scan a code. Write it on the board for phones that cannot scan.",
+                ],
+                (false, 4) => &[
+                    "  Who reads a child's private HELP messages. Enter changes it. A trusted",
+                    "  adult (nurse, protection officer) signs in on their own phone at /adult.",
+                ],
+                (false, 5) => &[
+                    "  At least 8 characters. It locks the record of private help, and it is the",
+                    "  trusted adult's sign-in. Without it, private help stays off.",
+                ],
+                (false, 6) => &[
+                    "  Optional: a second adult who may also read the private record and sign",
+                    "  in, with their own password of at least 8 characters.",
                 ],
                 (false, r) if r == fields.len() => &[
                     "  Next you tick which files the class may see. Then the wifi network",
@@ -1834,6 +1893,15 @@ impl App {
             f.push_dim("  Accepted work goes into the folder below.");
             f.blank();
         }
+        match crate::chat::receiver() {
+            crate::chat::Receiver::TrustedAdult => f.push(&format!(
+                "  Private help: ON. The trusted adult signs in at {}/adult",
+                self.page_url().unwrap_or_default()
+            )),
+            crate::chat::Receiver::Teacher => f.push("  Private help: ON, to you. Private messages appear under m."),
+            crate::chat::Receiver::Off if !self.private_note.is_empty() => f.push(&format!("  {}", self.private_note)),
+            crate::chat::Receiver::Off => {}
+        }
         if !self.cable {
             f.push(&format!("  Received files go to   {}", self.receive_dir.display()));
             f.push_dim("  Press o to open that folder.");
@@ -2543,7 +2611,9 @@ impl App {
                 // Clamped, not rejected. Typing a letter into a number field
                 // should not throw the value away, and 100,000 helpers is a
                 // typo rather than a wish.
-                4 => self.helpers = buf.trim().parse().unwrap_or(self.helpers).clamp(1, 512),
+                5 => self.private_pw = buf.trim_end_matches(['\r', '\n']).to_string(),
+                6 => self.second_pw = buf.trim_end_matches(['\r', '\n']).to_string(),
+                7 => self.helpers = buf.trim().parse().unwrap_or(self.helpers).clamp(1, 512),
                 _ => {}
             },
             Screen::Receive => {
@@ -3099,6 +3169,11 @@ impl App {
                         self.band5 = !self.band5;
                         return false;
                     }
+                    // Who receives private help: a choice of three.
+                    if !self.cable && self.row == 4 {
+                        self.private_to = (self.private_to + 1) % 3;
+                        return false;
+                    }
                     self.editing = Some(if self.cable {
                         // Cable mode's rows are not the wifi rows. Reading
                         // them off the wifi list would file a folder name as
@@ -3113,7 +3188,9 @@ impl App {
                             1 => self.ssid.clone(),
                             2 => self.password.clone(),
                             3 => self.channel.clone(),
-                            4 => self.helpers.to_string(),
+                            5 => self.private_pw.clone(),
+                            6 => self.second_pw.clone(),
+                            7 => self.helpers.to_string(),
                             _ => fields[self.row].1.clone(),
                         }
                     });
@@ -3744,6 +3821,36 @@ impl App {
         serve::set_allowed(Some(set));
     }
 
+    /// Private help for this lesson: on only with a lock for its record. Says
+    /// why not on the sending screen, rather than stopping the lesson.
+    fn start_private_help(&mut self) {
+        crate::chat::set_receiver(crate::chat::Receiver::Off);
+        crate::record::stop();
+        self.private_note.clear();
+        if self.cable || self.private_to == 0 {
+            return;
+        }
+        if self.private_pw.chars().count() < 8 {
+            self.private_note = "Private help is OFF: its password needs at least 8 characters.".into();
+            return;
+        }
+        let first = if self.private_to == 1 { "teacher" } else { "trusted adult" };
+        let mut adults: Vec<(&str, &str)> = vec![(first, self.private_pw.as_str())];
+        if self.second_pw.chars().count() >= 8 {
+            adults.push(("second adult", self.second_pw.as_str()));
+        } else if !self.second_pw.is_empty() {
+            self.private_note = "The second adult's password is too short, so only one adult can sign in.".into();
+        }
+        match crate::record::start(&self.receive_dir, &adults) {
+            Ok(_) => crate::chat::set_receiver(if self.private_to == 1 {
+                crate::chat::Receiver::Teacher
+            } else {
+                crate::chat::Receiver::TrustedAdult
+            }),
+            Err(e) => self.private_note = format!("Private help is OFF: {e}"),
+        }
+    }
+
     fn begin_sending(&mut self) {
         let folder = PathBuf::from(shellexpand(&self.folder));
         if !folder.is_dir() {
@@ -3820,6 +3927,7 @@ impl App {
             return;
         }
         self.addresses = net::local_addresses();
+        self.start_private_help();
 
         // A cable needs two things a wifi network gets from its router: a way
         // for the other end to find this computer, and an address for it to
@@ -4571,6 +4679,30 @@ mod tests {
         app.draw_thread(&mut f);
         assert!(f.text().contains("You: Try READ"), "{}", f.text());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Private help switches on only with a password of 8 or more, says why
+    /// when it does not, and ends with the lesson.
+    #[test]
+    fn private_help_needs_a_lock_and_ends_with_the_lesson() {
+        let _c = crate::chat::tests::LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _r = crate::record::tests::LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut app = App::new();
+        app.receive_dir = std::env::temp_dir().join(format!("hub-private-on-{}", std::process::id()));
+        app.private_to = 2;
+        app.private_pw = "short".into();
+        app.start_private_help();
+        assert_eq!(crate::chat::receiver(), crate::chat::Receiver::Off);
+        assert!(app.private_note.contains("at least 8"), "{}", app.private_note);
+        app.private_pw = "long-enough-pw".into();
+        app.start_private_help();
+        assert_eq!(crate::chat::receiver(), crate::chat::Receiver::TrustedAdult);
+        assert!(crate::record::is_open());
+        assert_eq!(crate::record::records_in(&app.receive_dir).len(), 1, "one locked record for the lesson");
+        app.forget_session();
+        assert_eq!(crate::chat::receiver(), crate::chat::Receiver::Off, "Stop ends private help");
+        assert!(!crate::record::is_open(), "and forgets the record's key");
+        let _ = std::fs::remove_dir_all(&app.receive_dir);
     }
 
     /// The words of a private message are never on the list, and when a
