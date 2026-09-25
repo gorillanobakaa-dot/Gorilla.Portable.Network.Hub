@@ -42,6 +42,7 @@ const NICKS: [Color32; 6] = [
 /// Open the window. False when no window could be made at all, so the caller
 /// can fall back to the terminal screens.
 pub fn run() -> bool {
+    IN_WINDOW.store(true, std::sync::atomic::Ordering::Relaxed);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Gorilla Portable Network Hub")
@@ -419,7 +420,14 @@ impl Gui {
             egui::MenuBar::new().ui(ui, |ui| {
                 let busy = self.app.started.is_some();
                 ui.menu_button("Hub", |ui| {
-                    if ui.add_enabled(!busy, egui::Button::new("Start screen")).clicked() {
+                    // During a lesson the way back to the start is to stop it,
+                    // so that is what is offered, never a greyed-out entry.
+                    if self.lesson_running() {
+                        if ui.button(RichText::new("Stop the lesson").color(RED)).clicked() {
+                            self.confirm_stop = true;
+                            ui.close();
+                        }
+                    } else if ui.button("Start screen").clicked() {
                         self.app.screen = Screen::Home;
                         self.app.row = 0;
                         ui.close();
@@ -522,9 +530,8 @@ impl Gui {
             self.show_about = open;
         }
         if self.confirm_close {
-            egui::Window::new("Close the hub?").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-                ui.label("The class is still connected. Closing switches the wifi network off,");
-                ui.label("and the phones lose the class page and the chat.");
+            egui::Window::new(RichText::new("Close the hub?").size(18.0).strong()).collapsible(false).default_width(420.0).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+                ui.label("The class is still connected. Closing switches the wifi network off, and the phones lose the class page and the chat.");
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if big(ui, "Close and stop the lesson", RED).clicked() {
@@ -539,7 +546,7 @@ impl Gui {
             });
         }
         if self.confirm_stop {
-            egui::Window::new("Stop handing out?").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+            egui::Window::new(RichText::new("Stop handing out?").size(18.0).strong()).collapsible(false).default_width(420.0).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
                 ui.label("The wifi network goes off and the phones lose the class page and the chat.");
                 ui.label("Work already accepted stays in your received folder.");
                 ui.add_space(8.0);

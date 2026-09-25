@@ -1,7 +1,7 @@
 // A window program on Windows (0.11): double-clicking the hub opens its window
 // and nothing else. Typed commands (hub serve, hub doctor...) borrow the
 // console they were typed into; see attach_console below.
-//TEMP #![cfg_attr(windows, windows_subsystem = "windows")]
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 // Version: 0.1.0 · updated 26-08-24-21-45
 //

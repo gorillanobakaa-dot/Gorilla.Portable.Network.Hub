@@ -4518,8 +4518,12 @@ fn open_with_system(path: &Path) {
 /// should not have to know a key exists to find where the class is talking.
 /// Never from the tests, nor where HUB_NO_BROWSER is set (the screenshot
 /// tour and the pty harness drive this screen with nobody to close a window).
+/// Set by the window (gui.rs), which draws the class chat itself: then a
+/// browser opening by itself is an unexplained second program on the screen.
+static IN_WINDOW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn open_chat() {
-    if cfg!(test) || std::env::var_os("HUB_NO_BROWSER").is_some() {
+    if cfg!(test) || IN_WINDOW.load(std::sync::atomic::Ordering::Relaxed) || std::env::var_os("HUB_NO_BROWSER").is_some() {
         return;
     }
     open_with_system(Path::new(&format!("http://127.0.0.1:{}/op", port())));
