@@ -148,7 +148,10 @@ fn style(ctx: &egui::Context) {
         s.spacing.icon_width_inner = 14.0;
         s.spacing.icon_spacing = 8.0;
         s.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0_f32, Color32::from_gray(150));
-        s.visuals.selection.bg_fill = GREEN;
+        // Selected text stays readable: a pale green behind the same dark
+        // letters. The button green made selected words vanish (2026-09-25).
+        s.visuals.selection.bg_fill = Color32::from_rgb(0xc8, 0xe0, 0xa8);
+        s.visuals.selection.stroke = egui::Stroke::new(1.0_f32, Color32::from_rgb(0x1b, 0x22, 0x1c));
         s.visuals.hyperlink_color = BLUE;
         s.visuals.panel_fill = Color32::from_rgb(0xf2, 0xf4, 0xef);
         s.visuals.window_fill = Color32::from_rgb(0xfb, 0xfc, 0xf9);
@@ -427,12 +430,17 @@ impl Gui {
                             self.confirm_stop = true;
                             ui.close();
                         }
-                    } else if ui.button("Start screen").clicked() {
-                        self.app.screen = Screen::Home;
-                        self.app.row = 0;
-                        ui.close();
+                    } else if !matches!(self.app.screen, Screen::Home) {
+                        // Only where it goes somewhere: on the start screen
+                        // itself it did nothing, and looked broken (the owner,
+                        // 2026-09-25).
+                        if ui.button("Back to the start screen").clicked() {
+                            self.app.screen = Screen::Home;
+                            self.app.row = 0;
+                            ui.close();
+                        }
+                        ui.separator();
                     }
-                    ui.separator();
                     if ui.button("Close the hub").clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                         ui.close();
@@ -558,6 +566,9 @@ impl Gui {
                         self.announced.clear();
                         self.app.screen = Screen::Sending;
                         self.app.sending_key(Key::Char('q'));
+                        // The lesson is over: the bottom line stops talking
+                        // about a network that is no longer there.
+                        self.app.started = None;
                     }
                     if plain(ui, "Keep teaching").clicked() {
                         self.confirm_stop = false;
@@ -2187,6 +2198,7 @@ impl Gui {
                 self.wins.clear();
                 self.toasts.clear();
                 self.app.sending_key(Key::Char('q'));
+                self.app.started = None;
             }
             "15-get-files" => {
                 self.app.screen = Screen::Home;
