@@ -334,7 +334,11 @@ pub fn check_summary() -> Option<(u64, usize, usize, Vec<String>)> {
         let c = r.check.as_ref()?;
         let online: Vec<&Person> = r.people.iter().filter(|p| p.last_seen.elapsed() <= ONLINE_FOR).collect();
         let left = online.iter().filter(|p| !c.answered.iter().any(|(k, _)| *k == p.key)).map(|p| p.nick.clone()).collect();
-        Some((c.id, c.answered.len(), online.len(), left))
+        // Answers from people here NOW. Counting every answer ever given read
+        // "1 of 0 answered" on the owner's screen (2026-09-25) once the one
+        // phone that had answered went quiet.
+        let got = online.iter().filter(|p| c.answered.iter().any(|(k, _)| *k == p.key)).count();
+        Some((c.id, got, online.len(), left))
     })
 }
 
@@ -416,6 +420,56 @@ pub fn nick_of(key: &str) -> Option<String> {
 /// People online now, for the terminal's headline.
 pub fn online() -> usize {
     with(|r| r.people.iter().filter(|p| p.last_seen.elapsed() <= ONLINE_FOR).count())
+}
+
+// ---------------------------------------------------------------- the teacher's window
+
+/// One person as the teacher's window shows them.
+#[derive(Clone, Debug)]
+pub struct PersonView {
+    pub key: String,
+    pub nick: String,
+    pub online: bool,
+    /// "HH:MM" when they answered the current comms check, empty if not.
+    pub answered: String,
+    pub muted: bool,
+}
+
+/// The room as it is now, for the teacher's window (gui.rs), which runs in
+/// this same program and so needs no page and no waiting.
+#[derive(Clone, Debug, Default)]
+pub struct Snapshot {
+    pub lines: Vec<Line>,
+    pub topic: String,
+    pub quiet: bool,
+    /// (number, "HH:MM") of the comms check running now.
+    pub check: Option<(u64, String)>,
+    pub people: Vec<PersonView>,
+}
+
+pub fn snapshot() -> Snapshot {
+    with(|r| Snapshot {
+        lines: r.lines.clone(),
+        topic: r.topic.clone(),
+        quiet: r.quiet,
+        check: r.check.as_ref().map(|c| (c.id, c.at.clone())),
+        people: r
+            .people
+            .iter()
+            .map(|p| PersonView {
+                key: p.key.clone(),
+                nick: p.nick.clone(),
+                online: p.last_seen.elapsed() <= ONLINE_FOR,
+                answered: r
+                    .check
+                    .as_ref()
+                    .and_then(|c| c.answered.iter().find(|(k, _)| *k == p.key))
+                    .map(|(_, a)| a.clone())
+                    .unwrap_or_default(),
+                muted: r.muted.iter().any(|k| *k == p.key),
+            })
+            .collect(),
+    })
 }
 
 // ---------------------------------------------------------------- the answer a page gets

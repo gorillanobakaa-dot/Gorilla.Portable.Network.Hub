@@ -52,6 +52,16 @@ fn port() -> u16 {
 /// few kilobytes.
 const TICK: Duration = Duration::from_millis(250);
 
+mod gui;
+
+/// The teacher's window, or the terminal screens where a window cannot be
+/// opened.
+pub fn run_window() {
+    if !gui::run() {
+        run();
+    }
+}
+
 pub fn run() {
     let Some(_raw) = term::Raw::new() else {
         println!("This needs a terminal to draw on.");
@@ -92,6 +102,7 @@ pub fn run() {
 
 // ---------------------------------------------------------------- state
 
+#[derive(Clone)]
 enum Screen {
     Home,
     Send,
@@ -538,7 +549,9 @@ impl App {
 // ---------------------------------------------------------------- drawing
 
 impl App {
-    fn draw(&mut self, rows: usize, cols: usize) {
+    /// What has to happen every frame whatever draws it, the terminal or
+    /// the window (gui.rs).
+    fn per_frame(&mut self) {
         // The supervisor's answer can change between frames: that is the whole
         // point of it. Read it here rather than remembering what it said when
         // serving began.
@@ -547,13 +560,6 @@ impl App {
             if now != self.cable_note {
                 self.cable_note = now;
             }
-        }
-        if rows < 10 || cols < 44 {
-            let mut f = Frame::new(rows, cols);
-            f.push("The window is too small.");
-            f.push("Make it bigger and this will come back.");
-            f.draw();
-            return;
         }
         // Before anything is drawn, and for every screen. See refresh_joined:
         // this being a side effect of one screen's drawing cost a laptop its
@@ -566,6 +572,17 @@ impl App {
         if let Screen::Thread { key, private, .. } = &self.screen {
             crate::chat::adult_opened(key, *private);
         }
+    }
+
+    fn draw(&mut self, rows: usize, cols: usize) {
+        if rows < 10 || cols < 44 {
+            let mut f = Frame::new(rows, cols);
+            f.push("The window is too small.");
+            f.push("Make it bigger and this will come back.");
+            f.draw();
+            return;
+        }
+        self.per_frame();
         // A message's scroll position, kept inside the text for this window.
         if let Screen::Note(text) = &self.screen {
             let max = note_lines(text, cols).len().saturating_sub(Self::note_room(rows));
@@ -4488,7 +4505,7 @@ fn open_with_system(path: &Path) {
     } else {
         "xdg-open"
     };
-    let _ = std::process::Command::new(program)
+    let _ = crate::net::command(program)
         .arg(path)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())

@@ -140,18 +140,18 @@ fn key(name: &str) -> String {
 }
 
 fn start_of(name: &str) -> Option<u32> {
-    let text = quiet(Command::new("reg").args(["query", &key(name), "/v", "Start"]))?;
+    let text = quiet(crate::net::command("reg").args(["query", &key(name), "/v", "Start"]))?;
     crate::net::start_value_from(&text)
 }
 
 fn dependencies_of(name: &str) -> Vec<String> {
-    quiet(Command::new("reg").args(["query", &key(name), "/v", "DependOnService"]))
+    quiet(crate::net::command("reg").args(["query", &key(name), "/v", "DependOnService"]))
         .map(|t| dependencies_from(&t))
         .unwrap_or_default()
 }
 
 fn is_running(name: &str) -> bool {
-    quiet(Command::new("sc").args(["query", name]))
+    quiet(crate::net::command("sc").args(["query", name]))
         .map(|t| running_from(&t))
         .unwrap_or(false)
 }
@@ -248,13 +248,13 @@ pub fn apply_elevated(record: &std::path::Path) -> i32 {
         }
     }
     for f in &raise {
-        let _ = Command::new("sc")
+        let _ = crate::net::command("sc")
             .args(["config", &f.name, "start=", sc_word(f.want)])
             .stdin(Stdio::null())
             .output();
     }
     for f in &start {
-        let _ = Command::new("sc").args(["start", &f.name]).stdin(Stdio::null()).output();
+        let _ = crate::net::command("sc").args(["start", &f.name]).stdin(Stdio::null()).output();
     }
     if plan(&check()).0.is_empty() { 0 } else { 1 }
 }
@@ -267,9 +267,9 @@ pub fn put_back_elevated(record: &std::path::Path) -> i32 {
     let mut ok = true;
     for (name, start) in &before {
         if *start == 4 {
-            let _ = Command::new("sc").args(["stop", name]).stdin(Stdio::null()).output();
+            let _ = crate::net::command("sc").args(["stop", name]).stdin(Stdio::null()).output();
         }
-        let done = Command::new("sc")
+        let done = crate::net::command("sc")
             .args(["config", name, "start=", sc_word(*start)])
             .stdin(Stdio::null())
             .output()

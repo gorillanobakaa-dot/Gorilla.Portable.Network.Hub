@@ -107,9 +107,9 @@ pub fn local_macs() -> Vec<[u8; 6]> {
         // system, and both are read for MAC-shaped text rather than parsed as
         // a format, so a layout change degrades to finding nothing.
         let out_text = if cfg!(target_os = "windows") {
-            Command::new("getmac").args(["/fo", "csv", "/nh"]).output().ok()
+            crate::net::command("getmac").args(["/fo", "csv", "/nh"]).output().ok()
         } else {
-            Command::new("ifconfig").output().ok()
+            crate::net::command("ifconfig").output().ok()
         };
         if let Some(o) = out_text {
             let text = String::from_utf8_lossy(&o.stdout);
@@ -213,7 +213,7 @@ pub fn live_default_gateway() -> Option<Ipv4Addr> {
     if gw.is_link_local() {
         return None;
     }
-    let out = std::process::Command::new("arp").arg("-a").output().ok()?;
+    let out = crate::net::command("arp").arg("-a").output().ok()?;
     if !out.status.success() {
         // Cannot tell. Report it, because the caller treats a gateway as a
         // reason to stand down and being over-cautious is the safe direction.
@@ -265,11 +265,11 @@ pub fn connected_addresses() -> Vec<Ipv4Addr> {
     let text = {
         use std::process::Command;
         #[cfg(target_os = "windows")]
-        let out = Command::new("ipconfig").output();
+        let out = crate::net::command("ipconfig").output();
         #[cfg(target_os = "linux")]
-        let out = Command::new("ip").args(["-4", "-o", "addr", "show", "up"]).output();
+        let out = crate::net::command("ip").args(["-4", "-o", "addr", "show", "up"]).output();
         #[cfg(not(any(target_os = "windows", target_os = "linux")))]
-        let out = Command::new("ifconfig").output();
+        let out = crate::net::command("ifconfig").output();
 
         match out {
             Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).into_owned(),
@@ -884,7 +884,7 @@ fn tz_offset_seconds() -> i64 {
             return windows_tz_offset_seconds();
         }
         #[allow(unreachable_code)]
-        let out = std::process::Command::new("date")
+        let out = crate::net::command("date")
             .arg("+%z")
             .stdin(std::process::Stdio::null())
             .output();
@@ -1100,7 +1100,7 @@ pub fn rearm_restore(seconds: u64) {
     // back. Stopping the service kills the sleep BEFORE the nmcli, which is
     // exactly what disarming means. All three behaviours proven with a
     // 6-second fuse on this machine before shipping.
-    let restarted = std::process::Command::new("systemctl")
+    let restarted = crate::net::command("systemctl")
         .args(["--user", "restart", "hub-wifi-restore.service"])
         .stdin(std::process::Stdio::null())
         .output()
@@ -1109,7 +1109,7 @@ pub fn rearm_restore(seconds: u64) {
     if restarted {
         return;
     }
-    let _ = std::process::Command::new("systemd-run")
+    let _ = crate::net::command("systemd-run")
         .args([
             "--user",
             "--collect",
@@ -1150,7 +1150,7 @@ pub struct Hotspot {
 /// else again.
 #[cfg(target_os = "linux")]
 pub fn wifi_interface() -> Option<String> {
-    let out = std::process::Command::new("nmcli")
+    let out = crate::net::command("nmcli")
         .args(["-t", "-f", "DEVICE,TYPE", "device"])
         .stdin(std::process::Stdio::null())
         .output()
@@ -1271,7 +1271,7 @@ pub fn disabled_hotspot_services() -> Vec<(&'static str, &'static str)> {
     let mut off = Vec::new();
     for (service, human) in HOTSPOT_SERVICES {
         let key = format!(r"HKLM\SYSTEM\CurrentControlSet\Services\{service}");
-        let out = std::process::Command::new("reg")
+        let out = crate::net::command("reg")
             .args(["query", &key, "/v", "Start"])
             .stdin(std::process::Stdio::null())
             .output();
@@ -1379,7 +1379,7 @@ fn unescape_terse(s: &str) -> String {
 
 #[cfg(target_os = "linux")]
 fn active_wifi_connection() -> Option<String> {
-    let out = std::process::Command::new("nmcli")
+    let out = crate::net::command("nmcli")
         .args(["-t", "-f", "NAME,TYPE", "connection", "show", "--active"])
         .stdin(std::process::Stdio::null())
         .output()
@@ -1407,7 +1407,7 @@ fn active_wifi_connection() -> Option<String> {
 /// password on a network that is not running.
 #[cfg(target_os = "linux")]
 fn active_profile_on(iface: &str) -> Option<String> {
-    let out = std::process::Command::new("nmcli")
+    let out = crate::net::command("nmcli")
         .args(["-t", "-f", "NAME,DEVICE,TYPE", "connection", "show", "--active"])
         .stdin(std::process::Stdio::null())
         .output()
@@ -1449,7 +1449,7 @@ pub fn allowed_channels() -> &'static [u16] {
     static CACHE: std::sync::OnceLock<Vec<u16>> = std::sync::OnceLock::new();
     CACHE.get_or_init(|| {
         for iw in ["iw", "/usr/sbin/iw", "/sbin/iw"] {
-            if let Ok(out) = std::process::Command::new(iw)
+            if let Ok(out) = crate::net::command(iw)
                 .arg("phy")
                 .stdin(std::process::Stdio::null())
                 .output()
@@ -1548,7 +1548,7 @@ pub fn hotspot_up(ssid: &str, password: &str, channel: Option<u16>) -> Result<Ho
         let band = if ch <= 14 { "bg" } else { "a" };
         args.extend(["band".into(), band.into(), "channel".into(), ch.to_string()]);
     }
-    let out = std::process::Command::new("nmcli")
+    let out = crate::net::command("nmcli")
         .args(&args)
         // No stdin. If this machine wants a polkit password there is nowhere to
         // type it while a full-screen program is drawing, and a hang with no
@@ -1725,7 +1725,7 @@ pub fn route_gateway() -> Option<Ipv4Addr> {
             return gw;
         }
     }
-    let out = std::process::Command::new("route")
+    let out = crate::net::command("route")
         .args(["print", "-4", "0.0.0.0"])
         .stdin(std::process::Stdio::null())
         .output()
@@ -1815,7 +1815,7 @@ pub fn wifi_card_summary() -> Option<String> {
             return None;
         }
         let run = |args: &[&str]| {
-            std::process::Command::new("netsh")
+            crate::net::command("netsh")
                 .args(args)
                 .stdin(std::process::Stdio::null())
                 .output()
@@ -1877,7 +1877,7 @@ fn timeout_note() -> std::path::PathBuf {
 #[cfg(windows)]
 fn win_hotspot(action: &str, ssid: &str, password: &str) -> Result<Vec<(String, String)>, String> {
     let utf16: Vec<u8> = WIN_HOTSPOT.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
-    let out = std::process::Command::new("powershell")
+    let out = crate::net::command("powershell")
         .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", &base64(&utf16)])
         .env("HUB_ACTION", action)
         .env("HUB_SSID", ssid)
@@ -2224,7 +2224,7 @@ pub fn saved_hotspot_password(ssid: &str) -> Option<String> {
     if ssid.is_empty() {
         return None;
     }
-    let out = std::process::Command::new("nmcli")
+    let out = crate::net::command("nmcli")
         .args(["-t", "-f", "NAME,TYPE", "connection", "show"])
         .stdin(std::process::Stdio::null())
         .output()
@@ -2235,7 +2235,7 @@ pub fn saved_hotspot_password(ssid: &str) -> Option<String> {
             continue;
         }
         let name = unescape_terse(name);
-        let detail = std::process::Command::new("nmcli")
+        let detail = crate::net::command("nmcli")
             .args([
                 "-s", "-g",
                 "802-11-wireless.ssid,802-11-wireless.mode,802-11-wireless-security.psk",
@@ -2308,18 +2308,18 @@ impl Hotspot {
         // when we could not read it back. "Hotspot" is a good guess and a bad
         // certainty: this machine has four leftovers called Hotspot-1 upwards.
         let profile = self.profile.clone().unwrap_or_else(|| "Hotspot".to_string());
-        let _ = std::process::Command::new("nmcli")
+        let _ = crate::net::command("nmcli")
             .args(["connection", "down", &profile])
             .output();
-        let _ = std::process::Command::new("nmcli")
+        let _ = crate::net::command("nmcli")
             .args(["device", "disconnect", &self.iface])
             .output();
         if let Some(prev) = &self.previous {
-            let _ = std::process::Command::new("nmcli")
+            let _ = crate::net::command("nmcli")
                 .args(["connection", "up", prev])
                 .output();
         } else {
-            let _ = std::process::Command::new("nmcli")
+            let _ = crate::net::command("nmcli")
                 .args(["device", "connect", &self.iface])
                 .output();
         }
@@ -2375,7 +2375,7 @@ impl Hotspot {
                     .into())
             }
         };
-        let out = std::process::Command::new("nmcli")
+        let out = crate::net::command("nmcli")
             .args(["connection", "modify", &profile, "wifi-sec.psk", new])
             .stdin(std::process::Stdio::null())
             .output()
@@ -2388,7 +2388,7 @@ impl Hotspot {
         // up again. Without this the teacher would be given a new password
         // while the old one still worked, which is worse than doing nothing:
         // they would believe the room had been cleared when it had not.
-        let out = std::process::Command::new("nmcli")
+        let out = crate::net::command("nmcli")
             .args(["connection", "up", &profile])
             .stdin(std::process::Stdio::null())
             .output()
@@ -2458,7 +2458,7 @@ impl Hotspot {
         // Stopping the service kills its sleep before the nmcli runs, which
         // is what disarming means. The .timer name is the previous build's.
         for unit in ["hub-wifi-restore.service", "hub-wifi-restore.timer"] {
-            let _ = std::process::Command::new("systemctl")
+            let _ = crate::net::command("systemctl")
                 .args(["--user", "stop", unit])
                 .output();
         }
@@ -2497,7 +2497,7 @@ impl Hotspot {
 #[cfg(target_os = "linux")]
 pub fn hotspot_address_of(iface: &str) -> Option<Ipv4Addr> {
     {
-        let out = std::process::Command::new("nmcli")
+        let out = crate::net::command("nmcli")
             .args(["-g", "IP4.ADDRESS", "device", "show", iface])
             .stdin(std::process::Stdio::null())
             .output()
@@ -3060,7 +3060,7 @@ mod tag_tests {
     /// Windows' own `arp -a` prints for the same neighbour.
     #[test]
     fn the_windows_device_tag_reads_the_same_address_as_arp() {
-        let out = std::process::Command::new("arp").arg("-a").output().expect("arp runs");
+        let out = crate::net::command("arp").arg("-a").output().expect("arp runs");
         let text = String::from_utf8_lossy(&out.stdout);
         let entry = text.lines().find_map(|l| {
             let f: Vec<&str> = l.split_whitespace().collect();
@@ -3073,4 +3073,21 @@ mod tag_tests {
         assert_eq!(super::mac_for(&ip).as_deref(), Some(mac.as_str()), "for {ip}");
         assert_eq!(super::device_tag(&ip).map(|t| t.len()), Some(4));
     }
+}
+
+/// Every helper program the hub starts (netsh, sc, arp, powershell...) is
+/// started with no window of its own. From 0.11 the hub is a window program,
+/// and a console tool started from it would otherwise either flash a black
+/// window in front of the class or, with no console to inherit, fail to start
+/// at all: error 0xc0000142, seen 2026-09-25 as an "sc.exe - Application
+/// Error" box over the new window.
+pub fn command<S: AsRef<std::ffi::OsStr>>(program: S) -> std::process::Command {
+    #[allow(unused_mut)]
+    let mut c = std::process::Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    c
 }

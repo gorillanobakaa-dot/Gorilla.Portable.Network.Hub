@@ -1,3 +1,8 @@
+// A window program on Windows (0.11): double-clicking the hub opens its window
+// and nothing else. Typed commands (hub serve, hub doctor...) borrow the
+// console they were typed into; see attach_console below.
+//TEMP #![cfg_attr(windows, windows_subsystem = "windows")]
+
 // Version: 0.1.0 · updated 26-08-24-21-45
 //
 // Gorilla Portable Network Hub.
@@ -93,6 +98,32 @@ pub fn built() -> String {
     }
 }
 
+/// A typed command's output goes to the console it was typed into.
+///
+/// A window program starts with no console. When its output is already going
+/// somewhere (a script redirected it), that is left alone; otherwise it joins
+/// the console of whatever started it, and `hub screen` (the terminal screens)
+/// gets a console of its own if there is none to join.
+#[cfg(windows)]
+fn attach_console(own_if_none: bool) {
+    extern "system" {
+        fn GetStdHandle(which: u32) -> isize;
+        fn AttachConsole(pid: u32) -> i32;
+        fn AllocConsole() -> i32;
+    }
+    const STD_OUTPUT_HANDLE: u32 = -11i32 as u32;
+    // SAFETY: plain Win32 calls with no pointers.
+    unsafe {
+        let out = GetStdHandle(STD_OUTPUT_HANDLE);
+        if out != 0 && out != -1 {
+            return;
+        }
+        if AttachConsole(u32::MAX) == 0 && own_if_none {
+            AllocConsole();
+        }
+    }
+}
+
 fn main() {
     // Write down any crash, where a person can find it.
     //
@@ -128,9 +159,14 @@ fn main() {
     // message in a console window that closes again is indistinguishable from
     // the program being broken.
     if args.len() < 2 {
-        tui::run();
+        // The window (0.11). The terminal screens remain as `hub screen`, and
+        // are what runs where no window can be opened (a Linux machine with
+        // no desktop, over ssh).
+        tui::run_window();
         return;
     }
+    #[cfg(windows)]
+    attach_console(matches!(args[1].as_str(), "screen" | "tui"));
     // The subcommand is dropped and argv[0] kept, so each module sees exactly
     // the argument shape it saw when it was its own program.
     let mut rest: Vec<String> = vec![args[0].clone()];

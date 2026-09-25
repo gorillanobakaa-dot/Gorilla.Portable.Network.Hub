@@ -121,7 +121,7 @@ $isEth = if ($_.Name -like '*Ethernet*' -or $_.InterfaceDescription -like '*Ethe
 | Sort-Object Priority -Descending | Select-Object -First 1; \
 if ($a) { \"$($a.Name)|$($a.Mbps)\" }";
 
-    let out = Command::new("powershell")
+    let out = crate::net::command("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
         .output();
 
@@ -193,7 +193,7 @@ fn detect_linux() -> Wire {
 fn detect_macos() -> Wire {
     use std::process::Command;
 
-    let out = match Command::new("ifconfig").output() {
+    let out = match crate::net::command("ifconfig").output() {
         Ok(o) => o,
         Err(_) => return guess(),
     };
@@ -278,7 +278,7 @@ pub const PORTS: [(&str, u16, &str); 3] = [
 #[cfg(target_os = "windows")]
 pub fn reachable() -> Option<bool> {
     use std::process::Command;
-    let out = Command::new("netsh")
+    let out = crate::net::command("netsh")
         .args(["advfirewall", "firewall", "show", "rule", "name=Gorilla Hub Port 8080"])
         .output()
         .ok()?;
@@ -310,10 +310,10 @@ pub fn open_ports() -> Result<String, String> {
         let name = format!("Gorilla Hub Port {port}");
         // Delete first so running this twice does not stack up duplicate
         // rules, which is untidy and makes `reachable` ambiguous.
-        let _ = Command::new("netsh")
+        let _ = crate::net::command("netsh")
             .args(["advfirewall", "firewall", "delete", "rule", &format!("name={name}")])
             .output();
-        let out = Command::new("netsh")
+        let out = crate::net::command("netsh")
             .args([
                 "advfirewall",
                 "firewall",

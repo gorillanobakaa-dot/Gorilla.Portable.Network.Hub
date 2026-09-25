@@ -238,7 +238,7 @@ impl StayAwake {
         // from anybody: when this process dies for any reason at all, the
         // kernel closes the write end, `cat` sees EOF and exits, and
         // systemd-inhibit releases the lock as it goes.
-        let mut child = match std::process::Command::new("systemd-inhibit")
+        let mut child = match crate::net::command("systemd-inhibit")
             .args([
                 "--what=sleep:idle",
                 "--who=fetch",
@@ -405,7 +405,7 @@ fn run_bench(url: &str, out: &str) {
         let _ = fs::remove_file(out);
         let _ = fs::remove_file(format!("{out}.parts"));
         let t0 = Instant::now();
-        let st = std::process::Command::new(&exe)
+        let st = crate::net::command(&exe)
             .args([url, "-n", &n.to_string(), "-o", out])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())

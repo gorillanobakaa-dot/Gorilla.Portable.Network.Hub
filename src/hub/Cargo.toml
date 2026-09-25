@@ -11,6 +11,16 @@ edition = "2021"
 name = "hub"
 path = "src/main.rs"
 
+# The teacher's window (src/tui/gui.rs). The one dependency, taken on the
+# owner's order of 2026-09-25: "EVERYTHING HAS TO HAVE A GUI IN RUST", after a
+# teacher called the terminal screens unusable. Until then this crate had no
+# dependencies by rule; a real window with buttons and menus on Windows and
+# Linux cannot be drawn with std alone. egui with the OpenGL (glow) backend,
+# not wgpu: glow asks only for OpenGL 2, which the 2011-2012 laptops this is
+# for have, where wgpu wants hardware several of them do not.
+[dependencies]
+eframe = { version = "0.32", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+
 [profile.release]
 opt-level = "z"
 lto = true
