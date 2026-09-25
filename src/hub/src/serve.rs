@@ -1594,9 +1594,27 @@ fn serve_one(
         if method == "GET" && path_only == "/talk" {
             return respond(&mut out, 204, "text/plain", b"").map(|_| keep);
         }
+        // The chat page reloads itself on this, onto the paused page below.
+        if path_only.starts_with("/net/") {
+            return respond(&mut out, 403, "text/plain", b"paused").map(|_| false);
+        }
         let page = crate::page::paused_page(&crate::page::lang_of(&peer_ip));
         respond_fresh(&mut out, "text/html; charset=utf-8", page.as_bytes())?;
         return Ok(false);
+    }
+
+    // The class net: the chat page (net.html) and what it asks (room.rs).
+    if path_only.starts_with("/net/") {
+        return serve_net(reader, sock, &mut out, method, path_only, query, &text, &peer_ip, root, keep);
+    }
+    // The operator's page: the laptop's own browser, and only that.
+    if path_only == "/op" {
+        if !is_operator(&peer_ip) {
+            write!(out, "HTTP/1.1 303 See Other\r\nLocation: /\r\nContent-Length: 0\r\n\r\n")?;
+            out.flush()?;
+            return Ok(false);
+        }
+        return respond_fresh(&mut out, "text/html; charset=utf-8", crate::page::net_page(&peer_ip, true).as_bytes()).map(|_| keep);
     }
 
     if method == "POST" {
@@ -1699,11 +1717,29 @@ fn serve_one(
         // laptops either end of a cable: it is a thing to type before anything
         // happens, and removing those is the point of the whole cable path.
         let from = crate::page::sender();
-        let page = if from.is_empty() {
-            crate::page::class_page(root, done, &peer_ip, query.contains("rename=1"), &here)
+        let rename = query.contains("rename=1");
+        let page = if !from.is_empty() {
+            crate::page::accept_page(root, &from)
+        } else if done.is_none() && !rename && claimed_name(&peer_ip).is_some() {
+            // Signed in: the class net. The name page, a hand-in's result
+            // and "change my name" are still the class page below.
+            crate::page::net_page(&peer_ip, false)
+        } else if from.is_empty() {
+            crate::page::class_page(root, done, &peer_ip, rename, &here)
         } else {
             crate::page::accept_page(root, &from)
         };
+        return respond_fresh(&mut out, "text/html; charset=utf-8", page.as_bytes()).map(|_| keep);
+    }
+    // The page before the chat: files, hand-in and the old one-to-one messages
+    // on one plain page, for a phone whose browser cannot run the chat.
+    if path_only == "/classic" {
+        mark_page_seen(&peer_ip);
+        let here = sock
+            .local_addr()
+            .map(|a| if a.port() == 80 { a.ip().to_string() } else { format!("{}:{}", a.ip(), a.port()) })
+            .unwrap_or_else(|_| "10.42.0.1".to_string());
+        let page = crate::page::class_page(root, None, &peer_ip, false, &here);
         return respond_fresh(&mut out, "text/html; charset=utf-8", page.as_bytes()).map(|_| keep);
     }
     // The whole folder as one download, for browsers, which can take exactly
@@ -1971,11 +2007,227 @@ fn parse_range(r: &str, total: u64) -> Option<(u64, u64)> {
     if start > end || start >= total { None } else { Some((start, end)) }
 }
 
+/// The laptop's own browser: the operator of the class net (room.rs). Nobody
+/// on the wifi can arrive from this address, so no password is needed, and
+/// none can be forgotten.
+pub fn is_operator(peer_ip: &str) -> bool {
+    peer_ip == "127.0.0.1"
+}
+
+/// Pages waiting for news right now, each on its own small thread (room.rs
+/// says why not on a worker). The cap is a fuse, far above a class: past it a
+/// page is answered at once and simply asks again.
+static NET_WAITERS: AtomicU64 = AtomicU64::new(0);
+const MAX_NET_WAITERS: u64 = 600;
+
+fn form_field(body: &str, name: &str) -> String {
+    body.split('&')
+        .find_map(|pair| {
+            let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+            (k == name).then(|| crate::page::form_decode(v))
+        })
+        .unwrap_or_default()
+}
+
+/// One line in a file beside the received work, the way messages.txt and
+/// sign-ins.txt have always been written.
+fn note_line(root: &Path, file: &str, line: &str) {
+    let dir = crate::page::handed_in_dir(root);
+    if fs::create_dir_all(&dir).is_ok() {
+        if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(dir.join(file)) {
+            let _ = writeln!(f, "{}  {line}", crate::net::timestamp());
+        }
+    }
+}
+
+fn respond_json(out: &mut BufWriter<TcpStream>, body: &str) -> std::io::Result<()> {
+    write!(out, "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\nContent-Length: {}\r\n\r\n", body.len())?;
+    out.write_all(body.as_bytes())?;
+    out.flush()
+}
+
+/// Everything under /net/: what the chat page asks for and sends.
+#[allow(clippy::too_many_arguments)]
+fn serve_net(
+    reader: &mut BufReader<TcpStream>,
+    sock: &TcpStream,
+    out: &mut BufWriter<TcpStream>,
+    method: &str,
+    path: &str,
+    query: &str,
+    head: &str,
+    peer_ip: &str,
+    root: &Path,
+    keep: bool,
+) -> std::io::Result<bool> {
+    let body = if method == "POST" {
+        let len: usize = head
+            .lines()
+            .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
+            .and_then(|l| l.split_once(':'))
+            .and_then(|(_, v)| v.trim().parse().ok())
+            .unwrap_or(0);
+        let mut b = vec![0u8; len.min(16 * 1024)];
+        reader.read_exact(&mut b)?;
+        String::from_utf8_lossy(&b).into_owned()
+    } else {
+        String::new()
+    };
+    let operator = is_operator(peer_ip);
+    let (key, nick) = if operator {
+        ("op".to_string(), crate::room::op_nick())
+    } else {
+        match claimed_name(peer_ip) {
+            Some(n) => (device_key(peer_ip), n),
+            // No name yet: the page goes back to "/" and is asked for one.
+            None => return respond(out, 401, "text/plain", b"name").map(|_| false),
+        }
+    };
+    if !operator {
+        crate::room::here(&key, &nick, peer_ip);
+    }
+    let who = if operator { format!("@{nick}") } else { full_label(peer_ip) };
+    let num = |name: &str| -> u64 {
+        query
+            .split('&')
+            .find_map(|p| p.strip_prefix(name).and_then(|v| v.strip_prefix('=')))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0)
+    };
+
+    if method == "GET" && path == "/net/wait" {
+        let (since, line) = (num("since"), num("line"));
+        let viewer = crate::room::Viewer { key: key.clone(), nick: nick.clone(), operator };
+        if since == 0 || crate::room::version() > since {
+            return respond_json(out, &crate::room::state(&viewer, since, line)).map(|_| keep);
+        }
+        if NET_WAITERS.fetch_add(1, Ordering::Relaxed) < MAX_NET_WAITERS {
+            if let Ok(s) = sock.try_clone() {
+                let spawned = thread::Builder::new().name("net-wait".into()).stack_size(256 * 1024).spawn(move || {
+                    crate::room::wait(since, crate::room::WAIT_FOR);
+                    let body = crate::room::state(&viewer, since, line);
+                    let _ = s.set_write_timeout(Some(IO_TIMEOUT));
+                    let mut w = BufWriter::new(s);
+                    let _ = write!(
+                        w,
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\n\
+                         Connection: close\r\nContent-Length: {}\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = w.write_all(body.as_bytes());
+                    let _ = w.flush();
+                    NET_WAITERS.fetch_sub(1, Ordering::Relaxed);
+                });
+                if spawned.is_ok() {
+                    // The worker goes back to the pool at once; the waiting
+                    // thread owns the connection now and closes it when done.
+                    return Ok(false);
+                }
+            }
+        }
+        NET_WAITERS.fetch_sub(1, Ordering::Relaxed);
+        let viewer = crate::room::Viewer { key, nick, operator };
+        return respond_json(out, &crate::room::state(&viewer, since, line)).map(|_| keep);
+    }
+    if method != "POST" {
+        return respond(out, 404, "text/plain", b"not found").map(|_| keep);
+    }
+
+    let f = |name: &str| form_field(&body, name);
+    let said: &str = match path {
+        "/net/say" => {
+            let (to, words, token) = (f("to"), f("text"), f("token"));
+            if to == "#main" {
+                let (w, line) = crate::room::say(&key, &nick, &words, &token, operator);
+                if let Some(l) = line {
+                    note_line(root, "messages.txt", &format!("#main  {who}: {}", l.text));
+                }
+                w
+            } else if let Some(k) = to.strip_prefix('@') {
+                if operator {
+                    match crate::chat::from_adult(k, &words, crate::chat::Kind::Text, false) {
+                        Some(m) => {
+                            note_line(root, "messages.txt", &format!("teacher -> {}: {}", m.label, m.text));
+                            "sent"
+                        }
+                        None => "empty",
+                    }
+                } else if k == key {
+                    let form = format!(
+                        "kind=text&p=0&token={}&text={}",
+                        crate::page::urlencode(&token),
+                        crate::page::urlencode(&words)
+                    );
+                    crate::page::take_talk(peer_ip, &form, root)
+                } else {
+                    "no"
+                }
+            } else {
+                "no"
+            }
+        }
+        "/net/help" if !operator => {
+            let form = format!("kind=need&p=0&token={}", crate::page::urlencode(&f("token")));
+            crate::page::take_talk(peer_ip, &form, root)
+        }
+        "/net/answer" => {
+            if crate::room::answer(&key, &nick) {
+                note_line(root, "sign-ins.txt", &format!("{who}  answered the comms check"));
+            }
+            "ok"
+        }
+        "/net/read" if operator => {
+            crate::chat::adult_opened(&f("k"), false);
+            "ok"
+        }
+        "/net/check" if operator => {
+            let l = crate::room::start_check();
+            note_line(root, "sign-ins.txt", &format!("{who}  {}", l.text));
+            "ok"
+        }
+        "/net/quiet" if operator => {
+            let on = f("on") == "1";
+            crate::room::set_quiet(on);
+            note_line(root, "sign-ins.txt", &format!("{who}  {} the room", if on { "quieted" } else { "opened" }));
+            "ok"
+        }
+        "/net/topic" if operator => {
+            crate::room::set_topic(&f("text"));
+            "ok"
+        }
+        "/net/nick" if operator => {
+            if crate::room::set_op_nick(&f("text")) { "ok" } else { "empty" }
+        }
+        "/net/mute" if operator => {
+            let (k, on) = (f("k"), f("on") == "1");
+            if crate::room::set_muted(&k, on) {
+                let name = crate::room::nick_of(&k).unwrap_or(k);
+                note_line(root, "sign-ins.txt", &format!("{who}  {} {name} in # main", if on { "muted" } else { "unmuted" }));
+            }
+            "ok"
+        }
+        "/net/kick" if operator => {
+            if let Some((ip, name)) = crate::room::remove(&f("k")) {
+                let label = block_device(&ip);
+                note_line(
+                    root,
+                    "sign-ins.txt",
+                    &format!("{label}  removed from the lesson by {who} ({name}); paused, the teacher can let them back"),
+                );
+            }
+            "ok"
+        }
+        _ => "no",
+    };
+    respond(out, 200, "text/plain; charset=utf-8", said.as_bytes()).map(|_| false)
+}
+
 fn respond(out: &mut BufWriter<TcpStream>, code: u16, ctype: &str, body: &[u8]) -> std::io::Result<()> {
     let why = match code {
         200 => "OK",
         204 => "No Content",
         206 => "Partial Content",
+        401 => "Unauthorized",
         403 => "Forbidden",
         404 => "Not Found",
         416 => "Range Not Satisfiable",

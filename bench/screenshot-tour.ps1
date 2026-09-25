@@ -1,4 +1,4 @@
-# Version: 1.3.0 · updated 26-09-24-16-30
+# Version: 1.3.1 · updated 26-09-25-15-05
 #
 # A tour of the hub's screens on real Windows, photographed for the release
 # pages: drives the real program with keypresses and photographs its window.
@@ -130,7 +130,9 @@ $title = 'HUB-SCREENSHOT-TOUR'
 # tour's moved profile; normal runs leave nothing behind. Sent to TEMP instead.
 $stray = Join-Path $lesson 'Microsoft\Windows\PowerShell\ModuleAnalysisCache'
 if (Test-Path $stray) { Remove-Item $stray; Remove-Item (Join-Path $lesson 'Microsoft') -Recurse -Force }
-$inner = "title $title & mode con: cols=$Cols lines=$Rows & set USERPROFILE=$home_& set PSModuleAnalysisCachePath=$env:TEMP\tour-ps-cache& cd /d `"$lesson`" & `"$Hub`""
+# HUB_NO_BROWSER: from 0.11 the hub opens the class chat in the browser when
+# handing out starts, and a tour has nobody to close those windows.
+$inner = "title $title & mode con: cols=$Cols lines=$Rows & set USERPROFILE=$home_& set PSModuleAnalysisCachePath=$env:TEMP\tour-ps-cache& set HUB_NO_BROWSER=1& cd /d `"$lesson`" & `"$Hub`""
 $proc = Start-Process conhost.exe -ArgumentList "cmd.exe /c `"$inner`"" -PassThru
 try {
     $tries = 0

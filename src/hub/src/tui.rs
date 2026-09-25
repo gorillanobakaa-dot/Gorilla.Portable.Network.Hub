@@ -513,6 +513,7 @@ impl App {
         self.taken_live = Arc::new(std::sync::atomic::AtomicBool::new(false));
         serve::forget_session();
         crate::chat::clear();
+        crate::room::clear();
         self.draft.clear();
         // Private help ends with the lesson: the record's key is forgotten and
         // the trusted adults are signed out.
@@ -1660,6 +1661,20 @@ impl App {
             if help > 0 || unread > 0 {
                 f.blank();
             }
+            // The class chat is the teacher's real screen for talking; this
+            // one says where it is, and what the last comms check found.
+            f.push(&format!(
+                "  Class chat: in this laptop's browser, you are @{}. b opens it again.",
+                crate::room::op_nick()
+            ));
+            if let Some((_, got, on, left)) = crate::room::check_summary() {
+                let mut line = format!("  Comms check: {got} of {on} answered.");
+                if !left.is_empty() {
+                    line.push_str(&format!(" Not yet: {}", left.join(", ")));
+                }
+                f.push(&term::truncate(&line, f.cols.saturating_sub(2)));
+            }
+            f.blank();
         }
         if let Some(h) = &self.hotspot {
             // How a child joins, for any phone or laptop, camera or not: the
@@ -1947,7 +1962,7 @@ impl App {
         // h first: the one key that explains all the others. The rest are
         // named by what they are for ("message", "work"), not by the
         // program's own words for them ("notice", "waiting").
-        self.hints(f, "  h HELP  m messages  f files  n notice  w work  c who  j code  q stop");
+        self.hints(f, if self.cable { "  h HELP  m messages  f files  n notice  w work  c who  j code  q stop" } else { "  h HELP  b chat  m messages  f files  n notice  w work  c who  j code  q stop" });
     }
 
     fn draw_receive(&self, f: &mut Frame) {
@@ -3244,6 +3259,7 @@ impl App {
                 self.row = 0;
                 return false;
             }
+            Key::Char('b') if !self.cable => open_chat(),
             Key::Char('f') => {
                 self.open_tick(false);
                 return false;
@@ -3924,6 +3940,9 @@ impl App {
             return;
         }
         self.addresses = net::local_addresses();
+        if !self.cable {
+            open_chat();
+        }
 
         // A cable needs two things a wifi network gets from its router: a way
         // for the other end to find this computer, and an address for it to
@@ -4395,7 +4414,8 @@ WHAT THE CLASS DOES
 4. On the page they type their name once. Then READ or GET IT for your files, send their work to you, or send you a note.
 
 THE KEYS ON THIS SCREEN
-m   Messages: read what the children wrote and answer each one. You can also write first.
+b   The class chat, in this laptop's browser. It opens by itself when you start. Everybody talks in # main; you can call a comms check, quiet the room, and answer anyone privately. A child's HELP flashes red there.
+m   Messages: read what the children wrote to you and answer each one, here on this screen.
 f   Files: tick or untick what the class can see. It changes on the phones at once.
 n   Notice: a line shown at the top of every phone's page, for example \"Open lesson 2\".
 w   Work: what the class has sent you. Accept it into your received folder, or refuse it.
@@ -4474,6 +4494,18 @@ fn open_with_system(path: &Path) {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
+}
+
+/// The class chat, as its operator, in this laptop's own browser (room.rs).
+/// Opened by itself when handing out starts, because the teacher this is for
+/// should not have to know a key exists to find where the class is talking.
+/// Never from the tests, nor where HUB_NO_BROWSER is set (the screenshot
+/// tour and the pty harness drive this screen with nobody to close a window).
+fn open_chat() {
+    if cfg!(test) || std::env::var_os("HUB_NO_BROWSER").is_some() {
+        return;
+    }
+    open_with_system(Path::new(&format!("http://127.0.0.1:{}/op", port())));
 }
 
 /// One entry in the folder being looked at on the tick screen.
@@ -4764,6 +4796,9 @@ mod tests {
         let first = text.lines().skip(1).find(|l| !l.trim().is_empty()).unwrap_or("");
         assert!(first.contains("A CHILD ASKED FOR HELP. Press m."), "first line was {first:?}:\n{text}");
         assert!(text.contains("q stop"), "the key line must stay:\n{text}");
+        assert!(text.contains("Class chat: in this laptop's browser") && text.contains("b chat"), "where the chat is:\n{text}");
+        let chat = text.lines().find(|l| l.contains("Class chat")).unwrap_or("");
+        assert!(term::width(chat) <= 80, "the chat line fits the window: {chat:?}");
         crate::chat::clear();
     }
 

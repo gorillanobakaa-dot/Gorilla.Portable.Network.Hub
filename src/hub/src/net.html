@@ -1,0 +1,566 @@
+<!doctype html>
+<!--HTML-->
+<head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gorilla Hub</title>
+<style>
+/* The class net page. Served offline by the hub, so nothing comes from the
+   internet: system fonts, literal colours (no CSS variables, no grid), and
+   the script is ES5, because the phones in the room include Android 4.4
+   browsers. Layout after mIRC and Halloy: rooms left, the conversation in the
+   middle, the people right; on a phone the two sides fold into one panel. */
+[hidden]{display:none!important}
+html,body{height:100%;margin:0}
+body{background:#f2f4ef;color:#1b221c;font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans",sans-serif;display:flex;flex-direction:column}
+button{font:inherit;cursor:pointer}
+button:focus,input:focus{outline:3px solid #3d5a1e;outline-offset:1px}
+.mono{font-family:ui-monospace,"Cascadia Mono",Consolas,"DejaVu Sans Mono",monospace}
+.conn{background:#9a5b00;color:#fff;padding:8px 16px;font-weight:700}
+.app{flex:1;display:flex;min-height:0}
+.side,.nicks{background:#e4e9e0;overflow:auto;flex:none}
+.side{width:220px;border-right:1px solid #cdd5c7}
+.nicks{width:210px;border-left:1px solid #cdd5c7}
+.hubname{padding:12px 14px 2px;font-weight:700}
+.hubsub{padding:0 14px 8px;color:#5d6b5f;font-size:13px}
+.hubsub a{color:#3d5a1e}
+.group{padding:10px 14px 4px;color:#5d6b5f;font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+.buf{display:flex;align-items:center;width:100%;text-align:left;background:none;border:0;padding:8px 14px;color:#1b221c;min-height:40px}
+.buf:hover,.buf.on{background:#cfdcc4}
+.buf.on{font-weight:600}
+.buf .n{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.badge{font-size:12px;font-weight:600;background:#3d5a1e;color:#fff;border-radius:10px;padding:1px 7px;margin-left:6px}
+.buf.help{color:#b3261e;font-weight:700}
+.buf.help .badge{background:#b3261e}
+.flash{-webkit-animation:flash 1s steps(2) infinite;animation:flash 1s steps(2) infinite}
+@-webkit-keyframes flash{50%{background:rgba(179,38,30,.18)}}
+@keyframes flash{50%{background:rgba(179,38,30,.18)}}
+.snd{font-size:13px;color:#5d6b5f;min-height:32px}
+.langs{padding:10px 14px 16px;font-size:13px;color:#5d6b5f}
+.langs a{color:#3d5a1e;margin-right:8px;display:inline-block;padding:2px 0}
+.main{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
+.top{display:flex;flex-wrap:wrap;align-items:center;padding:6px 12px;border-bottom:1px solid #cdd5c7;background:#fbfcf9}
+.top>*{margin:3px 6px 3px 0}
+.menu{display:none;background:none;border:1px solid #cdd5c7;border-radius:6px;padding:6px 12px;color:#1b221c;font-size:18px}
+.chan{font-weight:700;font-size:16px}
+.topic{flex:1 1 200px;color:#5d6b5f;min-width:0}
+.tool{border:1px solid #3d5a1e;background:none;color:#3d5a1e;border-radius:6px;padding:7px 12px;font-weight:600;margin-right:6px}
+.tool.primary,.tool.pressed{background:#3d5a1e;color:#fff}
+.logwrap{position:relative;flex:1;display:flex;min-height:0}
+.log{flex:1;overflow:auto;padding:8px 14px;-webkit-overflow-scrolling:touch}
+.row{display:flex;align-items:baseline;padding:2px 0}
+.row .t{flex:none;width:44px;font-size:12px;color:#5d6b5f}
+.row .who{flex:none;width:10em;padding-right:10px;font-weight:700;font-size:14px;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .txt{flex:1;min-width:0;word-wrap:break-word;overflow-wrap:break-word;white-space:pre-wrap}
+.row.ev .txt{color:#5d6b5f;font-size:14px}
+.row.mine{background:#dde9d2;border-radius:4px}
+.row.call{background:#fff4d6;border-left:4px solid #e0b545;border-radius:4px;padding:6px 0}
+.row.call .txt{font-weight:700}
+.row.help .txt{color:#b3261e;font-weight:700}
+.row.ans .txt{color:#1c7a3a;font-weight:600}
+.row.c .who{width:7em}
+.row.c .t{width:40px}
+.empty{color:#5d6b5f;padding:8px 0}
+.files{flex:1;display:flex;flex-direction:column;padding:8px 14px;min-height:0}
+.files iframe{flex:1;border:1px solid #cdd5c7;border-radius:6px;background:#fff;min-height:240px;width:100%}
+.files p{margin:8px 0 0}
+.files a.btn{display:inline-block;background:#28527a;color:#fff;border-radius:8px;padding:10px 16px;text-decoration:none;font-weight:700;margin:8px 8px 0 0}
+.answer{display:flex;flex-wrap:wrap;align-items:center;margin:0 12px 8px;padding:12px;background:#fff4d6;border:2px solid #e0b545;border-radius:10px}
+.answer p{margin:0 10px 6px 0;flex:1 1 180px;font-weight:600}
+.big{border:0;border-radius:10px;padding:14px 22px;font-size:18px;font-weight:700;min-height:52px}
+.okb{background:#1c7a3a;color:#fff}
+.note{margin:0 12px 8px;padding:10px 12px;border:1px dashed #b9c4b3;border-radius:8px;color:#5d6b5f}
+.note.ok{border:2px solid #1c7a3a;color:#1c7a3a;background:#e6f4ea;font-weight:600}
+.note.bad{border:2px solid #b3261e;color:#b3261e;font-weight:600}
+.say{display:flex;padding:8px 12px;border-top:1px solid #cdd5c7;background:#fbfcf9}
+.say input{flex:1;min-width:0;font:inherit;font-size:16px;padding:10px 12px;border:1px solid #b9c4b3;border-radius:8px;background:#fff;color:#1b221c}
+.say button{border:0;border-radius:8px;font-weight:700;margin-left:8px;padding:0 16px;min-height:46px}
+.say .send{background:#3d5a1e;color:#fff}
+.say .hb{background:#b3261e;color:#fff}
+.say input:disabled{opacity:.6}
+.count{padding:10px 14px;font-weight:700;border-bottom:1px solid #cdd5c7}
+.count small{display:block;font-weight:400;color:#5d6b5f}
+.nick{display:flex;align-items:center;width:100%;background:none;border:0;text-align:left;padding:7px 14px;color:#1b221c;min-height:38px}
+.nick:hover{background:#cfdcc4}
+.nick .nm{flex:1;font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nick .st{font-size:13px;color:#5d6b5f;margin-left:6px}
+.nick.off .nm{color:#5d6b5f;font-weight:400}
+.dot{flex:none;width:10px;height:10px;border-radius:50%;background:#9aa69a;margin-right:8px}
+.dot.yes{background:#1c7a3a}.dot.wait{background:#c97d00}.dot.help{background:#b3261e}
+.tag{font-size:11px;border:1px solid #5d6b5f;border-radius:3px;padding:0 4px;color:#5d6b5f}
+.pop{position:fixed;z-index:9;background:#fbfcf9;border:1px solid #cdd5c7;border-radius:8px;box-shadow:0 6px 24px rgba(0,0,0,.25);padding:6px;min-width:200px}
+.pop button{display:block;width:100%;background:none;border:0;text-align:left;padding:11px 12px;color:#1b221c;border-radius:6px}
+.pop button:hover{background:#cfdcc4}
+.pop .danger{color:#b3261e}
+.dock{position:absolute;right:12px;bottom:0;display:flex;flex-direction:row-reverse;align-items:flex-end;pointer-events:none;max-width:95%;overflow:hidden}
+.win{pointer-events:auto;width:290px;height:360px;max-height:75vh;display:flex;flex-direction:column;background:#fbfcf9;border:1px solid #cdd5c7;border-bottom:0;border-radius:8px 8px 0 0;box-shadow:0 -4px 20px rgba(0,0,0,.18);margin-left:10px}
+.win.min{height:auto;width:170px}
+.win header{display:flex;align-items:center;padding:4px 4px 4px 12px;background:#3d5a1e;color:#fff;border-radius:8px 8px 0 0;cursor:pointer;min-height:40px}
+.win header .wn{flex:1;font-weight:700;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.win header .badge{background:#fff;color:#3d5a1e}
+.win.help header{background:#b3261e}
+.wb{background:none;border:0;color:#fff;font-size:18px;font-weight:700;width:34px;height:32px;border-radius:4px}
+.wb:hover{background:rgba(255,255,255,.2)}
+.wlog{flex:1;overflow:auto;padding:6px 10px;min-height:0}
+.wsay{display:flex;padding:6px;border-top:1px solid #cdd5c7}
+.wsay input{flex:1;min-width:0;font:inherit;padding:8px;border:1px solid #b9c4b3;border-radius:6px;background:#fff;color:#1b221c}
+.wsay button{border:0;border-radius:6px;background:#3d5a1e;color:#fff;padding:0 12px;font-weight:700;margin-left:6px}
+.maxwin{position:absolute;left:0;top:0;right:0;bottom:0;z-index:2;display:flex}
+.maxwin .win{flex:1;width:auto;height:auto;max-height:none;border:0;border-radius:0;box-shadow:none;margin:0}
+.maxwin .win header{border-radius:0}
+.toasts{position:fixed;top:60px;right:16px;z-index:8;width:380px;max-width:90%}
+.toast{display:flex;flex-wrap:wrap;align-items:center;background:#fbfcf9;border:1px solid #cdd5c7;border-left:6px solid #3d5a1e;border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.25);margin-bottom:8px}
+.toast.help{border-left-color:#b3261e}
+.toast.help b{color:#b3261e}
+.toast .tt{flex:1 1 170px;margin-right:8px}
+.toast .tt span{display:block;word-wrap:break-word}
+.toast .big{padding:8px 16px;font-size:16px;min-height:40px;margin-right:6px}
+.toast .later{background:none;border:1px solid #cdd5c7;border-radius:8px;padding:8px 12px;color:#1b221c}
+.sure{color:#b3261e;font-weight:700}
+@media (max-width:760px){
+  .side,.nicks{display:none}
+  .menu{display:inline-block}
+  .app.drawer .side{display:block;position:fixed;left:0;top:0;bottom:0;width:78%;z-index:7;box-shadow:4px 0 24px rgba(0,0,0,.3);overflow:auto}
+  .app.drawer .nicks{display:block;position:fixed;left:0;top:50%;bottom:0;width:78%;z-index:7;border-left:0;border-top:1px solid #cdd5c7}
+  .row .who{width:6.5em;padding-right:6px}
+  .row .t{width:38px}
+  .dock{display:none}
+  .toasts{top:8px;right:5%}
+  .say button{padding:0 12px}
+}
+@media (prefers-reduced-motion:reduce){.flash{-webkit-animation:none;animation:none}}
+</style></head>
+<body>
+<div class="conn" id="conn" hidden></div>
+<div class="toasts" id="toasts"></div>
+<div class="app" id="app">
+  <nav class="side" id="side"></nav>
+  <div class="main">
+    <div class="top">
+      <button class="menu" id="menu" type="button" aria-label="Rooms and people">&#9776;</button>
+      <span class="chan mono" id="chan"></span>
+      <span class="topic" id="topic"></span>
+      <span id="tools"></span>
+    </div>
+    <div class="logwrap">
+      <div class="log mono-times" id="log" aria-live="polite"></div>
+      <div class="files" id="files" hidden>
+        <iframe id="filesframe" title="Files"></iframe>
+        <p id="filesmore"></p>
+      </div>
+      <div class="dock" id="dock"></div>
+      <div class="maxwin" id="maxwin" hidden></div>
+    </div>
+    <div id="above"></div>
+    <form class="say" id="say">
+      <input id="text" autocomplete="off" maxlength="500" aria-label="Message">
+      <button class="send" type="submit" id="sendbtn"></button>
+      <button class="hb" type="button" data-act="help" id="helpbtn" hidden></button>
+    </form>
+  </div>
+  <aside class="nicks" id="nicks"></aside>
+</div>
+<noscript><p style="padding:16px">This page needs JavaScript. <a href="/classic">Open the simple class page</a>.</p></noscript>
+<script>/*BOOT*/</script>
+<script>
+(function(){
+var B = window.BOOT || {}, T = B.T || {};
+function tr(s){ return T[s] || s; }
+var OP = !!B.op;
+var S = { v:0, line:0, me:{key:"", nick:"", op:OP}, opnick:"Teacher", topic:"", quiet:false, muted:false,
+  check:null, lines:[], people:[], convs:[], threads:{}, buf:"#main", wins:[], toasts:[], unread:{} };
+var first = true, fails = 0, sound = true, actx = null, note = null, okNote = null, sure = null;
+
+function $(id){ return document.getElementById(id); }
+function esc(s){ return String(s).replace(/[&<>"]/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]; }); }
+function wide(){ return (window.innerWidth || 800) > 760; }
+function isPriv(b){ return b.charAt(0) == "@"; }
+function each(a, f){ for (var i = 0; i < a.length; i++) f(a[i], i); }
+function find(a, f){ for (var i = 0; i < a.length; i++) if (f(a[i])) return a[i]; return null; }
+function person(k){ return find(S.people, function(p){ return p.k == k; }); }
+function nickOf(k){ var p = person(k); if (p) return p.n; var c = find(S.convs, function(c){ return c.k == k; }); return c ? c.n : k; }
+function label(b){
+  if (b == "#main") return "# main";
+  if (b == "#files") return "# " + tr("files");
+  return OP ? nickOf(b.slice(1)) : S.opnick;
+}
+var COLS = ["#2c5d9e","#8a3b8f","#0f6e6e","#9c4a12","#5b5bb0","#7a6300"];
+function colour(n){ var h = 0; for (var i = 0; i < n.length; i++) h = (h * 31 + n.charCodeAt(i)) >>> 0; return COLS[h % COLS.length]; }
+function token(){ return Math.random().toString(36).slice(2) + (+new Date()).toString(36); }
+
+// ---- talking to the hub ---------------------------------------------------
+function poll(){
+  var x = new XMLHttpRequest(), done = false;
+  x.open("GET", "/net/wait?since=" + (first ? 0 : S.v) + "&line=" + S.line + "&r=" + Math.random());
+  x.timeout = 40000;
+  function lost(){ if (done) return; done = true; fails++; conn(); setTimeout(poll, Math.min(10000, 1500 * fails)); }
+  x.onload = function(){
+    if (done) return;
+    if (x.status == 200) {
+      done = true; fails = 0; conn();
+      var d = null; try { d = JSON.parse(x.responseText); } catch (e) {}
+      if (d) apply(d);
+      setTimeout(poll, 30);
+    } else if (x.status == 403) { location.reload(); }
+    else if (x.status == 401) { location.href = "/"; }
+    else lost();
+  };
+  x.onerror = lost; x.ontimeout = lost;
+  x.send();
+}
+function conn(){
+  var c = $("conn");
+  if (fails > 0) { c.textContent = tr("Connection lost. Trying again...") + " (" + fails + ")"; c.hidden = false; }
+  else c.hidden = true;
+}
+function post(path, fields, done){
+  var x = new XMLHttpRequest(), b = [];
+  for (var k in fields) b.push(encodeURIComponent(k) + "=" + encodeURIComponent(fields[k]));
+  x.open("POST", path);
+  x.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+  x.setRequestHeader("X-Hub", "1");
+  x.onload = function(){ if (x.status == 403) { location.reload(); return; } if (done) done(x.status == 200 ? x.responseText : "lost"); };
+  x.onerror = function(){ if (done) done("lost"); };
+  x.send(b.join("&"));
+}
+
+// ---- what the hub said ------------------------------------------------------
+function apply(d){
+  var wasFirst = first; first = false;
+  S.v = d.v; S.me = d.me; S.opnick = d.opnick; S.topic = d.topic; S.quiet = d.quiet; S.muted = d.muted;
+  S.check = d.check; S.people = d.people;
+  if (d.convs) {
+    S.convs = d.convs;
+    if (wasFirst) each(d.convs, function(c){ if (c.unread) S.unread["@" + c.k] = c.unread; });
+  }
+  each(d.lines, function(l){
+    if (l.id <= S.line) return;
+    S.lines.push(l); S.line = l.id;
+    if (wasFirst || l.k == S.me.key || l.kind == "ev") return;
+    if (!visible("#main")) S.unread["#main"] = (S.unread["#main"] || 0) + 1;
+    // A comms check reaches a child wherever they are on the page.
+    if (l.kind == "call" && !OP && !visible("#main")) warn("#main", S.opnick, l.text, false, true);
+  });
+  if (S.lines.length > 600) S.lines.splice(0, S.lines.length - 500);
+  for (var k in d.threads) {
+    var old = S.threads[k] || [], nw = d.threads[k], lastOld = old.length ? old[old.length - 1].id : 0;
+    S.threads[k] = nw;
+    if (wasFirst) continue;
+    each(nw, function(m){
+      if (m.id <= lastOld) return;
+      var incoming = OP ? m.child : !m.child;
+      if (!incoming) return;
+      var b = "@" + k;
+      if (visible(b)) { if (OP) post("/net/read", {k:k}); return; }
+      S.unread[b] = (S.unread[b] || 0) + 1;
+      warn(b, OP ? nickOf(k) : S.opnick, m.text, m.kind == "help", false);
+    });
+  }
+  render();
+}
+function visible(b){
+  if (S.buf == b && !(wide() && isPriv(b))) return true;
+  if (!wide()) return false;
+  return !!find(S.wins, function(w){ return w.b == b && !w.min; });
+}
+function warn(b, who, text, help, call){
+  S.toasts = S.toasts.filter ? S.toasts.filter(function(t){ return t.b != b; }) : [];
+  S.toasts.unshift({ b:b, who:who, text:text, help:help, call:call });
+  if (S.toasts.length > 3) S.toasts.length = 3;
+  beep(help || call);
+}
+function beep(loud){
+  if (!sound) return;
+  try {
+    var AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
+    actx = actx || new AC();
+    var tones = loud ? [880,660,880,660] : [660,880];
+    each(tones, function(f, i){
+      var o = actx.createOscillator(), g = actx.createGain(), t = actx.currentTime + i * 0.16;
+      o.frequency.value = f; o.connect(g); g.connect(actx.destination);
+      g.gain.setValueAtTime(0.15, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+      o.start(t); o.stop(t + 0.15);
+    });
+  } catch (e) {}
+}
+
+// ---- drawing ----------------------------------------------------------------
+function lineHtml(who, whoKey, at, kind, text, compact){
+  var cls = "row " + kind + (whoKey && whoKey == S.me.key ? " mine" : "") + (compact ? " c" : "");
+  var w = who ? '<span class="who mono" style="color:' + colour(who) + '">' + (whoKey == "op" ? "@" : "") + esc(who) + "</span>" : '<span class="who"></span>';
+  return '<div class="' + cls + '"><span class="t mono">' + esc(at) + "</span>" + w + '<span class="txt">' + esc(text) + "</span></div>";
+}
+function mainHtml(){
+  if (!S.lines.length) return '<p class="empty">' + esc(tr("Nothing here yet. Say hello.")) + "</p>";
+  var h = "";
+  each(S.lines, function(l){
+    var text = l.text;
+    if (l.kind == "call" && OP && S.check) text += "  (" + answeredCount() + ")";
+    h += lineHtml(l.who, l.k, l.at, l.kind, text, false);
+  });
+  return h;
+}
+function answeredCount(){
+  var on = 0, got = 0;
+  each(S.people, function(p){ if (!p.op && p.on) { on++; if (p.ans) got++; } });
+  return got + " / " + on + " " + tr("answered");
+}
+function threadHtml(k, compact){
+  var t = S.threads[k] || [];
+  if (!t.length) return '<p class="empty">' + esc(OP ? tr("Only you and this person see this chat.") : tr("Only you and your teacher see this chat.")) + "</p>";
+  var h = "";
+  each(t, function(m){
+    var who = m.child ? (OP ? nickOf(k) : S.me.nick) : S.opnick;
+    var text = m.kind == "help" ? "✋ HELP" : m.text;
+    h += lineHtml(who, m.child ? k : "op", m.at, m.kind == "help" ? "help" : "text", text, compact);
+  });
+  return h;
+}
+function bufBtn(b, text, help){
+  var u = S.unread[b] || 0;
+  var on = (b == S.buf && !(wide() && isPriv(b))) || !!find(S.wins, function(w){ return w.b == b && !w.min; });
+  return '<button type="button" class="buf' + (on ? " on" : "") + (help ? " help flash" : (u && isPriv(b) ? " flash" : "")) + '" data-buf="' + esc(b) + '"><span class="n">' + esc(text) + "</span>" + (u ? '<span class="badge">' + u + "</span>" : "") + "</button>";
+}
+function helpOf(k){ var c = find(S.convs, function(c){ return c.k == k; }); return OP && c && c.help; }
+function privs(){
+  if (!OP) return ["@" + S.me.key];
+  var a = [];
+  each(S.convs, function(c){ a.push("@" + c.k); });
+  each(S.wins, function(w){ if (a.indexOf(w.b) < 0) a.push(w.b); });
+  a.sort(function(x, y){ return (helpOf(y.slice(1)) ? 1 : 0) - (helpOf(x.slice(1)) ? 1 : 0) || (S.unread[y] || 0) - (S.unread[x] || 0); });
+  return a;
+}
+
+function render(){
+  var i, h;
+  if (visible(S.buf)) S.unread[S.buf] = 0;
+  each(S.wins, function(w){ if (!w.min) S.unread[w.b] = 0; });
+  var waiting = 0; for (var b in S.unread) waiting += S.unread[b] || 0;
+  document.title = (waiting ? "(" + waiting + ") " : "") + "Gorilla Hub";
+
+  // the rooms
+  var here = 0; each(S.people, function(p){ if (p.on && !p.op) here++; });
+  h = '<div class="hubname">Gorilla Hub</div><div class="hubsub">' + here + " " + esc(tr("here now")) + "</div>";
+  if (!OP) h += '<div class="hubsub">' + esc(tr("You are")) + " <b>" + esc(S.me.nick) + '</b> &middot; <a href="/?rename=1">' + esc(tr("change")) + "</a></div>";
+  else h += '<div class="hubsub">' + esc(tr("You are")) + " <b>@" + esc(S.opnick) + "</b> &middot; " + esc(tr("type /nick and a name to change it")) + "</div>";
+  h += '<button type="button" class="buf snd" data-act="sound">' + (sound ? "🔔 " + esc(tr("Sound on")) : "🔕 " + esc(tr("Sound off"))) + "</button>";
+  h += '<div class="group">' + esc(tr("Rooms")) + "</div>" + bufBtn("#main", "# main") + bufBtn("#files", "# " + tr("files"));
+  h += '<div class="group">' + esc(tr("Private chats")) + "</div>";
+  var ps = privs();
+  each(ps, function(b){ var help = helpOf(b.slice(1)); h += bufBtn(b, (help ? "✋ HELP " : "") + label(b), help); });
+  if (OP && !ps.length) h += '<div class="hubsub">' + esc(tr("Tap a name on the right to talk to one person.")) + "</div>";
+  if (B.langs && !OP) {
+    h += '<div class="langs">';
+    each(B.langs, function(l){ h += l[0] == B.lang ? "<b>" + esc(l[1]) + "</b> " : '<a href="/?lang=' + l[0] + '">' + esc(l[1]) + "</a>"; });
+    h += "</div>";
+  }
+  $("side").innerHTML = h;
+
+  // the middle
+  var cur = S.buf, chan = !isPriv(cur);
+  $("chan").textContent = label(cur);
+  $("topic").textContent = cur == "#main" ? S.topic : cur == "#files" ? tr("Lessons from your teacher. READ opens one here, GET IT keeps a copy on your phone.") : (OP ? tr("Only you and this person see this chat.") : tr("Only you and your teacher see this chat."));
+  var t = "";
+  if (!chan) t += '<button type="button" class="tool" data-buf="#main">&larr; # main</button>';
+  if (OP && cur == "#main") {
+    var left = 0; each(S.people, function(p){ if (!p.op && p.on && !p.ans) left++; });
+    t += '<button type="button" class="tool primary" data-act="check">' + esc(S.check && left ? tr("CHECK AGAIN") + " (" + left + ")" : tr("COMMS CHECK")) + "</button>";
+    t += '<button type="button" class="tool' + (S.quiet ? " pressed" : "") + '" data-act="quiet">' + esc(S.quiet ? tr("Open the room") : tr("Quiet the room")) + "</button>";
+    t += '<button type="button" class="tool" data-act="topic">' + esc(tr("Set topic")) + "</button>";
+  }
+  $("tools").innerHTML = t;
+  var log = $("log"), files = $("files");
+  if (cur == "#files") {
+    log.hidden = true; files.hidden = false;
+    var fr = $("filesframe"); if (!fr.getAttribute("src")) fr.setAttribute("src", "/files");
+    $("filesmore").innerHTML = OP ? esc(tr("Put files in the lesson folder and they appear here for everybody.")) :
+      '<a class="btn" href="/classic#handin">' + esc(tr("Send your work to the teacher")) + "</a>";
+  } else {
+    files.hidden = true; log.hidden = false;
+    var atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+    log.innerHTML = chan ? mainHtml() : threadHtml(cur.slice(1), false);
+    if (atEnd || S.jump) log.scrollTop = log.scrollHeight;
+    S.jump = false;
+  }
+
+  // above the typing line
+  var a = "";
+  if (!OP && S.check && !S.check.me)
+    a += '<div class="answer"><p>' + esc(tr("Your teacher is checking who can hear. Tap to answer.")) + '</p><button type="button" class="big okb" data-act="answer">✔ ' + esc(tr("I READ YOU")) + "</button></div>";
+  if (!OP && cur == "#main" && (S.quiet || S.muted))
+    a += '<div class="note">' + esc(S.muted ? tr("Your teacher muted you in this room. HELP and your private chat still work.") : tr("The teacher is talking. You can write again when they open the room. HELP still works.")) + "</div>";
+  if (okNote) a += '<div class="note ok">' + esc(okNote) + "</div>";
+  if (note) a += '<div class="note bad">' + esc(note) + "</div>";
+  $("above").innerHTML = a;
+
+  var blocked = !OP && cur == "#main" && (S.quiet || S.muted);
+  var inp = $("text");
+  inp.disabled = blocked || cur == "#files";
+  inp.placeholder = cur == "#files" ? "" : blocked ? tr("The room is quiet") : chan ? tr("Write to everybody") : tr("Write to") + " " + label(cur);
+  $("sendbtn").textContent = tr("SEND");
+  $("sendbtn").disabled = inp.disabled;
+  // # files is for reading: no typing line there, only HELP
+  inp.hidden = cur == "#files"; $("sendbtn").hidden = cur == "#files";
+  var hb = $("helpbtn"); hb.hidden = OP; hb.textContent = "✋ " + (B.help || "HELP");
+
+  drawWins(); drawToasts(); drawNicks();
+}
+
+// Private chats on a laptop: windows docked along the bottom, like mIRC's
+// query windows. _ folds one to its title bar, the square makes it fill the
+// middle, x closes it (the chat stays in the list on the left).
+function winHtml(w){
+  var u = S.unread[w.b] || 0, help = helpOf(w.b.slice(1)), n = esc(label(w.b)), b = esc(w.b);
+  var head = '<header data-act="toggle" data-win="' + b + '"><span class="wn">' + (help ? "✋ " : "") + n + "</span>" + (u ? '<span class="badge">' + u + "</span>" : "") +
+    '<button type="button" class="wb" data-act="min" data-win="' + b + '" title="' + esc(w.min ? tr("Open") : tr("Fold away")) + '">' + (w.min ? "&#9652;" : "_") + "</button>" +
+    (w.min ? "" : '<button type="button" class="wb" data-act="max" data-win="' + b + '" title="' + esc(w.max ? tr("Make small again") : tr("Make big")) + '">' + (w.max ? "&#10064;" : "&#9633;") + "</button>") +
+    '<button type="button" class="wb" data-act="close" data-win="' + b + '" title="' + esc(tr("Close")) + '">&times;</button></header>';
+  if (w.min) return '<section class="win min' + (help ? " help" : "") + (u ? " flash" : "") + '">' + head + "</section>";
+  return '<section class="win' + (help ? " help" : "") + '">' + head + '<div class="wlog">' + threadHtml(w.b.slice(1), true) + "</div>" +
+    '<form class="wsay" data-win="' + b + '"><input data-win="' + b + '" autocomplete="off" maxlength="500" placeholder="' + esc(tr("Write to") + " " + label(w.b)) + '"><button type="submit">' + esc(tr("SEND")) + "</button></form></section>";
+}
+function drawWins(){
+  var keep = {}, act = document.activeElement, focus = act && act.getAttribute && act.getAttribute("data-win");
+  each(document.querySelectorAll("#dock input, #maxwin input"), function(i){ keep[i.getAttribute("data-win")] = i.value; });
+  var big = wide() ? find(S.wins, function(w){ return w.max && !w.min; }) : null, h = "";
+  $("maxwin").innerHTML = big ? winHtml(big) : ""; $("maxwin").hidden = !big;
+  each(S.wins, function(w){ if (w != big) h += winHtml(w); });
+  $("dock").innerHTML = h;
+  // one typing line at a time: while a chat is big, the room's steps aside
+  $("say").hidden = !!big; $("above").hidden = !!big;
+  each(document.querySelectorAll(".wlog"), function(l){ l.scrollTop = l.scrollHeight; });
+  each(document.querySelectorAll("#dock input, #maxwin input"), function(i){
+    var k = i.getAttribute("data-win"); if (keep[k]) i.value = keep[k]; if (k == focus) i.focus();
+  });
+}
+function drawToasts(){
+  var h = "";
+  each(S.toasts, function(t){
+    var title = t.help ? "✋ " + t.who + " " + tr("asked for HELP") : t.call ? tr("Comms check. Tap to answer.") : (OP ? t.who + " " + tr("wrote to you") : tr("Your teacher wrote to you"));
+    h += '<div class="toast' + (t.help ? " help" : "") + '" role="alert"><div class="tt"><b>' + esc(title) + "</b>" + (t.help || t.call ? "" : "<span>" + esc(t.text) + "</span>") + "</div>" +
+      '<button type="button" class="big okb" data-act="open" data-win="' + esc(t.b) + '">' + esc(tr("Open")) + "</button>" +
+      '<button type="button" class="later" data-act="later" data-win="' + esc(t.b) + '">' + esc(tr("Later")) + "</button></div>";
+  });
+  var box = $("toasts"); box.innerHTML = h;
+  // never over a window's own buttons
+  // never over a window's own buttons, nor over the people list, where a
+  // child's red HELP dot is
+  if (wide()) {
+    var hd = document.querySelector("#maxwin header") || document.querySelector(".top");
+    box.style.top = (hd.getBoundingClientRect().bottom + 8) + "px";
+    box.style.right = ($("nicks").offsetWidth + 16) + "px";
+  } else { box.style.top = ""; box.style.right = ""; }
+}
+function drawNicks(){
+  var on = [], off = 0, got = 0, h = "";
+  each(S.people, function(p){ if (p.op) return; if (p.on) { on.push(p); if (p.ans) got++; } else off++; });
+  if (S.check) h += '<div class="count">' + got + " / " + on.length + " " + esc(tr("answered")) + "<small>" + esc(tr("Comms check at")) + " " + esc(S.check.at) + (off ? " &middot; " + off + " " + esc(tr("gone")) : "") + "</small></div>";
+  else h += '<div class="count">' + on.length + " " + esc(tr("here now")) + "</div>";
+  function rank(p){ return p.op ? 0 : (OP && p.help) ? 1 : !p.on ? 4 : (S.check && !p.ans) ? 2 : 3; }
+  var ps = S.people.slice().sort(function(x, y){ return rank(x) - rank(y) || (x.n < y.n ? -1 : x.n > y.n ? 1 : 0); });
+  each(ps, function(p){
+    var dot = OP && p.help ? "help" : !p.on ? "" : (p.op || p.ans || !S.check) ? "yes" : "wait";
+    var st = p.op ? tr("in charge") : !p.on ? tr("gone") : OP && p.help ? "HELP" : OP && p.unread ? "✉ " + p.unread : p.ans ? "✔ " + p.ans : S.check ? tr("waiting") : "";
+    h += '<button type="button" class="nick' + (p.on ? "" : " off") + '" data-nick="' + esc(p.k) + '"><span class="dot ' + dot + '"></span><span class="nm mono"' + (p.on ? ' style="color:' + colour(p.n) + '"' : "") + ">" + (p.op ? "@" : "") + esc(p.n) + "</span>" +
+      '<span class="st">' + (p.muted ? '<span class="tag">' + esc(tr("muted")) + "</span> " : "") + esc(st) + "</span></button>";
+  });
+  $("nicks").innerHTML = h;
+}
+
+// ---- what taps do -------------------------------------------------------------
+function open(b){
+  S.toasts = S.toasts.filter(function(t){ return t.b != b; });
+  if (isPriv(b) && OP) post("/net/read", {k:b.slice(1)});
+  if (isPriv(b) && wide()) {
+    var w = find(S.wins, function(x){ return x.b == b; });
+    if (!w) { w = {b:b, min:false, max:false}; S.wins.unshift(w); }
+    w.min = false;
+    // as many open windows as the space takes; older ones fold to their title bar
+    var room = $("dock").parentNode.clientWidth - 24;
+    function need(){ var s = 0; each(S.wins, function(x){ s += x.min ? 180 : 300; }); return s; }
+    for (var i = S.wins.length - 1; i >= 0 && need() > room; i--) if (S.wins[i] != w && !S.wins[i].min) S.wins[i].min = true;
+    while (need() > room && S.wins.length > 1 && S.wins[S.wins.length - 1] != w && S.wins[S.wins.length - 1].min) S.wins.pop();
+  } else { S.buf = b; S.jump = true; }
+  $("app").className = "app"; note = null;
+  render();
+  var inp = document.querySelector('#dock input[data-win="' + b + '"], #maxwin input[data-win="' + b + '"]');
+  if (inp) inp.focus();
+}
+function send(to, text, inp){
+  if (OP && text.indexOf("/topic ") == 0) { post("/net/topic", {text:text.slice(7)}); inp.value = ""; return; }
+  if (OP && text.indexOf("/nick ") == 0) { post("/net/nick", {text:text.slice(6)}); inp.value = ""; return; }
+  var was = text; inp.value = ""; note = null;
+  post("/net/say", {to:to, text:text, token:token()}, function(r){
+    var why = {toofast:tr("Slow down a little, then send again."), quiet:tr("The room is quiet. Your message was not sent."),
+      muted:tr("Your teacher muted you in this room. HELP and your private chat still work."), lost:tr("Not sent. The wifi may have dropped. Try again.")}[r];
+    if (why) { note = why; if (!inp.value) inp.value = was; render(); }
+  });
+}
+document.addEventListener("click", function(e){
+  var t = e.target, el = t;
+  while (el && el != document && !(el.getAttribute && (el.getAttribute("data-buf") || el.getAttribute("data-act") || el.getAttribute("data-nick") || el.id == "menu"))) el = el.parentNode;
+  var inPop = false; for (var p = t; p && p != document; p = p.parentNode) if (p.className == "pop") inPop = true;
+  if (!inPop) each(document.querySelectorAll(".pop"), function(x){ x.parentNode.removeChild(x); });
+  var app = $("app");
+  if (app.className.indexOf("drawer") >= 0) {
+    var inSide = false; for (var q = t; q && q != document; q = q.parentNode) if (q.className == "side" || q.className == "nicks" || q.id == "menu") inSide = true;
+    if (!inSide) { app.className = "app"; return; }
+  }
+  if (!el || el == document) return;
+  if (el.id == "menu") { app.className = app.className.indexOf("drawer") >= 0 ? "app" : "app drawer"; return; }
+  var buf = el.getAttribute("data-buf"), act = el.getAttribute("data-act"), wb = el.getAttribute("data-win"), nk = el.getAttribute("data-nick");
+  if (buf) return open(buf);
+  var w = wb ? find(S.wins, function(x){ return x.b == wb; }) : null;
+  if (act == "sound") { sound = !sound; if (sound) beep(false); render(); return; }
+  if (act == "open") return open(wb);
+  if (act == "later") { S.toasts = S.toasts.filter(function(x){ return x.b != wb; }); render(); return; }
+  if ((act == "min" || act == "toggle") && w) { e.stopPropagation(); if (w.min) return open(wb); w.min = true; w.max = false; render(); return; }
+  if (act == "max" && w) { e.stopPropagation(); var to = !w.max; each(S.wins, function(x){ x.max = false; }); w.max = to; render(); return; }
+  if (act == "close") { e.stopPropagation(); S.wins = S.wins.filter(function(x){ return x.b != wb; }); render(); return; }
+  if (act == "check") { post("/net/check", {}); return; }
+  if (act == "quiet") { post("/net/quiet", {on: S.quiet ? "0" : "1"}); return; }
+  if (act == "topic") { var i = $("text"); i.value = "/topic " + S.topic; i.focus(); return; }
+  if (act == "answer") { post("/net/answer", {}); if (S.check) S.check.me = true; render(); return; }
+  if (act == "help") {
+    post("/net/help", {token:token()}, function(r){ note = r == "lost" ? tr("Not sent. The wifi may have dropped. Try again.") : null; render(); });
+    S.toasts = []; note = null;
+    okNote = tr("Sent. Your teacher will find a safe moment to talk to you.");
+    setTimeout(function(){ okNote = null; render(); }, 10000);
+    open("@" + S.me.key);
+    return;
+  }
+  if (nk) {
+    if (nk == S.me.key) return;
+    if (!OP) { if (nk == "op") open("@" + S.me.key); return; }
+    if (nk == "op") return;
+    var pp = person(nk), r = el.getBoundingClientRect(), pop = document.createElement("div");
+    pop.className = "pop";
+    pop.innerHTML = '<button type="button" data-do="chat">' + esc(tr("Private chat with")) + " " + esc(pp.n) + "</button>" +
+      '<button type="button" data-do="mute">' + esc(pp.muted ? tr("Let them write again") : tr("Mute in # main")) + "</button>" +
+      '<button type="button" class="danger" data-do="kick">' + esc(tr("Remove this device")) + "</button>";
+    pop.style.top = Math.min(r.bottom, window.innerHeight - 170) + "px";
+    pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 220)) + "px";
+    pop.onclick = function(ev){
+      var d = ev.target.getAttribute("data-do"); if (!d) return;
+      if (d == "kick" && sure != nk) { sure = nk; ev.target.innerHTML = '<span class="sure">' + esc(tr("Tap again to remove")) + " " + esc(pp.n) + "</span>"; ev.stopPropagation(); return; }
+      pop.parentNode.removeChild(pop); sure = null;
+      if (d == "chat") open("@" + nk);
+      if (d == "mute") post("/net/mute", {k:nk, on: pp.muted ? "0" : "1"});
+      if (d == "kick") post("/net/kick", {k:nk});
+    };
+    document.body.appendChild(pop); e.stopPropagation();
+  }
+});
+document.addEventListener("submit", function(e){
+  e.preventDefault();
+  var f = e.target, inp = f.querySelector("input"), v = inp.value.replace(/^\s+|\s+$/g, "");
+  if (!v) return;
+  var to = f.getAttribute("data-win") || S.buf;
+  if (to == "#files") return;
+  send(to, v, inp);
+});
+window.addEventListener("resize", function(){ render(); });
+render();
+poll();
+})();
+</script>
+</body></html>

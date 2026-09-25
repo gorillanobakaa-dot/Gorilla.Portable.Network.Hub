@@ -1679,6 +1679,58 @@ pub fn accept_page(root: &Path, from: &str) -> String {
     s
 }
 
+// ---------------------------------------------------------------- the class net
+
+/// Every word the chat page shows a child, translated here and handed to the
+/// page's script as a table (net.html asks for each with tr("...")). The
+/// operator's own words stay in English, like the rest of the teacher's side.
+pub const NET_WORDS: &[&str] = &[
+    "files", "Connection lost. Trying again...", "Nothing here yet. Say hello.", "answered",
+    "Only you and your teacher see this chat.", "here now", "You are", "change", "Sound on", "Sound off",
+    "Rooms", "Private chats", "Lessons from your teacher. READ opens one here, GET IT keeps a copy on your phone.",
+    "Send your work to the teacher", "Your teacher is checking who can hear. Tap to answer.", "I READ YOU",
+    "Your teacher muted you in this room. HELP and your private chat still work.",
+    "The teacher is talking. You can write again when they open the room. HELP still works.",
+    "The room is quiet", "Write to everybody", "Write to", "SEND", "Open", "Later", "Fold away", "Make big",
+    "Make small again", "Close", "Comms check. Tap to answer.", "Your teacher wrote to you", "Comms check at",
+    "gone", "in charge", "waiting", "muted", "Slow down a little, then send again.",
+    "The room is quiet. Your message was not sent.", "Not sent. The wifi may have dropped. Try again.",
+    "Sent. Your teacher will find a safe moment to talk to you.",
+];
+
+/// The class net page (net.html) for one device: a child's, or the
+/// operator's when `operator` is set. The page draws itself from /net/wait.
+pub fn net_page(peer_ip: &str, operator: bool) -> String {
+    let l = if operator { "en".to_string() } else { lang_of(peer_ip) };
+    let l = l.as_str();
+    let mut words = String::from("{");
+    if l != "en" {
+        for (i, w) in NET_WORDS.iter().enumerate() {
+            if i > 0 {
+                words.push(',');
+            }
+            words.push_str(&crate::room::json_str(w));
+            words.push(':');
+            words.push_str(&crate::room::json_str(crate::i18n::t(l, w)));
+        }
+    }
+    words.push('}');
+    let langs: Vec<String> = crate::i18n::LANGS
+        .iter()
+        .map(|(code, name, _, _)| format!("[{},{}]", crate::room::json_str(code), crate::room::json_str(name)))
+        .collect();
+    let help = help_word(l).replace("&middot;", "\u{b7}");
+    let boot = format!(
+        "var BOOT={{op:{operator},lang:{},langs:[{}],help:{},T:{words}}};",
+        crate::room::json_str(l),
+        langs.join(","),
+        crate::room::json_str(&help)
+    );
+    include_str!("net.html")
+        .replacen("<!--HTML-->", &crate::i18n::html_open(l), 1)
+        .replacen("/*BOOT*/", &boot, 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

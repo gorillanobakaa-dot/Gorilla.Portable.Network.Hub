@@ -122,7 +122,8 @@ fn bump(st: &mut State, key: &str, private: bool) {
     match st.versions.iter_mut().find(|(k, p, _)| k == key && *p == private) {
         Some(v) => v.2 += 1,
         None => st.versions.push((key.to_string(), private, 1)),
-    }
+    }    // Pages waiting on the class net (room.rs) hear about it at once.
+    crate::room::pulse(Some(key));
 }
 
 /// The version of one conversation a phone should compare against.
@@ -138,6 +139,7 @@ fn clock() -> String {
 /// Forget every message: the lesson stopped. The permanent record stays.
 pub fn clear() {
     *STATE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    crate::room::pulse(None);
 }
 
 fn push(st: &mut State, key: &str, label: &str, from_child: bool, private: bool, kind: Kind, text: &str) -> Msg {
