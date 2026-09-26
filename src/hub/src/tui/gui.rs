@@ -47,6 +47,10 @@ pub fn run() -> bool {
         viewport: egui::ViewportBuilder::default()
             .with_title("Gorilla Portable Network Hub")
             .with_inner_size([1180.0, 760.0])
+            // Full screen from the start: a teacher should never have to find
+            // the button that makes a window bigger to see all of it. The
+            // tour keeps a fixed size so its pictures compare.
+            .with_maximized(std::env::var_os("HUB_GUI_TOUR").is_none())
             .with_min_inner_size([760.0, 520.0]),
         renderer: eframe::Renderer::Glow,
         ..Default::default()
