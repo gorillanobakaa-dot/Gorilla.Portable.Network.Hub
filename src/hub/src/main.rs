@@ -43,6 +43,7 @@ mod crypto;
 mod adult;
 mod i18n;
 mod room;
+mod json;
 
 const USAGE: &str = "\
 Gorilla Portable Network Hub

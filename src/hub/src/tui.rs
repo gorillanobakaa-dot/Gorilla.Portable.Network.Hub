@@ -53,6 +53,7 @@ fn port() -> u16 {
 const TICK: Duration = Duration::from_millis(250);
 
 mod gui;
+mod member;
 
 /// The teacher's window, or the terminal screens where a window cannot be
 /// opened.
@@ -3316,7 +3317,7 @@ impl App {
                 // "Close this and start it again" was true before 0.9.9, when
                 // Stop could not stop the server. It can now, so the way on is
                 // the menu, not a restart.
-                self.note("Stopped handing out.\n\nThe wifi network is off, and the phones can no longer reach the class page.\n\nWhat you chose to send has been forgotten, so the next lesson starts from nothing.\n\nTo hand out again, choose \"Hand out files to the class over wifi\" on the first screen.");
+                self.note("Stopped handing out.\n\nThe wifi network is off, and the phones can no longer reach the class page.\n\nWhat you chose to send has been forgotten, so the next lesson starts from nothing.\n\nTo hand out again, choose \"Hand out files to the class\" on the first screen.");
                 self.back = Screen::Home;
             }
             Key::Quit => return true,

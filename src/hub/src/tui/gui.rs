@@ -240,6 +240,16 @@ struct Gui {
     tour: Option<Tour>,
     /// The newest # main line on screen, to scroll to a new one.
     last_line: u64,
+    /// Joining another hub's chat (member.rs): the form, then the chat.
+    join: Option<JoinForm>,
+    member: Option<std::sync::Arc<super::member::Member>>,
+    member_files: bool,
+    member_private: bool,
+    member_note: Option<String>,
+    member_draft: String,
+    member_private_draft: String,
+    member_line: u64,
+    tour_ctx: Option<egui::Context>,
     /// The private chats as they were when the window first looked, so only
     /// what arrives afterwards rings.
     announced_init: bool,
@@ -278,6 +288,15 @@ impl Gui {
             show_about: false,
             address: String::new(),
             last_line: 0,
+            join: None,
+            member: None,
+            member_files: false,
+            member_private: false,
+            member_note: None,
+            member_draft: String::new(),
+            member_private_draft: String::new(),
+            member_line: 0,
+            tour_ctx: None,
             announced_init: false,
             tour: std::env::var_os("HUB_GUI_TOUR").map(|d| Tour { dir: PathBuf::from(d), step: 0, frames: 0, asked: false }),
         }
@@ -393,6 +412,25 @@ impl eframe::App for Gui {
         self.run_tour(ctx);
         self.menu_bar(ctx);
         self.status_bar(ctx);
+        if self.member.is_some() && self.member_files {
+            egui::TopBottomPanel::top("back_to_chat").show(ctx, |ui| {
+                ui.add_space(4.0);
+                if big(ui, "\u{2190} Back to the chat", GREEN).clicked() {
+                    self.member_files = false;
+                }
+                ui.add_space(4.0);
+            });
+        }
+        if self.member.is_some() && !self.member_files && !matches!(self.app.screen, Screen::Note(_)) {
+            self.member_chat(ctx);
+            self.dialogs(ctx);
+            return;
+        }
+        if self.join.is_some() && !matches!(self.app.screen, Screen::Note(_)) {
+            self.join_screen(ctx);
+            self.dialogs(ctx);
+            return;
+        }
         let screen = self.app.screen.clone();
         match screen {
             Screen::Home => self.home(ctx),
@@ -447,6 +485,17 @@ impl Gui {
                     }
                 });
                 ui.menu_button("Lesson", |ui| {
+                    if self.member.is_some() {
+                        if ui.button("Leave the chat").clicked() {
+                            self.member = None;
+                            self.member_private = false;
+                            ui.close();
+                        }
+                        ui.separator();
+                    } else if ui.add_enabled(!busy, egui::Button::new("Join the chat on a hub nearby")).clicked() {
+                        self.open_join();
+                        ui.close();
+                    }
                     for (i, what) in [
                         "Hand out files to the class over wifi",
                         "Send files down a cable to one other computer",
@@ -642,6 +691,20 @@ impl Gui {
                     None => {}
                 }
                 ui.add_space(14.0);
+                let join = card(ui, Color32::WHITE, GREEN_OK, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("\u{1f4ac}").size(30.0));
+                        ui.label(RichText::new("Join the chat on a hub nearby").size(21.0).strong().color(GREEN_OK));
+                    });
+                    ui.label("Just arrived? Joined the hub's wifi with a laptop? Press Join, give your name, and read the briefing and the whole conversation so far.");
+                    ui.add_space(4.0);
+                    big(ui, "Join", GREEN_OK)
+                });
+                if join.clicked() {
+                    self.open_join();
+                }
+                ui.add_space(14.0);
                 let choices: [(&str, &str, &str, Color32); 4] = [
                     ("\u{1f4f6}", "Hand out files to the class", "Makes a wifi network from this laptop. Phones and laptops join it, get the files you choose, talk in the class chat and send work back.", GREEN),
                     ("\u{1f50c}", "Send files down a cable", "For one other computer joined to this one by a network cable. The fastest way to move a lot at once.", BLUE),
@@ -649,11 +712,10 @@ impl Gui {
                     ("\u{1f6e0}", "Fix problems with this computer", "Checks the parts of Windows the hub needs, the firewall and the wifi card, and switches back on what is off.", AMBER),
                 ];
                 let w = ((ui.available_width() - 20.0) / 2.0).max(300.0);
-                egui::Grid::new("home").num_columns(2).spacing([20.0, 20.0]).show(ui, |ui| {
+                egui::Grid::new("home").num_columns(2).spacing([16.0, 14.0]).show(ui, |ui| {
                     for (i, (icon, title, what, colour)) in choices.iter().enumerate() {
                         let resp = card(ui, Color32::WHITE, *colour, |ui| {
                             ui.set_width(w - 30.0);
-                            ui.set_min_height(130.0);
                             ui.horizontal(|ui| {
                                 ui.label(RichText::new(*icon).size(30.0));
                                 ui.label(RichText::new(*title).size(21.0).strong().color(*colour));
@@ -2040,10 +2102,15 @@ const TOUR: &[&str] = &[
     "15-get-files",
     "16-fix-this-computer",
     "17-not-ready-offer",
+    "18-join-a-hub",
+    "19-member-chat",
+    "20-member-comms-check",
+    "21-member-private",
 ];
 
 impl Gui {
     fn run_tour(&mut self, ctx: &egui::Context) {
+        self.tour_ctx = Some(ctx.clone());
         let Some(t) = &mut self.tour else { return };
         ctx.request_repaint();
         if t.asked {
@@ -2074,8 +2141,10 @@ impl Gui {
         }
         let t = self.tour.as_mut().expect("tour");
         t.frames += 1;
-        // Long enough for layout to settle and the chat to be read in.
-        if t.frames > 12 {
+        // Long enough for layout to settle and the chat to be read in; the
+        // member steps wait on a real hub over the network.
+        let wait = if TOUR[t.step].contains("member") { 120 } else { 12 };
+        if t.frames > wait {
             t.asked = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
         }
@@ -2207,8 +2276,51 @@ impl Gui {
             }
             "16-fix-this-computer" => self.app.screen = Screen::Checkup,
             "17-not-ready-offer" => self.app.screen = Screen::FixOffer,
+            // HUB_TOUR_JOIN=<address:port> of a hub started for the tour.
+            "18-join-a-hub" => {
+                self.app.screen = Screen::Home;
+                self.open_join();
+                if let Some(f) = self.join.as_mut() {
+                    f.name = "Tango Lima".into();
+                    f.address = std::env::var("HUB_TOUR_JOIN").unwrap_or_default();
+                }
+            }
+            "19-member-chat" => {
+                if let Some(addr) = std::env::var("HUB_TOUR_JOIN").ok().and_then(|a| a.parse::<std::net::SocketAddr>().ok()) {
+                    let port = addr.port();
+                    tour_op(port, "/net/topic", "text=Daily%20briefing%2006%3A00.%20Water%20point%20moved%20to%20gate%20B.");
+                    tour_op(port, "/net/say", "to=%23main&text=Good%20morning%20all.%20Briefing%20in%20the%20topic%20above.&token=t1");
+                    self.start_member(&self.ctx_for_tour(), addr, "Base camp hub".into());
+                }
+            }
+            "20-member-comms-check" => {
+                if let Some(addr) = std::env::var("HUB_TOUR_JOIN").ok().and_then(|a| a.parse::<std::net::SocketAddr>().ok()) {
+                    tour_op(addr.port(), "/net/check", "");
+                }
+            }
+            "21-member-private" => {
+                if let (Some(addr), Some(m)) = (std::env::var("HUB_TOUR_JOIN").ok().and_then(|a| a.parse::<std::net::SocketAddr>().ok()), self.member.clone()) {
+                    let key = m.snapshot().my_key;
+                    tour_op(addr.port(), "/net/say", &format!("to=%40{}&text=Welcome%20Tango%20Lima.%20Report%20to%20the%20medical%20tent%20at%2009%3A00.&token=t2", crate::page::urlencode(&key)));
+                    self.member_private = true;
+                }
+            }
             _ => {}
         }
+    }
+}
+
+/// The person in charge of the tour's hub, from this machine's own address.
+fn tour_op(port: u16, path: &str, body: &str) {
+    use std::io::{Read as _, Write as _};
+    if let Ok(mut s) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+        let _ = write!(
+            s,
+            "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let mut sink = Vec::new();
+        let _ = s.read_to_end(&mut sink);
     }
 }
 
@@ -2233,4 +2345,396 @@ fn save_bmp(path: &Path, img: &egui::ColorImage) -> std::io::Result<()> {
         out.extend_from_slice(&[p.b(), p.g(), p.r(), 255]);
     }
     std::fs::write(path, out)
+}
+
+// ---------------------------------------------------------------- joining another hub's chat
+
+/// The join screen's form.
+struct JoinForm {
+    name: String,
+    address: String,
+}
+
+/// Which port a hub answers on: the packaged one on 80, an unpackaged one on
+/// the program's own port. Tried in that order, briefly.
+fn hub_addr(ip: std::net::Ipv4Addr, typed_port: Option<u16>) -> std::net::SocketAddr {
+    let ports: Vec<u16> = match typed_port {
+        Some(p) => vec![p],
+        None => vec![80, port()],
+    };
+    for p in &ports {
+        let a = std::net::SocketAddr::from((ip, *p));
+        if std::net::TcpStream::connect_timeout(&a, std::time::Duration::from_millis(700)).is_ok() {
+            return a;
+        }
+    }
+    std::net::SocketAddr::from((ip, ports[0]))
+}
+
+impl Gui {
+    fn open_join(&mut self) {
+        self.app.start_looking();
+        self.join = Some(JoinForm { name: super::member::remembered_name(), address: String::new() });
+    }
+
+    fn start_member(&mut self, ctx: &egui::Context, addr: std::net::SocketAddr, hub: String) {
+        let Some(f) = &self.join else { return };
+        if f.name.trim().is_empty() {
+            return;
+        }
+        let c = ctx.clone();
+        self.member = Some(std::sync::Arc::new(super::member::Member::join(addr, &hub, &f.name, move || c.request_repaint())));
+        self.join = None;
+        self.member_files = false;
+        self.member_private = false;
+        self.member_line = 0;
+    }
+
+    fn join_screen(&mut self, ctx: &egui::Context) {
+        let mut go: Option<(std::net::SocketAddr, String)> = None;
+        let mut back = false;
+        egui::CentralPanel::default().show(ctx, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                heading(ui, "Join the chat on a hub nearby");
+                ui.label("For a pupil with a laptop, or a team member who has just arrived: join the hub's wifi first, then choose the hub here. You will see the whole conversation so far, including the morning briefing.");
+                ui.add_space(10.0);
+                let Some(f) = self.join.as_mut() else { return };
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Your name").strong());
+                    ui.add(egui::TextEdit::singleline(&mut f.name).hint_text("the name people know you by").desired_width(260.0));
+                });
+                if f.name.trim().is_empty() {
+                    ui.label(RichText::new("Type your name first.").color(AMBER));
+                }
+                ui.add_space(12.0);
+                let found = self.app.found.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                match &found {
+                    None => {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label("Looking for hubs on this network...");
+                        });
+                    }
+                    Some(list) if list.is_empty() => {
+                        card(ui, CALL_BG, AMBER, |ui| {
+                            ui.set_width(ui.available_width().min(760.0));
+                            ui.label(RichText::new("No hub found on this network.").strong());
+                            ui.label("Join the hub's wifi from this computer's wifi list first (the name and password are written on the board, or ask the person in charge), then press Look again.");
+                        });
+                    }
+                    Some(list) => {
+                        ui.label(RichText::new("Hubs found:").strong());
+                        for (ip, n, who) in list {
+                            card(ui, Color32::WHITE, GREEN, |ui| {
+                                ui.set_width(ui.available_width().min(760.0));
+                                ui.horizontal(|ui| {
+                                    let name = if who.is_empty() { ip.to_string() } else { who.clone() };
+                                    ui.label(RichText::new(name.clone()).size(20.0).strong());
+                                    ui.label(RichText::new(format!("{ip}   {} files", count(*n))).weak());
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        if big(ui, "Join", GREEN).clicked() && !f.name.trim().is_empty() {
+                                            go = Some((hub_addr(*ip, None), name));
+                                        }
+                                    });
+                                });
+                            });
+                            ui.add_space(6.0);
+                        }
+                    }
+                }
+                ui.add_space(6.0);
+                if plain(ui, "Look again").clicked() {
+                    self.app.start_looking();
+                }
+                ui.add_space(14.0);
+                let Some(f) = self.join.as_mut() else { return };
+                ui.label(RichText::new("Or type the hub's address, as the person in charge gives it:").strong());
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut f.address).hint_text("for example 192.168.137.1").desired_width(260.0));
+                    if big(ui, "Join", GREEN).clicked() && !f.name.trim().is_empty() {
+                        let t = f.address.trim().trim_start_matches("http://").trim_end_matches('/').to_string();
+                        let (host, p) = match t.split_once(':') {
+                            Some((h, p)) => (h.to_string(), p.parse().ok()),
+                            None => (t.clone(), None),
+                        };
+                        match host.parse::<std::net::Ipv4Addr>() {
+                            Ok(ip) => go = Some((hub_addr(ip, p), t.clone())),
+                            Err(_) => {
+                                self.app.note(&format!("{t} is not an address.\n\nAn address looks like 192.168.137.1"));
+                                self.app.back = Screen::Home;
+                            }
+                        }
+                    }
+                });
+                ui.add_space(14.0);
+                if plain(ui, "Back to the start").clicked() {
+                    back = true;
+                }
+            });
+        });
+        if let Some((a, hub)) = go {
+            self.start_member(ctx, a, hub);
+        }
+        if back {
+            self.join = None;
+        }
+    }
+
+    fn member_chat(&mut self, ctx: &egui::Context) {
+        let Some(m) = self.member.clone() else { return };
+        let s = m.snapshot();
+        let (hub, addr) = (m.hub.clone(), m.addr);
+        if let Some(r) = m.take_ring() {
+            let urgent = r == "comms check";
+            beep(urgent);
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(if urgent {
+                egui::UserAttentionType::Critical
+            } else {
+                egui::UserAttentionType::Informational
+            }));
+        }
+        let op = if s.op_nick.is_empty() { "the person in charge".to_string() } else { s.op_nick.clone() };
+        let mut leave = false;
+
+        // The connection, where it cannot be missed when it is not right.
+        match &s.link {
+            super::member::Link::Online => {}
+            other => {
+                let (text, fill) = match other {
+                    super::member::Link::Connecting => ("Connecting to the hub...".to_string(), AMBER),
+                    super::member::Link::Paused => ("The person in charge has paused this computer. Speak to them; the chat comes back by itself when they let you back in.".to_string(), RED),
+                    super::member::Link::Lost(n) => (format!("Connection to the hub lost. Trying again ({n})... Check that this computer is still on the hub's wifi."), AMBER),
+                    super::member::Link::Online => (String::new(), GREEN),
+                };
+                egui::TopBottomPanel::top("link").frame(egui::Frame::new().fill(fill).inner_margin(egui::Margin::same(10))).show(ctx, |ui| {
+                    ui.label(RichText::new(text).strong().color(Color32::WHITE));
+                });
+            }
+        }
+
+        egui::SidePanel::left("m_side").resizable(false).exact_width(250.0).show(ctx, |ui| {
+            ui.add_space(6.0);
+            card(ui, Color32::WHITE, GREEN, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(RichText::new("YOU ARE IN THE CHAT OF").small().strong().color(GREEN));
+                ui.label(RichText::new(hub.clone()).size(18.0).strong());
+                ui.label(RichText::new(format!("as {}", if s.my_nick.is_empty() { m.name.clone() } else { s.my_nick.clone() })).weak());
+            });
+            ui.add_space(8.0);
+            ui.label(RichText::new("ROOMS").small().weak());
+            let _ = ui.add(egui::Button::new(RichText::new("# main").strong().color(Color32::WHITE)).fill(GREEN).min_size(Vec2::new(ui.available_width(), 36.0)));
+            ui.add_space(6.0);
+            ui.label(RichText::new("PRIVATE").small().weak());
+            let label = if s.unread > 0 { format!("{op}  ({})", s.unread) } else { op.clone() };
+            if ui.add(egui::Button::new(RichText::new(label).strong()).min_size(Vec2::new(ui.available_width(), 34.0))).clicked() {
+                self.member_private = true;
+                m.seen_private();
+            }
+            ui.add_space(10.0);
+            if plain(ui, "\u{1f4c2}  The hub's files").clicked() {
+                self.member_files = true;
+                self.app.open_server(
+                    match addr.ip() {
+                        std::net::IpAddr::V4(v4) => v4,
+                        _ => std::net::Ipv4Addr::LOCALHOST,
+                    },
+                    addr.port(),
+                );
+            }
+            ui.add_space(10.0);
+            if ui.add(egui::Button::new(RichText::new("\u{270b} HELP").size(20.0).strong().color(Color32::WHITE)).fill(RED).min_size(Vec2::new(ui.available_width(), 46.0)))
+                .on_hover_text("Tells the person in charge, privately, that you need help. Nobody else sees it.")
+                .clicked()
+            {
+                m.help();
+                self.member_private = true;
+                self.member_note = Some("Sent. Only the person in charge sees it; they will find a moment to talk to you.".into());
+            }
+            ui.add_space(16.0);
+            if plain(ui, "Leave the chat").clicked() {
+                leave = true;
+            }
+        });
+
+        egui::SidePanel::right("m_people").resizable(false).exact_width(230.0).show(ctx, |ui| {
+            let online: Vec<&super::member::Person> = s.people.iter().filter(|p| p.online && !p.op).collect();
+            ui.add_space(6.0);
+            if let Some((_, at, _)) = &s.check {
+                let got = online.iter().filter(|p| !p.answered.is_empty()).count();
+                ui.label(RichText::new(format!("{got} of {} answered", online.len())).size(20.0).strong());
+                ui.label(RichText::new(format!("Comms check at {at}")).small().weak());
+            } else {
+                ui.label(RichText::new(format!("{} here now", online.len())).size(20.0).strong());
+            }
+            ui.separator();
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for p in &s.people {
+                    ui.horizontal(|ui| {
+                        let dot = if p.op || !p.answered.is_empty() || (p.online && s.check.is_none()) {
+                            GREEN_OK
+                        } else if !p.online {
+                            Color32::GRAY
+                        } else {
+                            AMBER
+                        };
+                        ui.label(RichText::new("\u{25cf}").color(dot));
+                        let me = p.key == s.my_key;
+                        ui.label(
+                            RichText::new(format!("{}{}{}", if p.op { "@" } else { "" }, p.nick, if me { "  (you)" } else { "" }))
+                                .strong()
+                                .color(if p.online { nick_colour(&p.nick) } else { Color32::GRAY }),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let st = if p.op { "in charge".to_string() } else if !p.answered.is_empty() { format!("\u{2714} {}", p.answered) } else if !p.online { "gone".into() } else { String::new() };
+                            ui.label(RichText::new(st).small());
+                        });
+                    });
+                }
+            });
+        });
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("# main").size(20.0).strong().monospace());
+                ui.label(RichText::new(if s.topic.is_empty() { String::new() } else { s.topic.clone() }).strong().color(GREEN));
+            });
+            if let Some((_, _, false)) = &s.check {
+                card(ui, CALL_BG, AMBER, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!("{op} is checking who can hear. Answer:")).size(18.0).strong());
+                        if big(ui, "\u{2714} I READ YOU", GREEN_OK).clicked() {
+                            if let Some(m) = &self.member {
+                                m.answer();
+                            }
+                        }
+                    });
+                });
+            }
+            if s.quiet || s.muted {
+                ui.label(
+                    RichText::new(if s.muted {
+                        "The person in charge muted you in # main. HELP and your private chat still work."
+                    } else {
+                        "The room is quiet: only the person in charge is writing. HELP and your private chat still work."
+                    })
+                    .color(AMBER),
+                );
+            }
+            if let Some(t) = &s.trouble {
+                ui.label(RichText::new(t).color(RED).strong());
+            }
+            ui.separator();
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .stick_to_bottom(true)
+                .max_height(ui.available_height() - 56.0)
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    if s.lines.is_empty() {
+                        ui.label(RichText::new("Nothing said yet.").weak());
+                    }
+                    for l in &s.lines {
+                        let kind = match l.kind.as_str() {
+                            "call" => crate::room::LineKind::Call,
+                            "ans" => crate::room::LineKind::Answer,
+                            "ev" => crate::room::LineKind::Event,
+                            _ => crate::room::LineKind::Text,
+                        };
+                        line_row(ui, &l.at, &l.who, l.key == "op", kind, &l.text, l.key == s.my_key, false);
+                    }
+                    let newest = s.lines.last().map(|l| l.id).unwrap_or(0);
+                    if newest != self.member_line {
+                        self.member_line = newest;
+                        ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
+                    }
+                });
+            ui.separator();
+            let blocked = s.quiet || s.muted;
+            ui.horizontal(|ui| {
+                let r = ui.add_enabled(
+                    !blocked,
+                    egui::TextEdit::singleline(&mut self.member_draft).hint_text("Write to everybody").desired_width(ui.available_width() - 120.0),
+                );
+                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let send = ui.add_enabled(
+                    !blocked,
+                    egui::Button::new(RichText::new("SEND").size(18.0).strong().color(Color32::WHITE)).fill(GREEN).min_size(Vec2::new(100.0, 40.0)),
+                );
+                if (send.clicked() || enter) && !self.member_draft.trim().is_empty() {
+                    if let Some(m) = &self.member {
+                        m.say_to_room(self.member_draft.trim());
+                    }
+                    self.member_draft.clear();
+                    r.request_focus();
+                }
+            });
+        });
+
+        // The private chat with the person in charge, as a window.
+        if self.member_private {
+            let mut open = true;
+            egui::Window::new(RichText::new(format!("{op}  (private)")).size(17.0).strong())
+                .id(egui::Id::new("member_private"))
+                .open(&mut open)
+                .collapsible(true)
+                .resizable(true)
+                .default_size([360.0, 400.0])
+                .default_pos([ctx.screen_rect().right() - 620.0, ctx.screen_rect().top() + 110.0])
+                .show(ctx, |ui| {
+                    ui.label(RichText::new("Only you and the person in charge see this.").small().weak());
+                    if let Some(n) = &self.member_note {
+                        ui.label(RichText::new(n).color(GREEN_OK).strong());
+                    }
+                    ui.separator();
+                    egui::ScrollArea::vertical()
+                        .id_salt("member_thread")
+                        .auto_shrink([false, false])
+                        .stick_to_bottom(true)
+                        .max_height(ui.available_height() - 50.0)
+                        .show(ui, |ui| {
+                            for msg in &s.thread {
+                                let who = if msg.mine { s.my_nick.clone() } else { op.clone() };
+                                let text = if msg.help { "\u{270b} HELP".to_string() } else { msg.text.clone() };
+                                line_row(ui, &msg.at, &who, !msg.mine, crate::room::LineKind::Text, &text, msg.mine, true);
+                            }
+                            if s.thread.is_empty() {
+                                ui.label(RichText::new("Write to the person in charge here.").weak());
+                            }
+                        });
+                    ui.horizontal(|ui| {
+                        let r = ui.add(egui::TextEdit::singleline(&mut self.member_private_draft).hint_text(format!("Write to {op}")).desired_width(ui.available_width() - 90.0));
+                        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        if ui.add(egui::Button::new(RichText::new("SEND").strong().color(Color32::WHITE)).fill(GREEN)).clicked() || enter {
+                            if let Some(m) = &self.member {
+                                if !self.member_private_draft.trim().is_empty() {
+                                    m.say_to_charge(self.member_private_draft.trim());
+                                }
+                            }
+                            self.member_private_draft.clear();
+                            r.request_focus();
+                        }
+                    });
+                });
+            if let Some(m) = &self.member {
+                m.seen_private();
+            }
+            if !open {
+                self.member_private = false;
+                self.member_note = None;
+            }
+        }
+
+        if leave {
+            self.member = None;
+            self.member_private = false;
+            self.member_note = None;
+        }
+    }
+}
+
+impl Gui {
+    fn ctx_for_tour(&self) -> egui::Context {
+        self.tour_ctx.clone().unwrap_or_default()
+    }
 }
