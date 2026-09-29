@@ -2,6 +2,11 @@
 # Version: 1.0.0 · updated 26-09-06-20-10
 """Build the Windows icon from the one master image.
 
+SUPERSEDED 2026-09-29: packaging/icon/hub.ico is now the teal Gorilla desktop
+icon (Documents\\Gorilla-Icons\\icons\\gorilla-teal-crisp.ico, chosen by the owner),
+so the program matches its desktop shortcut. Running this script puts the old
+mascot icon back; do that only on purpose.
+
 WHY THIS EXISTS. The program shipped with no icon at all, so Windows drew the
 generic blank-document placeholder on the desktop and in the taskbar. On a
 machine where somebody has been told "double-click the Gorilla icon", a blank
