@@ -326,7 +326,8 @@ impl Gui {
                 | Screen::Messages
                 | Screen::Thread { .. }
                 | Screen::Tick { pre: false }
-        ) || matches!(&self.app.screen, Screen::Note(_)) && self.app.started.is_some()
+        ) || matches!(self.app.screen, Screen::Pick) && self.app.picking_add
+            || matches!(&self.app.screen, Screen::Note(_)) && self.app.started.is_some()
     }
 
     /// New private messages and HELP: a card, a sound, and the taskbar button
@@ -936,14 +937,24 @@ impl Gui {
 impl Gui {
     fn pick(&mut self, ctx: &egui::Context) {
         let receive = self.app.picking_receive;
+        let adding = self.app.picking_add;
         egui::TopBottomPanel::top("pick_top").show(ctx, |ui| {
             ui.add_space(6.0);
             heading(
                 ui,
-                if receive { "Choose where work from the class goes" } else { "Choose what to hand out" },
+                if receive {
+                    "Choose where work from the class goes"
+                } else if adding {
+                    "Choose files to send to the team"
+                } else {
+                    "Choose what to hand out"
+                },
             );
             ui.label(if receive {
                 "Open the folder you want, then press USE THIS FOLDER."
+            } else if adding {
+                "Tick files or whole folders, from this computer, a USB stick or a portable drive (they are under Places). \
+                 They are copied into the team's folder and appear on every device at once."
             } else {
                 "Open the folder with the lesson in it and press the green button to hand all of it out. \
                  Or tick only the files and folders you want."
@@ -983,6 +994,17 @@ impl Gui {
                     }
                 }
             });
+            if !receive {
+                // Only the files of one kind, to find the day's documents in
+                // a full drive faster. Folders always show, and a ticked
+                // folder still means everything inside it.
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("Show:").weak());
+                    for (i, (what, _)) in super::PICK_KINDS.iter().enumerate() {
+                        ui.selectable_value(&mut self.app.pick_kind, i, *what);
+                    }
+                });
+            }
             ui.add_space(4.0);
         });
         egui::TopBottomPanel::bottom("pick_bottom").show(ctx, |ui| {
@@ -991,12 +1013,16 @@ impl Gui {
                 let n = self.app.picked.len();
                 let label = if receive {
                     "USE THIS FOLDER".to_string()
+                } else if adding && n == 0 {
+                    "Tick something first".to_string()
+                } else if adding {
+                    format!("SEND THE {n} TICKED TO THE TEAM")
                 } else if n == 0 {
                     "HAND OUT EVERYTHING IN THIS FOLDER".to_string()
                 } else {
                     format!("HAND OUT THE {n} TICKED")
                 };
-                if big(ui, &label, GREEN).clicked() {
+                if ui.add_enabled(!(adding && n == 0), egui::Button::new(RichText::new(&label).size(20.0).strong().color(Color32::WHITE)).fill(GREEN).min_size(Vec2::new(200.0, 46.0))).clicked() {
                     self.app.row = 0;
                     self.app.pick_key(Key::Enter);
                 }
@@ -1021,9 +1047,13 @@ impl Gui {
                 return;
             }
             let kids = self.app.pick_kids.clone();
-            let files = if receive { Vec::new() } else { self.app.pick_files.clone() };
+            let kind = self.app.pick_kind;
+            let hidden_by_kind = if receive { 0 } else { self.app.pick_files.iter().filter(|(n, _)| !super::pick_kind_matches(kind, n)).count() };
+            let files: Vec<(String, u64)> = if receive { Vec::new() } else { self.app.pick_files.iter().filter(|(n, _)| super::pick_kind_matches(kind, n)).cloned().collect() };
             if kids.is_empty() && files.is_empty() {
-                ui.label(RichText::new("This folder is empty.").weak());
+                ui.label(RichText::new(if hidden_by_kind > 0 { format!("Nothing of that kind here ({hidden_by_kind} other files). Choose Everything to see them all.") } else { "This folder is empty.".to_string() }).weak());
+            } else if hidden_by_kind > 0 {
+                ui.label(RichText::new(format!("{hidden_by_kind} files of other kinds are not shown.")).small().weak());
             }
             let dir = self.app.pick_dir.clone();
             let mut go: Option<PathBuf> = None;
@@ -1077,11 +1107,13 @@ fn places() -> Vec<(String, PathBuf)> {
         out.push(("Home".to_string(), home));
     }
     if cfg!(windows) {
-        // Drives, including the USB stick a lesson usually lives on.
+        // Drives, including the USB stick a lesson usually lives on, each
+        // named by what it is, so a person looking for "the stick" finds it.
         for l in b'C'..=b'Z' {
             let p = PathBuf::from(format!("{}:\\", l as char));
             if p.is_dir() {
-                out.push((format!("{}:", l as char), p));
+                let kind = super::drive_kind(l as char);
+                out.push((if kind.is_empty() { format!("{}:", l as char) } else { format!("{}: ({kind})", l as char) }, p));
             }
         }
     } else {
@@ -1216,9 +1248,21 @@ impl Gui {
         ui.label(if pre {
             "Everything ticked is what the class will see. Untick anything that should stay private."
         } else {
-            "Tick a file and it appears on the phones at once; untick it and it goes. A file put in the folder \
-             during the lesson appears here unticked."
+            "Tick a file and it appears on every device at once; untick it and it goes. A file put in the folder \
+             during the net appears here unticked."
         });
+        if !pre {
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                if big(ui, "\u{1f4ce} Add files...", GREEN).on_hover_text("From this computer, a USB stick or a portable drive. Copied into the team's folder and sent at once.").clicked() {
+                    self.app.add_files(false);
+                }
+                if plain(ui, "Open the team's folder").clicked() {
+                    open_with_system(Path::new(&shellexpand(&self.app.folder)));
+                }
+                ui.label(RichText::new(format!("The team's folder: {}", self.app.folder)).small().weak());
+            });
+        }
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
             if !self.app.tick_dir.is_empty() && plain(ui, "\u{2b06} Up one folder").clicked() {
@@ -1258,6 +1302,13 @@ impl Gui {
             ui.label(RichText::new(self.app.tick_said.clone()).color(GREEN_OK));
         }
         ui.add_space(4.0);
+        if !pre && self.app.tick.is_empty() {
+            card(ui, BRIEF_BG, GREEN, |ui| {
+                ui.set_width(ui.available_width().min(760.0));
+                ui.label(RichText::new("Nothing for the team yet.").size(18.0).strong());
+                ui.label("Press Add files to choose maps, forms, the day's briefing documents or lessons from this computer, a USB stick or a portable drive. They are copied into the team's folder and appear on every phone and laptop at once, and the channel is told.");
+            });
+        }
         let entries = self.app.tick_entries();
         let fixed = self.app.tick_fixed();
         let mut act: Option<(usize, Key)> = None;
@@ -1681,6 +1732,13 @@ impl Gui {
                 if big(ui, &label, GREEN).on_hover_text("Every phone gets a big I READ YOU button. The list on the right counts the answers.").clicked() {
                     let l = crate::room::start_check();
                     note_record(&self.app, &format!("@{op}  {}", l.text));
+                }
+                if ui
+                    .add(egui::Button::new(RichText::new("\u{1f4ce} Send files to the team").strong()).min_size(Vec2::new(170.0, 48.0)))
+                    .on_hover_text("Maps, forms, the day's briefing documents: from this computer, a USB stick or a portable drive. Everybody on the net gets them at once, and the channel is told.")
+                    .clicked()
+                {
+                    self.app.add_files(true);
                 }
                 let quiet = room.quiet;
                 if ui

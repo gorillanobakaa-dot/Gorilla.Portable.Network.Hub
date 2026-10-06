@@ -61,7 +61,7 @@ wifi switched off there is nothing to broadcast from.
 
 1. Go to the
    [releases page](https://github.com/gorillanobakaa-dot/Gorilla.Portable.Network.Hub/releases)
-   and download `hub-0.10.0-windows-x86_64.zip`.
+   and download `hub-0.11.0-windows-x86_64.zip`.
 2. Right-click the zip and choose **Extract All**. Put it anywhere: a USB drive
    is fine.
 3. Open the folder it made and double-click **hub.exe**.
@@ -69,9 +69,9 @@ wifi switched off there is nothing to broadcast from.
    any program without a paid signing certificate. Choose **More info**, then
    **Run anyway**, or do not run it. Both are reasonable.
 
-The first screen appears. The top line says `Gorilla Portable Network Hub 0.10.0`
+The first screen appears. The top line says `Gorilla Portable Network Hub 0.11.0`
 and the date the program was built. (In a terminal, `hub --version` prints
-`hub 0.10.0` and the same date.)
+`hub 0.11.0` and the same date.)
 
 [![The first screen: four choices; under them, what the highlighted one does ("Makes a wifi network from this laptop. Phones and laptops join it, get the files you choose, and can send work back. No internet needed."), and "This computer is ready"](screenshots/gallery/windows-0.10.0-first-screen.png)](screenshots/gallery/windows-0.10.0-first-screen.png)
 

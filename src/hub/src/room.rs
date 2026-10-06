@@ -367,6 +367,19 @@ pub fn set_topic(text: &str) {
     pulse(None);
 }
 
+/// Something the operator did that everybody should see as an event line:
+/// files sent to the team, for one.
+pub fn announce(text: &str) {
+    let text: String = text.trim().chars().take(TEXT_CAP).collect();
+    if text.is_empty() {
+        return;
+    }
+    with(|r| {
+        push(r, "", "", LineKind::Event, &text);
+    });
+    pulse(None);
+}
+
 /// Somebody pressed I HAVE READ IT under the briefing. Said once in the
 /// room per person per briefing, so the operator sees it land. Returns the
 /// nick when it counted.

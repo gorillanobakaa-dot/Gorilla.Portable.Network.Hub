@@ -161,6 +161,12 @@ fn tidy_empty_handin() {
 /// The folder most recently served, so the session can tidy after itself.
 static LAST_ROOT: Mutex<Option<PathBuf>> = Mutex::new(None);
 
+/// Files were just put in the folder being served: the next listing must
+/// read the disk, not the three-second cache.
+pub fn forget_listing() {
+    *FILE_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
 pub fn forget_session() {
     tidy_empty_handin();
     // What may be seen. The one that caused the trouble.
@@ -2031,7 +2037,7 @@ fn form_field(body: &str, name: &str) -> String {
 
 /// One line in a file beside the received work, the way messages.txt and
 /// sign-ins.txt have always been written.
-fn note_line(root: &Path, file: &str, line: &str) {
+pub(crate) fn note_line(root: &Path, file: &str, line: &str) {
     let dir = crate::page::handed_in_dir(root);
     if fs::create_dir_all(&dir).is_ok() {
         if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(dir.join(file)) {

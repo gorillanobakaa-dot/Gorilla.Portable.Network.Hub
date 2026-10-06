@@ -267,6 +267,13 @@ struct App {
     receive_dir: PathBuf,
     /// The picker is choosing where received work goes, not what to send.
     picking_receive: bool,
+    /// The picker opened mid-lesson to ADD files to what is handed out:
+    /// what is ticked is copied into the folder being served and ticked.
+    picking_add: bool,
+    /// ...from the main channel (back there after), not the Files tab.
+    add_from_chat: bool,
+    /// The picker's file-type filter: an index into PICK_KINDS.
+    pick_kind: usize,
     /// The short way in (the owner, 2026-09-24: "way too many hoops"): Hand
     /// out files opens the picker, and choosing a folder starts the hotspot
     /// with everything in it handed out. The settings are one key away (s)
@@ -410,6 +417,74 @@ fn relative_to(root: &Path, full: &Path) -> Option<String> {
     }
 }
 
+/// Copy `from` to `to`, or to `name (2)` and so on when a DIFFERENT file of
+/// that name is already there. The same file (same size) is simply kept.
+/// Returns the name it ended up under, relative to `to`'s folder.
+fn copy_in(from: &Path, to: &Path) -> std::io::Result<String> {
+    let size = from.metadata()?.len();
+    let stem = to.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let ext = to.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+    let dir = to.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    let mut target = to.to_path_buf();
+    let mut n = 1;
+    loop {
+        match target.metadata() {
+            Ok(m) if m.len() == size => break,
+            Ok(_) => {
+                n += 1;
+                target = dir.join(format!("{stem} ({n}){ext}"));
+            }
+            Err(_) => {
+                std::fs::copy(from, &target)?;
+                break;
+            }
+        }
+    }
+    Ok(target.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default())
+}
+
+/// The picker's file-type filter: (what the button says, extensions).
+pub(crate) const PICK_KINDS: &[(&str, &[&str])] = &[
+    ("Everything", &[]),
+    ("Documents", &["pdf", "doc", "docx", "odt", "rtf", "txt", "md", "epub", "ppt", "pptx", "odp"]),
+    ("Pictures", &["jpg", "jpeg", "png", "gif", "bmp", "webp", "heic", "svg", "tif", "tiff"]),
+    ("Videos", &["mp4", "mkv", "avi", "mov", "webm", "m4v", "3gp"]),
+    ("Sound", &["mp3", "m4a", "wav", "ogg", "flac", "aac", "opus"]),
+    ("Spreadsheets", &["xls", "xlsx", "ods", "csv"]),
+];
+
+/// Is this file of the kind the picker is set to show?
+pub(crate) fn pick_kind_matches(kind: usize, name: &str) -> bool {
+    let exts = PICK_KINDS.get(kind).map(|k| k.1).unwrap_or(&[]);
+    if exts.is_empty() {
+        return true;
+    }
+    let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    exts.contains(&ext.as_str())
+}
+
+/// What kind of drive a letter is, for the picker's Places row.
+#[cfg(windows)]
+pub(crate) fn drive_kind(letter: char) -> &'static str {
+    extern "system" {
+        fn GetDriveTypeW(root: *const u16) -> u32;
+    }
+    let root: Vec<u16> = format!("{letter}:\\").encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: a NUL-terminated UTF-16 string that outlives the call.
+    match unsafe { GetDriveTypeW(root.as_ptr()) } {
+        2 => "USB stick or card",
+        3 => "hard drive",
+        4 => "network drive",
+        5 => "CD or DVD",
+        _ => "",
+    }
+}
+
+#[cfg(not(windows))]
+pub(crate) fn drive_kind(_letter: char) -> &'static str {
+    ""
+}
+
 fn starting_folder() -> PathBuf {
     let here = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let launched_from_install = std::env::current_exe()
@@ -485,6 +560,9 @@ impl App {
             tick: Vec::new(),
             receive_dir: crate::page::default_receive_dir(),
             picking_receive: false,
+            picking_add: false,
+            add_from_chat: false,
+            pick_kind: 0,
             quick: false,
             net: false,
             net_folder: false,
@@ -3122,6 +3200,12 @@ impl App {
                     }
                 }
             }
+            Key::Esc if self.picking_add => {
+                self.picking_add = false;
+                self.picked.clear();
+                self.screen = if self.add_from_chat { Screen::Sending } else { Screen::Tick { pre: false } };
+                self.row = 0;
+            }
             Key::Esc => {
                 // The short way in came from the first screen, so back is there.
                 self.screen = if self.quick && !self.picking_receive { Screen::Home } else { self.form_screen() };
@@ -3149,6 +3233,10 @@ impl App {
     /// down and the root rises to cover both. Nothing ticked means the folder
     /// being looked at, whole.
     fn finish_picking(&mut self) {
+        if self.picking_add {
+            self.finish_adding();
+            return;
+        }
         if self.picked.is_empty() {
             self.folder = self.pick_dir.to_string_lossy().into_owned();
             self.picked.clear();
@@ -3200,6 +3288,93 @@ impl App {
     /// The short way in: what was chosen is handed out at once, all of it,
     /// with no tick screen and no settings screen in between. f still changes
     /// what is handed out while the class runs.
+    /// Mid-lesson: choose files anywhere (this disk, a USB stick, a portable
+    /// drive) to send to the team. The owner, 2026-10-06: the Files tab of a
+    /// net opened without a folder was an empty list with no way to put
+    /// anything in it, and there was no way to send the day's briefing
+    /// documents from the main channel.
+    fn add_files(&mut self, from_chat: bool) {
+        self.picking_add = true;
+        self.add_from_chat = from_chat;
+        self.picking_receive = false;
+        self.picked.clear();
+        let start = if self.pick_dir.is_dir() { self.pick_dir.clone() } else { starting_folder() };
+        self.pick_at(start);
+        self.screen = Screen::Pick;
+    }
+
+    /// What was ticked is COPIED into the folder being served, then ticked
+    /// there, then said in the channel. Copied, not served in place: a file
+    /// on a USB stick must stay available after the stick is pulled, and
+    /// files from two drives have no common folder to serve from.
+    fn finish_adding(&mut self) {
+        self.picking_add = false;
+        let back = if self.add_from_chat { Screen::Sending } else { Screen::Tick { pre: false } };
+        let root = PathBuf::from(shellexpand(&self.folder));
+        let picked = std::mem::take(&mut self.picked);
+        let mut added: Vec<String> = Vec::new();
+        let mut failed: Vec<String> = Vec::new();
+        for p in &picked {
+            let Some(name) = p.file_name().map(|n| n.to_string_lossy().to_string()) else { continue };
+            if p.is_dir() {
+                for (rel, _) in serve::all_files(p) {
+                    let from = p.join(&rel);
+                    let to = root.join(&name).join(&rel);
+                    if let Some(parent) = to.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    match copy_in(&from, &to) {
+                        // The tick list names files folder/sub/name with
+                        // slashes, as all_files does; the last part may have
+                        // been renamed by copy_in.
+                        Ok(dest) => {
+                            let rel_dir = rel.rsplit_once('/').map(|(d, _)| format!("{d}/")).unwrap_or_default();
+                            added.push(format!("{name}/{rel_dir}{dest}"));
+                        }
+                        Err(e) => failed.push(format!("{}: {e}", from.display())),
+                    }
+                }
+            } else {
+                match copy_in(p, &root.join(&name)) {
+                    Ok(dest) => added.push(dest),
+                    Err(e) => failed.push(format!("{}: {e}", p.display())),
+                }
+            }
+        }
+        serve::forget_listing();
+        self.open_tick(false);
+        for t in &mut self.tick {
+            if added.iter().any(|a| *a == t.0) {
+                t.2 = true;
+            }
+        }
+        self.apply_ticks();
+        if !added.is_empty() {
+            let op = crate::room::op_nick();
+            let shown: Vec<&str> = added.iter().map(|a| a.rsplit('/').next().unwrap_or(a)).take(6).collect();
+            let more = if added.len() > 6 { format!(" and {} more", added.len() - 6) } else { String::new() };
+            let line = format!(
+                "@{op} sent {} to the team: {}{more}. Open # files to get {}.",
+                if added.len() == 1 { "a file".to_string() } else { format!("{} files", added.len()) },
+                shown.join(", "),
+                if added.len() == 1 { "it" } else { "them" }
+            );
+            crate::room::announce(&line);
+            serve::note_line(&root, "messages.txt", &line);
+            self.tick_said = format!("Sent to the team: {}{more}", shown.join(", "));
+        }
+        self.screen = back.clone();
+        self.row = 0;
+        if !failed.is_empty() {
+            self.note(&format!(
+                "{} could not be copied into the team's folder:\n\n{}",
+                if failed.len() == 1 { "One file" } else { "Some files" },
+                failed.iter().take(8).cloned().collect::<Vec<_>>().join("\n")
+            ));
+            self.back = back;
+        }
+    }
+
     /// The start screen's "Open a net": the form, with nothing to pick first.
     ///
     /// WHY. Before this (0.10.0) the only way to the wifi and the room was
@@ -4773,6 +4948,34 @@ fn shellexpand(p: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Files sent to the team are copied in, never over a different file of
+    /// the same name; the same file again is kept, not doubled.
+    #[test]
+    fn copy_in_keeps_a_different_file_of_the_same_name() {
+        let d = crate::scratchdir::scratch("copy-in");
+        let src = d.join("src");
+        let root = d.join("root");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(src.join("map.pdf"), b"version one").unwrap();
+        assert_eq!(copy_in(&src.join("map.pdf"), &root.join("map.pdf")).unwrap(), "map.pdf");
+        assert_eq!(copy_in(&src.join("map.pdf"), &root.join("map.pdf")).unwrap(), "map.pdf", "the same file again is kept");
+        std::fs::write(src.join("map.pdf"), b"version two, longer").unwrap();
+        assert_eq!(copy_in(&src.join("map.pdf"), &root.join("map.pdf")).unwrap(), "map (2).pdf");
+        assert_eq!(std::fs::read(root.join("map.pdf")).unwrap(), b"version one", "the first is untouched");
+        assert_eq!(std::fs::read(root.join("map (2).pdf")).unwrap(), b"version two, longer");
+    }
+
+    /// The picker's kinds: by extension, any case; Everything shows all.
+    #[test]
+    fn pick_kinds_match_by_extension() {
+        assert!(pick_kind_matches(0, "anything.xyz"));
+        assert!(pick_kind_matches(1, "Briefing.PDF"));
+        assert!(!pick_kind_matches(1, "photo.jpg"));
+        assert!(pick_kind_matches(2, "photo.jpg"));
+        assert!(pick_kind_matches(5, "roster.csv"));
+    }
 
     fn scaffold() -> std::path::PathBuf {
         let d = crate::scratchdir::scratch("tab");

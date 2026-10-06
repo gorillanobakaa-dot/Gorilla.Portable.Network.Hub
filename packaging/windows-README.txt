@@ -1,4 +1,4 @@
-Gorilla Portable Network Hub 0.10.0  -  Windows
+Gorilla Portable Network Hub 0.11.0  -  Windows
 
 WHAT THIS IS
 This laptop becomes the network. Phones, tablets and laptops in the room join
