@@ -2176,6 +2176,13 @@ fn serve_net(
             }
             "ok"
         }
+        // I HAVE READ IT, under the briefing. The operator wrote it.
+        "/net/readbrief" if !operator => {
+            if crate::room::read_brief(&key).is_some() {
+                note_line(root, "sign-ins.txt", &format!("{who}  read the briefing"));
+            }
+            "ok"
+        }
         "/net/read" if operator => {
             crate::chat::adult_opened(&f("k"), false);
             "ok"

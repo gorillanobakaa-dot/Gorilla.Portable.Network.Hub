@@ -90,6 +90,7 @@ Linux) and [RESULTS-WINDOWS.md](RESULTS-WINDOWS.md) (a 2022 laptop, Windows).
 | `console-read.cs` | Windows | copies a console window's text by process number, to read the hub's own log lines without redirecting it |
 | `chat-flow-test.py` | any | a child's phone and the trusted adult's phone, end to end: messages, private help, the quiet request, HIDE (13 checks) |
 | `net-chat-test.py` | Windows | the 0.11 class chat in real browsers: a teacher and three phones at once, each through its own relay so the hub sees separate devices. # main, two phones in the same second, comms check, HELP, two private windows, quiet, mute, remove, # files, Swahili, and the records (39 checks) |
+| `net-briefing-test.py` | Windows | the briefing on the real pages: the person in charge sets it, a phone gets it first with I HAVE READ IT, the list says who has read it, a changed briefing is unread again, the record has it (20 checks) |
 | `net-load-test.py` | any | many simulated phones against a running hub, each from its own loopback address. `--mode net` for the 0.11 chat (held waits, every line checked against every phone), `--mode classic` for the 0.10 page |
 | `hotspot-*.ps1` | Windows | the hotspot's guard, close, channel and restart tests, and a read-only monitor |
 | `screenshot-tour.ps1`, `console-keys.cs`, `screenshot-phone-page.py` | Windows | the release pictures, taken from the real program |

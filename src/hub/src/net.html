@@ -43,6 +43,11 @@ button:focus,input:focus{outline:3px solid #3d5a1e;outline-offset:1px}
 .menu{display:none;background:none;border:1px solid #cdd5c7;border-radius:6px;padding:6px 12px;color:#1b221c;font-size:18px}
 .chan{font-weight:700;font-size:16px}
 .topic{flex:1 1 200px;color:#5d6b5f;min-width:0}
+.brief{margin:8px 12px 0;padding:10px 12px;background:#eef4e6;border:2px solid #3d5a1e;border-radius:8px}
+.brief .bh{font-size:12px;font-weight:700;letter-spacing:.08em;color:#3d5a1e}
+.brief .bh span{font-weight:400;letter-spacing:0;color:#5d6b5f;margin-left:8px}
+.brief .bt{font-size:16px;font-weight:600;white-space:pre-wrap;margin-top:4px;overflow-wrap:anywhere}
+.brief .big{display:block;width:100%;margin-top:10px;background:#1c7a3a;color:#fff}
 .tool{border:1px solid #3d5a1e;background:none;color:#3d5a1e;border-radius:6px;padding:7px 12px;font-weight:600;margin-right:6px}
 .tool.primary,.tool.pressed{background:#3d5a1e;color:#fff}
 .logwrap{position:relative;flex:1;display:flex;min-height:0}
@@ -141,6 +146,7 @@ button:focus,input:focus{outline:3px solid #3d5a1e;outline-offset:1px}
       <span class="topic" id="topic"></span>
       <span id="tools"></span>
     </div>
+    <div class="brief" id="brief" hidden></div>
     <div class="logwrap">
       <div class="log mono-times" id="log" aria-live="polite"></div>
       <div class="files" id="files" hidden>
@@ -166,7 +172,7 @@ button:focus,input:focus{outline:3px solid #3d5a1e;outline-offset:1px}
 var B = window.BOOT || {}, T = B.T || {};
 function tr(s){ return T[s] || s; }
 var OP = !!B.op;
-var S = { v:0, line:0, me:{key:"", nick:"", op:OP}, opnick:"Teacher", topic:"", quiet:false, muted:false,
+var S = { v:0, line:0, me:{key:"", nick:"", op:OP}, opnick:"Teacher", topic:"", topicat:"", read:OP, quiet:false, muted:false,
   check:null, lines:[], people:[], convs:[], threads:{}, buf:"#main", wins:[], toasts:[], unread:{} };
 var first = true, fails = 0, sound = true, actx = null, note = null, okNote = null, sure = null;
 
@@ -226,7 +232,11 @@ function post(path, fields, done){
 // ---- what the hub said ------------------------------------------------------
 function apply(d){
   var wasFirst = first; first = false;
-  S.v = d.v; S.me = d.me; S.opnick = d.opnick; S.topic = d.topic; S.quiet = d.quiet; S.muted = d.muted;
+  // A briefing that changed under this page: a sound, and the button is back.
+  var newBrief = !wasFirst && !OP && d.topic && d.topic != S.topic;
+  S.v = d.v; S.me = d.me; S.opnick = d.opnick; S.topic = d.topic; S.topicat = d.topicat || ""; S.read = OP || !!(d.me && d.me.read);
+  S.quiet = d.quiet; S.muted = d.muted;
+  if (newBrief) beep(false);
   S.check = d.check; S.people = d.people;
   if (d.convs) {
     S.convs = d.convs;
@@ -358,14 +368,21 @@ function render(){
   // the middle
   var cur = S.buf, chan = !isPriv(cur);
   $("chan").textContent = label(cur);
-  $("topic").textContent = cur == "#main" ? S.topic : cur == "#files" ? tr("Lessons from your teacher. READ opens one here, GET IT keeps a copy on your phone.") : (OP ? tr("Only you and this person see this chat.") : tr("Only you and your teacher see this chat."));
+  var bf = $("brief");
+  if (cur == "#main" && (S.topic || OP)) {
+    bf.hidden = false;
+    bf.innerHTML = '<div class="bh">' + esc(tr("BRIEFING")) + (S.topicat ? "<span>" + esc(S.opnick + ", " + S.topicat) + "</span>" : "") + "</div>" +
+      '<div class="bt">' + (S.topic ? esc(S.topic) : '<span style="font-weight:400;color:#5d6b5f">' + esc(tr("No briefing yet. Press Set briefing.")) + "</span>") + "</div>" +
+      (!OP && S.topic && !S.read ? '<button type="button" class="big" data-act="readbrief">✔ ' + esc(tr("I HAVE READ IT")) + "</button>" : "");
+  } else { bf.hidden = true; bf.innerHTML = ""; }
+  $("topic").textContent = cur == "#main" ? "" : cur == "#files" ? tr("Lessons from your teacher. READ opens one here, GET IT keeps a copy on your phone.") : (OP ? tr("Only you and this person see this chat.") : tr("Only you and your teacher see this chat."));
   var t = "";
   if (!chan) t += '<button type="button" class="tool" data-buf="#main">&larr; # main</button>';
   if (OP && cur == "#main") {
     var left = 0; each(S.people, function(p){ if (!p.op && p.on && !p.ans) left++; });
     t += '<button type="button" class="tool primary" data-act="check">' + esc(S.check && left ? tr("CHECK AGAIN") + " (" + left + ")" : tr("COMMS CHECK")) + "</button>";
     t += '<button type="button" class="tool' + (S.quiet ? " pressed" : "") + '" data-act="quiet">' + esc(S.quiet ? tr("Open the room") : tr("Quiet the room")) + "</button>";
-    t += '<button type="button" class="tool" data-act="topic">' + esc(tr("Set topic")) + "</button>";
+    t += '<button type="button" class="tool" data-act="topic">' + esc(tr("Set briefing")) + "</button>";
   }
   $("tools").innerHTML = t;
   var log = $("log"), files = $("files");
@@ -454,12 +471,18 @@ function drawNicks(){
   var on = [], off = 0, got = 0, h = "";
   each(S.people, function(p){ if (p.op) return; if (p.on) { on.push(p); if (p.ans) got++; } else off++; });
   if (S.check) h += '<div class="count">' + got + " / " + on.length + " " + esc(tr("answered")) + "<small>" + esc(tr("Comms check at")) + " " + esc(S.check.at) + (off ? " &middot; " + off + " " + esc(tr("gone")) : "") + "</small></div>";
-  else h += '<div class="count">' + on.length + " " + esc(tr("here now")) + "</div>";
+  else {
+    var rd = 0; each(on, function(p){ if (p.read) rd++; });
+    h += '<div class="count">' + on.length + " " + esc(tr("here now")) + (S.topic ? "<small>" + rd + " / " + on.length + " " + esc(tr("read the briefing")) + "</small>" : "") + "</div>";
+  }
   function rank(p){ return p.op ? 0 : (OP && p.help) ? 1 : !p.on ? 4 : (S.check && !p.ans) ? 2 : 3; }
   var ps = S.people.slice().sort(function(x, y){ return rank(x) - rank(y) || (x.n < y.n ? -1 : x.n > y.n ? 1 : 0); });
   each(ps, function(p){
-    var dot = OP && p.help ? "help" : !p.on ? "" : (p.op || p.ans || !S.check) ? "yes" : "wait";
-    var st = p.op ? tr("in charge") : !p.on ? tr("gone") : OP && p.help ? "HELP" : OP && p.unread ? "✉ " + p.unread : p.ans ? "✔ " + p.ans : S.check ? tr("waiting") : "";
+    // Not having read the briefing outranks an answered comms check: a check
+    // never ends on its own, and who has not read the new orders matters more.
+    var unread = !p.op && p.on && S.topic && !p.read;
+    var dot = OP && p.help ? "help" : !p.on ? "" : unread ? "wait" : (p.op || p.ans || !S.check) ? "yes" : "wait";
+    var st = p.op ? tr("in charge") : !p.on ? tr("gone") : OP && p.help ? "HELP" : OP && p.unread ? "✉ " + p.unread : unread ? tr("not read yet") : p.ans ? "✔ " + p.ans : S.check ? tr("waiting") : S.topic ? tr("read it") : "";
     h += '<button type="button" class="nick' + (p.on ? "" : " off") + '" data-nick="' + esc(p.k) + '"><span class="dot ' + dot + '"></span><span class="nm mono"' + (p.on ? ' style="color:' + colour(p.n) + '"' : "") + ">" + (p.op ? "@" : "") + esc(p.n) + "</span>" +
       '<span class="st">' + (p.muted ? '<span class="tag">' + esc(tr("muted")) + "</span> " : "") + esc(st) + "</span></button>";
   });
@@ -520,6 +543,7 @@ document.addEventListener("click", function(e){
   if (act == "quiet") { post("/net/quiet", {on: S.quiet ? "0" : "1"}); return; }
   if (act == "topic") { var i = $("text"); i.value = "/topic " + S.topic; i.focus(); return; }
   if (act == "answer") { post("/net/answer", {}); if (S.check) S.check.me = true; render(); return; }
+  if (act == "readbrief") { post("/net/readbrief", {}); S.read = true; render(); return; }
   if (act == "help") {
     post("/net/help", {token:token()}, function(r){ note = r == "lost" ? tr("Not sent. The wifi may have dropped. Try again.") : null; render(); });
     S.toasts = []; note = null;

@@ -30,6 +30,8 @@ const BLUE: Color32 = Color32::from_rgb(0x28, 0x52, 0x7a);
 const CALL_BG: Color32 = Color32::from_rgb(0xff, 0xf4, 0xd6);
 const MINE_BG: Color32 = Color32::from_rgb(0xdd, 0xe9, 0xd2);
 const HELP_BG: Color32 = Color32::from_rgb(0xfd, 0xec, 0xea);
+/// Behind the briefing, wherever it is pinned.
+const BRIEF_BG: Color32 = Color32::from_rgb(0xee, 0xf4, 0xe6);
 const NICKS: [Color32; 6] = [
     Color32::from_rgb(0x2c, 0x5d, 0x9e),
     Color32::from_rgb(0x8a, 0x3b, 0x8f),
@@ -231,6 +233,8 @@ struct Gui {
     /// A second press is needed to remove a device.
     sure_remove: Option<String>,
     topic_draft: Option<String>,
+    /// The briefing being rewritten, while the editor is open.
+    brief_draft: Option<String>,
     nick_draft: String,
     notice_draft: String,
     confirm_stop: bool,
@@ -253,6 +257,9 @@ struct Gui {
     member_draft: String,
     member_private_draft: String,
     member_line: u64,
+    /// The member has been past the briefing-first screen (read it, or
+    /// there was none). A later change shows as a card, not a whole screen.
+    member_entered: bool,
     tour_ctx: Option<egui::Context>,
     /// The private chats as they were when the window first looked, so only
     /// what arrives afterwards rings.
@@ -283,6 +290,7 @@ impl Gui {
             menu_for: None,
             sure_remove: None,
             topic_draft: None,
+            brief_draft: None,
             nick_draft: String::new(),
             notice_draft: crate::page::notice(),
             confirm_stop: false,
@@ -300,6 +308,7 @@ impl Gui {
             member_draft: String::new(),
             member_private_draft: String::new(),
             member_line: 0,
+            member_entered: false,
             tour_ctx: None,
             announced_init: false,
             tour: std::env::var_os("HUB_GUI_TOUR").map(|d| Tour { dir: PathBuf::from(d), step: 0, frames: 0, asked: false }),
@@ -438,6 +447,7 @@ impl eframe::App for Gui {
         let screen = self.app.screen.clone();
         match screen {
             Screen::Home => self.home(ctx),
+            Screen::Open => self.open_net(ctx),
             Screen::Pick => self.pick(ctx),
             Screen::Send => self.send(ctx),
             Screen::Tick { pre: true } => self.tick_screen(ctx, true),
@@ -468,7 +478,7 @@ impl Gui {
                     // During a lesson the way back to the start is to stop it,
                     // so that is what is offered, never a greyed-out entry.
                     if self.lesson_running() {
-                        if ui.button(RichText::new("Stop the lesson").color(RED)).clicked() {
+                        if ui.button(RichText::new(if self.app.net { "Close the net" } else { "Stop the lesson" }).color(RED)).clicked() {
                             self.confirm_stop = true;
                             ui.close();
                         }
@@ -488,20 +498,28 @@ impl Gui {
                         ui.close();
                     }
                 });
-                ui.menu_button("Lesson", |ui| {
+                ui.menu_button("Net", |ui| {
                     if self.member.is_some() {
-                        if ui.button("Leave the chat").clicked() {
+                        if ui.button("Leave the net").clicked() {
                             self.member = None;
                             self.member_private = false;
+                            self.member_entered = false;
                             ui.close();
                         }
                         ui.separator();
-                    } else if ui.add_enabled(!busy, egui::Button::new("Join the chat on a hub nearby")).clicked() {
-                        self.open_join();
-                        ui.close();
+                    } else {
+                        if ui.add_enabled(!busy, egui::Button::new("Open a net: you are in charge")).clicked() {
+                            self.app.open_net_form();
+                            ui.close();
+                        }
+                        if ui.add_enabled(!busy, egui::Button::new("Join a net nearby")).clicked() {
+                            self.open_join();
+                            ui.close();
+                        }
+                        ui.separator();
                     }
                     for (i, what) in [
-                        "Hand out files to the class over wifi",
+                        "Hand out a folder to a class over wifi",
                         "Send files down a cable to one other computer",
                         "Get files from another computer",
                     ]
@@ -517,7 +535,7 @@ impl Gui {
                     }
                     if busy {
                         ui.separator();
-                        ui.label(RichText::new("Stop the lesson first to start something else.").small());
+                        ui.label(RichText::new(if self.app.net { "Close the net first to start something else." } else { "Stop the lesson first to start something else." }).small());
                     }
                 });
                 ui.menu_button("Computer", |ui| {
@@ -592,27 +610,28 @@ impl Gui {
         }
         if self.confirm_close {
             egui::Window::new(RichText::new("Close the hub?").size(18.0).strong()).collapsible(false).default_width(420.0).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-                ui.label("The class is still connected. Closing switches the wifi network off, and the phones lose the class page and the chat.");
+                ui.label("People are still connected. Closing switches the wifi network off, and they lose the channel and the files.");
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if big(ui, "Close and stop the lesson", RED).clicked() {
+                    if big(ui, if self.app.net { "Close the hub and the net" } else { "Close and stop the lesson" }, RED).clicked() {
                         self.close_ok = true;
                         self.confirm_close = false;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
-                    if plain(ui, "Keep teaching").clicked() {
+                    if plain(ui, if self.app.net { "Keep it open" } else { "Keep teaching" }).clicked() {
                         self.confirm_close = false;
                     }
                 });
             });
         }
         if self.confirm_stop {
-            egui::Window::new(RichText::new("Stop handing out?").size(18.0).strong()).collapsible(false).default_width(420.0).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-                ui.label("The wifi network goes off and the phones lose the class page and the chat.");
-                ui.label("Work already accepted stays in your received folder.");
+            let net = self.app.net;
+            egui::Window::new(RichText::new(if net { "Close the net?" } else { "Stop handing out?" }).size(18.0).strong()).collapsible(false).default_width(420.0).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+                ui.label(if net { "The wifi network goes off and everybody loses the channel." } else { "The wifi network goes off and the phones lose the class page and the chat." });
+                ui.label(if net { "Everything said, and everything sent to you, stays in your received folder." } else { "Work already accepted stays in your received folder." });
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if big(ui, "Stop the lesson", RED).clicked() {
+                    if big(ui, if net { "Close the net" } else { "Stop the lesson" }, RED).clicked() {
                         self.confirm_stop = false;
                         self.wins.clear();
                         self.toasts.clear();
@@ -623,7 +642,7 @@ impl Gui {
                         // about a network that is no longer there.
                         self.app.started = None;
                     }
-                    if plain(ui, "Keep teaching").clicked() {
+                    if plain(ui, if net { "Keep it open" } else { "Keep teaching" }).clicked() {
                         self.confirm_stop = false;
                     }
                 });
@@ -667,7 +686,7 @@ impl Gui {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.add_space(8.0);
                 ui.label(RichText::new("Gorilla Portable Network Hub").size(30.0).strong());
-                ui.label("Hand lessons to a class over wifi or a cable. No internet and no router needed.");
+                ui.label("One laptop becomes the network for a team, a class or a camp. No internet and no router needed.");
                 ui.add_space(12.0);
                 match self.app.services_off() {
                     Some(off) if !off.is_empty() => {
@@ -695,27 +714,54 @@ impl Gui {
                     None => {}
                 }
                 ui.add_space(14.0);
-                let join = card(ui, Color32::WHITE, GREEN_OK, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("\u{1f4ac}").size(30.0));
-                        ui.label(RichText::new("Join the chat on a hub nearby").size(21.0).strong().color(GREEN_OK));
-                    });
-                    ui.label("Just arrived? Joined the hub's wifi with a laptop? Press Join, give your name, and read the briefing and the whole conversation so far.");
-                    ui.add_space(4.0);
-                    big(ui, "Join", GREEN_OK)
+                let w = ((ui.available_width() - 20.0) / 2.0).max(300.0);
+
+                // The two ways in, side by side and the same size: you are in
+                // charge, or you are joining. Before 2026-10-06 the only way to
+                // the wifi and the room was "Hand out files", which wanted a
+                // folder first; a team leader with no files had no door.
+                let mut open_net = false;
+                let mut join = false;
+                egui::Grid::new("home_in").num_columns(2).spacing([16.0, 14.0]).show(ui, |ui| {
+                    open_net = card(ui, Color32::WHITE, GREEN, |ui| {
+                        ui.set_width(w - 30.0);
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("\u{1f4e1}").size(30.0));
+                            ui.label(RichText::new("Open a net: you are in charge").size(21.0).strong().color(GREEN));
+                        });
+                        ui.label("Makes the wifi network from this laptop and opens the main channel. Write the briefing, call a comms check, see who is on. Files can be handed out later, from inside the net.");
+                        ui.add_space(4.0);
+                        big(ui, "OPEN A NET", GREEN)
+                    })
+                    .clicked();
+                    join = card(ui, Color32::WHITE, GREEN_OK, |ui| {
+                        ui.set_width(w - 30.0);
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("\u{1f4ac}").size(30.0));
+                            ui.label(RichText::new("Join a net nearby").size(21.0).strong().color(GREEN_OK));
+                        });
+                        ui.label("Just arrived with a laptop? Join the net's wifi, press Join, give your name, and read the briefing and the whole conversation so far.");
+                        ui.add_space(4.0);
+                        big(ui, "JOIN", GREEN_OK)
+                    })
+                    .clicked();
+                    ui.end_row();
                 });
-                if join.clicked() {
+                if open_net {
+                    self.app.open_net_form();
+                }
+                if join {
                     self.open_join();
                 }
                 ui.add_space(14.0);
+                ui.label(RichText::new("Other things this laptop can do").small().weak());
+                ui.add_space(6.0);
                 let choices: [(&str, &str, &str, Color32); 4] = [
-                    ("\u{1f4f6}", "Hand out files to the class", "Makes a wifi network from this laptop. Phones and laptops join it, get the files you choose, talk in the class chat and send work back.", GREEN),
+                    ("\u{1f4c2}", "Hand out a folder to a class", "The same net, started from a folder of lessons: the class gets the files, talks in the chat and sends work back.", GREEN),
                     ("\u{1f50c}", "Send files down a cable", "For one other computer joined to this one by a network cable. The fastest way to move a lot at once.", BLUE),
                     ("\u{1f4e5}", "Get files from another computer", "Takes files from another computer running this hub, on the same wifi or over a cable.", BLUE),
                     ("\u{1f6e0}", "Fix problems with this computer", "Checks the parts of Windows the hub needs, the firewall and the wifi card, and switches back on what is off.", AMBER),
                 ];
-                let w = ((ui.available_width() - 20.0) / 2.0).max(300.0);
                 egui::Grid::new("home").num_columns(2).spacing([16.0, 14.0]).show(ui, |ui| {
                     for (i, (icon, title, what, colour)) in choices.iter().enumerate() {
                         let resp = card(ui, Color32::WHITE, *colour, |ui| {
@@ -743,10 +789,143 @@ impl Gui {
                     RichText::new(
                         "On a new computer, run \"Fix problems with this computer\" once, even if everything seems fine. \
                          Many laptops have had parts of Windows switched off to \"speed them up\", and nothing looks wrong \
-                         until the wifi network or the cable fails in front of the class.",
+                         until the wifi network fails in front of the team.",
                     )
                     .weak(),
                 );
+            });
+        });
+    }
+
+    /// Open a net: three things and a button. The wifi rows are the ones the
+    /// settings screen has; the briefing and the operator's name are new, and
+    /// the folder is optional.
+    fn open_net(&mut self, ctx: &egui::Context) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                heading(ui, "Open a net");
+                ui.label("Three things and a button. Everything else has a sensible setting already.");
+                ui.add_space(10.0);
+                egui::Grid::new("open_net").num_columns(2).spacing([18.0, 14.0]).min_col_width(220.0).show(ui, |ui| {
+                    ui.label(RichText::new("Your name on the net").strong());
+                    ui.vertical(|ui| {
+                        ui.add(egui::TextEdit::singleline(&mut self.app.op_name).desired_width(360.0).hint_text("for example ZERO, or Dr Mensah"));
+                        ui.label(RichText::new("What people see next to what you write. A callsign, a title, or your name.").small().weak());
+                    });
+                    ui.end_row();
+
+                    ui.label(RichText::new("Name of the net").strong());
+                    ui.vertical(|ui| {
+                        let mut ssid = self.app.ssid.clone();
+                        let r = ui.add(egui::TextEdit::singleline(&mut ssid).desired_width(360.0).hint_text("Gorilla Hub"));
+                        if r.changed() {
+                            self.app.ssid = ssid.trim().to_string();
+                        }
+                        if r.lost_focus() && !self.app.password_typed {
+                            // The same name keeps the same password, so phones
+                            // that joined before connect at once.
+                            if let Some(saved) = net::saved_hotspot_password(&self.app.ssid) {
+                                self.app.password = saved;
+                            }
+                        }
+                        ui.label(RichText::new("This is the wifi name people look for on their phones. Keep it short.").small().weak());
+                    });
+                    ui.end_row();
+
+                    ui.label(RichText::new("Password for it").strong());
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            let mut pw = self.app.password.clone();
+                            if ui.add(egui::TextEdit::singleline(&mut pw).desired_width(220.0).font(egui::TextStyle::Monospace)).changed() {
+                                self.app.password = pw.trim().to_string();
+                                self.app.password_typed = true;
+                            }
+                            if plain(ui, "New password").clicked() {
+                                self.app.password = net::suggest_password();
+                                self.app.password_typed = true;
+                            }
+                        });
+                        ui.label(RichText::new("At least 8 letters or numbers. Short and easy to copy from a board or say across a room.").small().weak());
+                    });
+                    ui.end_row();
+
+                    if cfg!(windows) {
+                        ui.label(RichText::new("Wifi band").strong());
+                        ui.horizontal(|ui| {
+                            ui.radio_value(&mut self.app.band5, false, "2.4 GHz (every phone sees it)");
+                            ui.radio_value(&mut self.app.band5, true, "5 GHz (faster; some phones will not see it)");
+                        });
+                        ui.end_row();
+                    }
+
+                    ui.label(RichText::new("The briefing").strong());
+                    ui.vertical(|ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(&mut self.app.briefing)
+                                .desired_width(560.0)
+                                .desired_rows(5)
+                                .hint_text("for example: ZERO has been established at the school, north gate. Report to ZERO on arrival."),
+                        );
+                        ui.label(
+                            RichText::new("The one thing everybody must know. Pinned at the top of the net; every person who joins reads it before anything else. You can change it at any time.")
+                                .small()
+                                .weak(),
+                        );
+                    });
+                    ui.end_row();
+
+                    ui.label(RichText::new("Files to hand out").strong());
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            if self.app.net_folder {
+                                ui.label(self.app.what_to_send());
+                            } else {
+                                ui.label(RichText::new("None yet.").weak());
+                            }
+                            if plain(ui, "Choose a folder...").clicked() {
+                                self.app.open_picker();
+                            }
+                            if self.app.net_folder && plain(ui, "None after all").clicked() {
+                                self.app.net_folder = false;
+                                self.app.chosen = None;
+                            }
+                        });
+                        ui.label(RichText::new("Optional. Maps, forms, lesson sheets. You can add files later, from inside the net.").small().weak());
+                    });
+                    ui.end_row();
+
+                    ui.label(RichText::new("Work sent to you goes to").strong());
+                    ui.horizontal(|ui| {
+                        ui.label(self.app.receive_dir.display().to_string());
+                        if plain(ui, "Choose...").clicked() {
+                            // The picker in its "a place, not things" mode, as
+                            // the settings screen's last row opens it.
+                            self.app.picking_receive = true;
+                            let start = self
+                                .app
+                                .receive_dir
+                                .ancestors()
+                                .find(|a| a.is_dir())
+                                .map(|a| a.to_path_buf())
+                                .unwrap_or_else(super::starting_folder);
+                            self.app.pick_at(start);
+                            self.app.screen = Screen::Pick;
+                        }
+                    });
+                    ui.end_row();
+                });
+                ui.add_space(18.0);
+                ui.horizontal(|ui| {
+                    if big(ui, "OPEN THE NET", GREEN).clicked() {
+                        self.app.open_the_net();
+                    }
+                    if plain(ui, "Back to the start").clicked() {
+                        self.app.net = false;
+                        self.app.screen = Screen::Home;
+                        self.app.row = 0;
+                    }
+                    ui.label(RichText::new("Brings the wifi up, then shows the net.").small().weak());
+                });
             });
         });
     }
@@ -1212,12 +1391,12 @@ impl Gui {
                 if let Some(h) = &self.app.hotspot {
                     card(ui, Color32::WHITE, GREEN, |ui| {
                         ui.set_width(ui.available_width());
-                        ui.label(RichText::new("WRITE ON THE BOARD").small().strong().color(GREEN));
+                        ui.label(RichText::new("WRITE ON THE BOARD, OR SAY IT").small().strong().color(GREEN));
                         ui.label("1. Join the wifi network");
                         ui.label(RichText::new(h.ssid.clone()).size(24.0).strong());
                         ui.label("2. Type the password");
                         ui.label(RichText::new(self.app.password.clone()).size(24.0).strong().monospace());
-                        ui.label("3. The class page opens by itself and asks for a name.");
+                        ui.label("3. The net page opens by itself and asks for a name.");
                     });
                 } else {
                     card(ui, Color32::WHITE, GREEN, |ui| {
@@ -1243,10 +1422,10 @@ impl Gui {
                 let pending = serve::pending_count();
                 let on = crate::room::online();
                 for (t, label) in [
-                    (Tab::Chat, format!("\u{1f4ac}  Class chat{}", if unread > 0 { format!("  ({unread} new)") } else { String::new() })),
-                    (Tab::Who, format!("\u{1f465}  Who is connected ({})", self.app.joined.len().max(on))),
-                    (Tab::Work, format!("\u{1f4e5}  Work handed in{}", if pending > 0 { format!("  ({pending})") } else { String::new() })),
-                    (Tab::Files, "\u{1f4c2}  Files the class can see".to_string()),
+                    (Tab::Chat, format!("\u{1f4ac}  Main channel{}", if unread > 0 { format!("  ({unread} new)") } else { String::new() })),
+                    (Tab::Who, format!("\u{1f465}  Who is on ({})", self.app.joined.len().max(on))),
+                    (Tab::Work, format!("\u{1f4e5}  Sent to you{}", if pending > 0 { format!("  ({pending})") } else { String::new() })),
+                    (Tab::Files, "\u{1f4c2}  Files for the team".to_string()),
                     (Tab::Join, "\u{1f4f7}  Join code for cameras".to_string()),
                 ] {
                     let sel = tab == t;
@@ -1273,7 +1452,7 @@ impl Gui {
                     }
                 });
                 ui.add_space(16.0);
-                if big(ui, "STOP HANDING OUT", RED).clicked() {
+                if big(ui, if self.app.net { "CLOSE THE NET" } else { "STOP HANDING OUT" }, RED).clicked() {
                     self.confirm_stop = true;
                 }
             });
@@ -1285,7 +1464,7 @@ impl Gui {
             Tab::Work => self.work(ctx),
             Tab::Files => {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    heading(ui, "Files the class can see");
+                    heading(ui, "Files for the team");
                     self.tick_body(ui, false);
                 });
             }
@@ -1312,6 +1491,10 @@ impl Gui {
                 ui.label(RichText::new(format!("Comms check at {at}")).small().weak());
             } else {
                 ui.label(RichText::new(format!("{} here now", online.len())).size(20.0).strong());
+                if !room.topic.is_empty() {
+                    let read = online.iter().filter(|p| !p.read.is_empty()).count();
+                    ui.label(RichText::new(format!("{read} of {} read the briefing", online.len())).small().weak());
+                }
             }
             ui.separator();
             ui.horizontal(|ui| {
@@ -1352,10 +1535,17 @@ impl Gui {
                         (Color32::GRAY, "gone".to_string())
                     } else if unread > 0 {
                         (GREEN_OK, format!("\u{2709} {unread}"))
+                    } else if !room.topic.is_empty() && p.read.is_empty() {
+                        // Outranks an answered check: a check never ends on
+                        // its own, and who has not read the new orders
+                        // matters more than who answered an old call.
+                        (AMBER, "not read yet".to_string())
                     } else if !p.answered.is_empty() {
                         (GREEN_OK, format!("\u{2714} {}", p.answered))
                     } else if room.check.is_some() {
                         (AMBER, "waiting".to_string())
+                    } else if !room.topic.is_empty() {
+                        (GREEN_OK, format!("read it {}", p.read))
                     } else {
                         (GREEN_OK, String::new())
                     };
@@ -1445,20 +1635,41 @@ impl Gui {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             // The operator's tools, above the room.
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("# main").size(20.0).strong().monospace());
-                match &mut self.topic_draft {
+            ui.label(RichText::new("# main").size(20.0).strong().monospace());
+            // The briefing, pinned. Everybody who joins reads it first; the
+            // list on the right says who has.
+            card(ui, BRIEF_BG, GREEN, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("BRIEFING").small().strong().color(GREEN));
+                    if !room.topic_at.is_empty() {
+                        ui.label(RichText::new(format!("set by @{op} at {}", room.topic_at)).small().weak());
+                    }
+                    if self.brief_draft.is_none() && ui.small_button(if room.topic.is_empty() { "Write the briefing" } else { "Change briefing" }).clicked() {
+                        self.brief_draft = Some(room.topic.clone());
+                    }
+                });
+                match &mut self.brief_draft {
                     Some(t) => {
-                        let r = ui.add(egui::TextEdit::singleline(t).desired_width(320.0).hint_text("Today's lesson or task"));
-                        if plain(ui, "Set").clicked() || (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
-                            crate::room::set_topic(t);
-                            self.topic_draft = None;
+                        ui.add(egui::TextEdit::multiline(t).desired_width(f32::INFINITY).desired_rows(3).hint_text("The one thing everybody must know."));
+                        ui.label(RichText::new("Everybody sees the change at once, and it is said in the channel. Their \"read it\" starts again.").small().weak());
+                        let text = t.trim().to_string();
+                        let (set, cancel) = ui
+                            .horizontal(|ui| (big(ui, "SET THE BRIEFING", GREEN).clicked() && !text.is_empty(), plain(ui, "Cancel").clicked()))
+                            .inner;
+                        if set {
+                            crate::room::set_topic(&text);
+                            note_record(&self.app, &format!("@{op}  set the briefing: {text}"));
+                        }
+                        if set || cancel {
+                            self.brief_draft = None;
                         }
                     }
                     None => {
-                        ui.label(RichText::new(if room.topic.is_empty() { "No topic set".to_string() } else { room.topic.clone() }).weak());
-                        if ui.small_button("Set topic").clicked() {
-                            self.topic_draft = Some(room.topic.clone());
+                        if room.topic.is_empty() {
+                            ui.label(RichText::new("No briefing yet. Write the one thing everybody must know: where you are, what to do on arrival.").weak());
+                        } else {
+                            ui.label(RichText::new(room.topic.clone()).size(17.0).strong());
                         }
                     }
                 }
@@ -2053,7 +2264,18 @@ impl Gui {
 
 /// The guide behind Help, in the words the terminal's help used, for the
 /// window's buttons instead of its keys.
-const GUIDE: &str = "HANDING OUT FILES
+const GUIDE: &str = "OPENING A NET (a team, a camp, a class)
+
+1. Press \"Open a net\". Give your name on the net (ZERO, Dr Mensah, Teacher), the wifi name and password, and write the briefing: the one thing everybody must know.
+2. Press OPEN THE NET. The wifi network comes up and the main channel opens. No files are needed.
+3. Say the network name and the password, or write them on the board. They are on the left of the net screen.
+4. Phones join that network and the net page opens by itself and asks for a name. The briefing comes first, with an I HAVE READ IT button; a laptop running this hub joins through \"Join a net nearby\".
+5. The list on the right says who has read the briefing. Change it any time with \"Change briefing\": everybody sees it, and their \"read it\" starts again.
+6. COMMS CHECK: every device gets a big I READ YOU button, and the list counts the answers.
+
+Files for the team: put files in the folder shown on that tab and tick them; they appear on every device.
+
+HANDING OUT FILES
 
 1. Press \"Hand out files to the class\" and open the folder with the lesson in it.
 2. Press the green button. The wifi network starts and everything in the folder is handed out. To hand out only some files, tick them first.
@@ -2399,8 +2621,8 @@ impl Gui {
         let mut back = false;
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
-                heading(ui, "Join the chat on a hub nearby");
-                ui.label("For a pupil with a laptop, or a team member who has just arrived: join the hub's wifi first, then choose the hub here. You will see the whole conversation so far, including the morning briefing.");
+                heading(ui, "Join a net nearby");
+                ui.label("For a team member who has just arrived, or a pupil with a laptop: join the net's wifi first, then choose the net here. You read the briefing first, then the whole conversation so far.");
                 ui.add_space(10.0);
                 let Some(f) = self.join.as_mut() else { return };
                 ui.horizontal(|ui| {
@@ -2422,12 +2644,12 @@ impl Gui {
                     Some(list) if list.is_empty() => {
                         card(ui, CALL_BG, AMBER, |ui| {
                             ui.set_width(ui.available_width().min(760.0));
-                            ui.label(RichText::new("No hub found on this network.").strong());
-                            ui.label("Join the hub's wifi from this computer's wifi list first (the name and password are written on the board, or ask the person in charge), then press Look again.");
+                            ui.label(RichText::new("No net found on this network.").strong());
+                            ui.label("Join the net's wifi from this computer's wifi list first (the name and password are on the board, or ask the person in charge), then press Look again.");
                         });
                     }
                     Some(list) => {
-                        ui.label(RichText::new("Hubs found:").strong());
+                        ui.label(RichText::new("Nets found:").strong());
                         for (ip, n, who) in list {
                             card(ui, Color32::WHITE, GREEN, |ui| {
                                 ui.set_width(ui.available_width().min(760.0));
@@ -2452,7 +2674,7 @@ impl Gui {
                 }
                 ui.add_space(14.0);
                 let Some(f) = self.join.as_mut() else { return };
-                ui.label(RichText::new("Or type the hub's address, as the person in charge gives it:").strong());
+                ui.label(RichText::new("Or type the net's address, as the person in charge gives it:").strong());
                 ui.horizontal(|ui| {
                     ui.add(egui::TextEdit::singleline(&mut f.address).hint_text("for example 192.168.137.1").desired_width(260.0));
                     if big(ui, "Join", GREEN).clicked() && !f.name.trim().is_empty() {
@@ -2500,6 +2722,50 @@ impl Gui {
         let op = if s.op_nick.is_empty() { "the person in charge".to_string() } else { s.op_nick.clone() };
         let mut leave = false;
 
+        // The briefing first, the first time: the whole screen and one
+        // button, so nobody is in the conversation before they have read
+        // what the person in charge needs them to know.
+        let online = s.link == super::member::Link::Online;
+        if !self.member_entered && online && (s.topic.is_empty() || s.read) {
+            self.member_entered = true;
+        }
+        if !self.member_entered && online && !s.topic.is_empty() && !s.read {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    heading(ui, &format!("You are on the net of {hub}"));
+                    ui.label(RichText::new(format!("as {}  \u{b7}  the person in charge is {op}", if s.my_nick.is_empty() { m.name.clone() } else { s.my_nick.clone() })).weak());
+                    ui.add_space(10.0);
+                    card(ui, BRIEF_BG, GREEN, |ui| {
+                        ui.set_width(ui.available_width().min(760.0));
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new("BRIEFING").small().strong().color(GREEN));
+                            if !s.topic_at.is_empty() {
+                                ui.label(RichText::new(format!("set by {op} at {}", s.topic_at)).small().weak());
+                            }
+                        });
+                        ui.label(RichText::new(s.topic.clone()).size(20.0).strong());
+                    });
+                    ui.add_space(6.0);
+                    ui.label("Below the briefing you get the whole conversation so far, the list of who is on, and a HELP button that reaches the person in charge privately.");
+                    ui.add_space(10.0);
+                    if big(ui, "I HAVE READ IT, OPEN THE CHANNEL", GREEN_OK).clicked() {
+                        m.read_brief();
+                        self.member_entered = true;
+                    }
+                    ui.add_space(14.0);
+                    if plain(ui, "Leave the net").clicked() {
+                        leave = true;
+                    }
+                });
+            });
+            if leave {
+                self.member = None;
+                self.member_private = false;
+                self.member_entered = false;
+            }
+            return;
+        }
+
         // The connection, where it cannot be missed when it is not right.
         match &s.link {
             super::member::Link::Online => {}
@@ -2520,7 +2786,7 @@ impl Gui {
             ui.add_space(6.0);
             card(ui, Color32::WHITE, GREEN, |ui| {
                 ui.set_width(ui.available_width());
-                ui.label(RichText::new("YOU ARE IN THE CHAT OF").small().strong().color(GREEN));
+                ui.label(RichText::new("YOU ARE ON THE NET OF").small().strong().color(GREEN));
                 ui.label(RichText::new(hub.clone()).size(18.0).strong());
                 ui.label(RichText::new(format!("as {}", if s.my_nick.is_empty() { m.name.clone() } else { s.my_nick.clone() })).weak());
             });
@@ -2555,7 +2821,7 @@ impl Gui {
                 self.member_note = Some("Sent. Only the person in charge sees it; they will find a moment to talk to you.".into());
             }
             ui.add_space(16.0);
-            if plain(ui, "Leave the chat").clicked() {
+            if plain(ui, "Leave the net").clicked() {
                 leave = true;
             }
         });
@@ -2589,7 +2855,21 @@ impl Gui {
                                 .color(if p.online { nick_colour(&p.nick) } else { Color32::GRAY }),
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let st = if p.op { "in charge".to_string() } else if !p.answered.is_empty() { format!("\u{2714} {}", p.answered) } else if !p.online { "gone".into() } else { String::new() };
+                            let st = if p.op {
+                                "in charge".to_string()
+                            } else if !p.online {
+                                "gone".into()
+                            } else if !s.topic.is_empty() && p.read.is_empty() {
+                                "not read yet".into()
+                            } else if !p.answered.is_empty() {
+                                format!("\u{2714} {}", p.answered)
+                            } else if s.check.is_some() {
+                                "waiting".into()
+                            } else if !s.topic.is_empty() {
+                                "read it".into()
+                            } else {
+                                String::new()
+                            };
                             ui.label(RichText::new(st).small());
                         });
                     });
@@ -2598,10 +2878,26 @@ impl Gui {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("# main").size(20.0).strong().monospace());
-                ui.label(RichText::new(if s.topic.is_empty() { String::new() } else { s.topic.clone() }).strong().color(GREEN));
-            });
+            ui.label(RichText::new("# main").size(20.0).strong().monospace());
+            if !s.topic.is_empty() {
+                // The briefing, pinned; a changed one brings the button back.
+                card(ui, BRIEF_BG, GREEN, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new("BRIEFING").small().strong().color(GREEN));
+                        if !s.topic_at.is_empty() {
+                            ui.label(RichText::new(format!("set by {op} at {}", s.topic_at)).small().weak());
+                        }
+                    });
+                    ui.label(RichText::new(s.topic.clone()).size(17.0).strong());
+                    if !s.read {
+                        ui.add_space(4.0);
+                        if big(ui, "\u{2714} I HAVE READ IT", GREEN_OK).clicked() {
+                            m.read_brief();
+                        }
+                    }
+                });
+            }
             if let Some((_, _, false)) = &s.check {
                 card(ui, CALL_BG, AMBER, |ui| {
                     ui.set_width(ui.available_width());

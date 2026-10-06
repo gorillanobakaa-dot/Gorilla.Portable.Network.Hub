@@ -87,6 +87,9 @@ struct Person {
     nick: String,
     ip: String,
     last_seen: Instant,
+    /// "HH:MM" when they read the briefing as it stands now, empty if not.
+    /// Cleared for everybody when the briefing changes.
+    read: String,
 }
 
 #[derive(Clone, Debug)]
@@ -101,7 +104,12 @@ struct Check {
 struct Room {
     lines: Vec<Line>,
     next_id: u64,
+    /// The briefing: what everybody on the net must know. IRC's topic, kept
+    /// under that name in the wire format (/net/topic, "topic") so pages and
+    /// benches written before it was called a briefing keep working.
     topic: String,
+    /// "HH:MM" the briefing was last set.
+    topic_at: String,
     quiet: bool,
     muted: Vec<String>,
     check: Option<Check>,
@@ -233,7 +241,7 @@ pub fn here(key: &str, nick: &str, ip: &str) {
                 }
             }
             None => {
-                r.people.push(Person { key: key.into(), nick: nick.into(), ip: ip.into(), last_seen: Instant::now() });
+                r.people.push(Person { key: key.into(), nick: nick.into(), ip: ip.into(), last_seen: Instant::now(), read: String::new() });
                 push(r, "", "", LineKind::Event, &format!("\u{2192} {nick} joined"));
                 true
             }
@@ -342,14 +350,45 @@ pub fn check_summary() -> Option<(u64, usize, usize, Vec<String>)> {
     })
 }
 
+/// The operator sets the briefing. Everybody's "read it" is cleared: a
+/// briefing that changed is one nobody has read yet, and the people list
+/// shows who still has to.
 pub fn set_topic(text: &str) {
-    let text: String = text.trim().chars().take(200).collect();
+    let text: String = text.trim().chars().take(TEXT_CAP).collect();
     with(|r| {
         r.topic = text.clone();
+        r.topic_at = clock();
+        for p in &mut r.people {
+            p.read.clear();
+        }
         let who = if r.op_nick.is_empty() { "Teacher".to_string() } else { r.op_nick.clone() };
-        push(r, "", "", LineKind::Event, &format!("{who} set the topic: {text}"));
+        push(r, "", "", LineKind::Event, &format!("{who} set the briefing: {text}"));
     });
     pulse(None);
+}
+
+/// Somebody pressed I HAVE READ IT under the briefing. Said once in the
+/// room per person per briefing, so the operator sees it land. Returns the
+/// nick when it counted.
+pub fn read_brief(key: &str) -> Option<String> {
+    let out = with(|r| {
+        if r.topic.is_empty() {
+            return None;
+        }
+        let at = clock();
+        let p = r.people.iter_mut().find(|p| p.key == key)?;
+        if !p.read.is_empty() {
+            return None;
+        }
+        p.read = at;
+        let nick = p.nick.clone();
+        push(r, "", "", LineKind::Event, &format!("{nick} read the briefing"));
+        Some(nick)
+    });
+    if out.is_some() {
+        pulse(None);
+    }
+    out
 }
 
 pub fn set_quiet(on: bool) {
@@ -432,6 +471,8 @@ pub struct PersonView {
     pub online: bool,
     /// "HH:MM" when they answered the current comms check, empty if not.
     pub answered: String,
+    /// "HH:MM" when they read the briefing as it stands, empty if not.
+    pub read: String,
     pub muted: bool,
 }
 
@@ -441,6 +482,7 @@ pub struct PersonView {
 pub struct Snapshot {
     pub lines: Vec<Line>,
     pub topic: String,
+    pub topic_at: String,
     pub quiet: bool,
     /// (number, "HH:MM") of the comms check running now.
     pub check: Option<(u64, String)>,
@@ -451,6 +493,7 @@ pub fn snapshot() -> Snapshot {
     with(|r| Snapshot {
         lines: r.lines.clone(),
         topic: r.topic.clone(),
+        topic_at: r.topic_at.clone(),
         quiet: r.quiet,
         check: r.check.as_ref().map(|c| (c.id, c.at.clone())),
         people: r
@@ -466,6 +509,7 @@ pub fn snapshot() -> Snapshot {
                     .and_then(|c| c.answered.iter().find(|(k, _)| *k == p.key))
                     .map(|(_, a)| a.clone())
                     .unwrap_or_default(),
+                read: p.read.clone(),
                 muted: r.muted.iter().any(|k| *k == p.key),
             })
             .collect(),
@@ -507,7 +551,7 @@ pub struct Viewer {
 /// last had) and `line` (the last #main line it has). One small JSON object.
 pub fn state(v: &Viewer, since: u64, line: u64) -> String {
     let now = version();
-    let (lines, topic, quiet, muted, check, people, op) = with(|r| {
+    let (lines, topic, topic_at, quiet, muted, check, people, op) = with(|r| {
         let fresh: Vec<Line> = if line == 0 {
             r.lines.iter().rev().take(FIRST_LOAD).rev().cloned().collect()
         } else {
@@ -516,13 +560,16 @@ pub fn state(v: &Viewer, since: u64, line: u64) -> String {
         let check = r.check.clone();
         let people = r.people.clone();
         let op = if r.op_nick.is_empty() { "Teacher".to_string() } else { r.op_nick.clone() };
-        (fresh, r.topic.clone(), r.quiet, r.muted.clone(), check, people, op)
+        (fresh, r.topic.clone(), r.topic_at.clone(), r.quiet, r.muted.clone(), check, people, op)
     });
     // chat.rs is read after the room's lock is let go: never both at once.
     let convs = if v.operator { crate::chat::conversations(false) } else { Vec::new() };
     let mut s = String::with_capacity(4096);
-    s.push_str(&format!("{{\"v\":{now},\"me\":{{\"key\":{},\"nick\":{},\"op\":{}}}", json_str(&v.key), json_str(&v.nick), v.operator));
-    s.push_str(&format!(",\"opnick\":{},\"topic\":{},\"quiet\":{quiet},\"muted\":{}", json_str(&op), json_str(&topic), muted.iter().any(|k| *k == v.key)));
+    // "read": this viewer has read the briefing as it stands; always true for
+    // the operator, who wrote it.
+    let my_read = v.operator || people.iter().any(|p| p.key == v.key && !p.read.is_empty());
+    s.push_str(&format!("{{\"v\":{now},\"me\":{{\"key\":{},\"nick\":{},\"op\":{},\"read\":{my_read}}}", json_str(&v.key), json_str(&v.nick), v.operator));
+    s.push_str(&format!(",\"opnick\":{},\"topic\":{},\"topicat\":{},\"quiet\":{quiet},\"muted\":{}", json_str(&op), json_str(&topic), json_str(&topic_at), muted.iter().any(|k| *k == v.key)));
     match &check {
         Some(c) => {
             let mine = c.answered.iter().any(|(k, _)| *k == v.key);
@@ -548,16 +595,17 @@ pub fn state(v: &Viewer, since: u64, line: u64) -> String {
     }
     s.push(']');
     // the people, the operator first
-    s.push_str(&format!(",\"people\":[{{\"k\":\"op\",\"n\":{},\"op\":true,\"on\":true,\"ans\":\"\",\"muted\":false,\"help\":false,\"unread\":0}}", json_str(&op)));
+    s.push_str(&format!(",\"people\":[{{\"k\":\"op\",\"n\":{},\"op\":true,\"on\":true,\"ans\":\"\",\"read\":\"\",\"muted\":false,\"help\":false,\"unread\":0}}", json_str(&op)));
     for p in &people {
         let on = p.last_seen.elapsed() <= ONLINE_FOR;
         let ans = check.as_ref().and_then(|c| c.answered.iter().find(|(k, _)| *k == p.key)).map(|(_, a)| a.clone()).unwrap_or_default();
         let conv = convs.iter().find(|c| c.key == p.key);
         s.push_str(&format!(
-            ",{{\"k\":{},\"n\":{},\"op\":false,\"on\":{on},\"ans\":{},\"muted\":{},\"help\":{},\"unread\":{}}}",
+            ",{{\"k\":{},\"n\":{},\"op\":false,\"on\":{on},\"ans\":{},\"read\":{},\"muted\":{},\"help\":{},\"unread\":{}}}",
             json_str(&p.key),
             json_str(&p.nick),
             json_str(&ans),
+            json_str(&p.read),
             muted.iter().any(|k| *k == p.key),
             conv.map(|c| c.needs_talk).unwrap_or(false),
             conv.map(|c| c.unread).unwrap_or(0)
@@ -660,6 +708,33 @@ pub(crate) mod tests {
         assert!(again.text.contains("Not answered yet: Amina"), "{}", again.text);
         let s = state(&kid("kA", "Amina"), 0, 0);
         assert!(s.contains("\"text\":\"hello\"") && s.contains("\"kind\":\"call\"") && s.contains("\"me\":false"), "{s}");
+        clear();
+    }
+
+    /// The briefing: read once per person, cleared for everybody when it
+    /// changes, and the page is told whether its viewer has read it.
+    #[test]
+    fn the_briefing_is_read_once_and_a_new_one_is_unread_again() {
+        let _l = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear();
+        here("kA", "Amadou", "10.0.0.2");
+        here("kB", "Fatou", "10.0.0.3");
+        assert!(read_brief("kA").is_none(), "nothing to read before a briefing exists");
+        set_topic("ZERO at the north gate. Report on arrival.");
+        assert_eq!(read_brief("kA").as_deref(), Some("Amadou"));
+        assert!(read_brief("kA").is_none(), "counted once");
+        let s = snapshot();
+        assert!(!s.topic_at.is_empty());
+        assert!(s.people.iter().any(|p| p.key == "kA" && !p.read.is_empty()));
+        assert!(s.people.iter().any(|p| p.key == "kB" && p.read.is_empty()));
+        assert!(s.lines.iter().any(|l| l.kind == LineKind::Event && l.text == "Amadou read the briefing"));
+        let a = state(&kid("kA", "Amadou"), 0, 0);
+        let b = state(&kid("kB", "Fatou"), 0, 0);
+        assert!(a.contains("\"read\":true") && a.contains("\"topicat\":\""), "{a}");
+        assert!(b.contains("\"read\":false"), "{b}");
+        set_topic("Triage moved to the tent.");
+        assert!(snapshot().people.iter().all(|p| p.read.is_empty()), "a new briefing is unread by everybody");
+        assert_eq!(read_brief("kB").as_deref(), Some("Fatou"));
         clear();
     }
 

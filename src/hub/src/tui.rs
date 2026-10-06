@@ -107,6 +107,10 @@ pub fn run() {
 enum Screen {
     Home,
     Send,
+    /// Open a net: the form a team leader fills in (name, wifi, briefing)
+    /// and one button, with no folder to pick first. The window draws it
+    /// (gui.rs); the terminal shows the settings screen in its place.
+    Open,
     /// The tick list: which files in the folder the network is allowed to see.
     /// `pre` is the review before anything starts; the same screen mid-lesson
     /// is how the teacher publishes or withdraws a file while kids watch.
@@ -268,6 +272,16 @@ struct App {
     /// with everything in it handed out. The settings are one key away (s)
     /// and never in the way.
     quick: bool,
+    /// This lesson was opened as a NET from the start screen: no folder was
+    /// needed, the briefing and the operator's name go into the room the
+    /// moment it is up, and the screens say "net", not "handing out".
+    net: bool,
+    /// A folder was chosen on the Open a net form (else an empty one is made).
+    net_folder: bool,
+    /// The briefing typed on the Open a net form: the room's topic once up.
+    briefing: String,
+    /// The operator's name typed on the form, e.g. "ZERO (Dr Mensah)".
+    op_name: String,
     /// Windows: make the network on 5 GHz instead of 2.4 GHz.
     band5: bool,
     /// The folder being looked at on the tick screen, relative to what is
@@ -472,6 +486,10 @@ impl App {
             receive_dir: crate::page::default_receive_dir(),
             picking_receive: false,
             quick: false,
+            net: false,
+            net_folder: false,
+            briefing: String::new(),
+            op_name: String::new(),
             band5: false,
             tick_dir: String::new(),
             tick_first: 0,
@@ -592,7 +610,7 @@ impl App {
         let mut f = Frame::new(rows, cols);
         match self.screen {
             Screen::Home => self.draw_home(&mut f),
-            Screen::Send => self.draw_send(&mut f),
+            Screen::Send | Screen::Open => self.draw_send(&mut f),
             Screen::Tick { pre } => self.draw_tick(&mut f, pre),
             Screen::Waiting => self.draw_waiting(&mut f),
             Screen::Sending => self.draw_sending(&mut f),
@@ -2532,7 +2550,7 @@ impl App {
             Screen::Pick => self.pick_key(k),
             Screen::Checkup => self.checkup_key(k),
             Screen::FixOffer => self.fixoffer_key(k),
-            Screen::Send => self.send_key(k),
+            Screen::Send | Screen::Open => self.send_key(k),
             Screen::Tick { pre } => self.tick_key(k, pre),
             Screen::Waiting => self.waiting_key(k),
             Screen::Sending => self.sending_key(k),
@@ -2677,6 +2695,7 @@ impl App {
         self.move_row(k, 4);
         match k {
             Key::Enter => {
+                self.net = false;
                 match self.row {
                     0 => {
                         self.cable = false;
@@ -3062,7 +3081,7 @@ impl App {
                 if self.row == 0 && self.picking_receive {
                     self.receive_dir = self.pick_dir.clone();
                     self.picking_receive = false;
-                    self.screen = Screen::Send;
+                    self.screen = self.form_screen();
                     self.row = self.send_fields().len() - 1;
                 } else if self.row == 0 {
                     self.finish_picking();
@@ -3105,7 +3124,7 @@ impl App {
             }
             Key::Esc => {
                 // The short way in came from the first screen, so back is there.
-                self.screen = if self.quick && !self.picking_receive { Screen::Home } else { Screen::Send };
+                self.screen = if self.quick && !self.picking_receive { Screen::Home } else { self.form_screen() };
                 self.quick = false;
                 self.picking_receive = false;
                 self.row = 0;
@@ -3113,7 +3132,7 @@ impl App {
             // The settings: network name, password, band, where work goes.
             Key::Char('s') if self.quick && !self.picking_receive => {
                 self.quick = false;
-                self.screen = Screen::Send;
+                self.screen = self.form_screen();
                 self.row = 0;
             }
             Key::Char('q') | Key::Quit => return true,
@@ -3134,7 +3153,8 @@ impl App {
             self.folder = self.pick_dir.to_string_lossy().into_owned();
             self.picked.clear();
             self.chosen = None;
-            self.screen = Screen::Send;
+            self.screen = self.form_screen();
+        self.net_folder = self.net;
             self.row = self.send_fields().len();
             self.quick_start();
             return;
@@ -3167,7 +3187,8 @@ impl App {
 
         self.folder = root.to_string_lossy().into_owned();
         self.chosen = Some(allow);
-        self.screen = Screen::Send;
+        self.screen = self.form_screen();
+        self.net_folder = self.net;
         // Land on the button that starts it, not back on the row that was just
         // answered. The next thing a person wants after choosing what to send
         // is to send it, and leaving the cursor on "What to send" invites
@@ -3179,6 +3200,86 @@ impl App {
     /// The short way in: what was chosen is handed out at once, all of it,
     /// with no tick screen and no settings screen in between. f still changes
     /// what is handed out while the class runs.
+    /// The start screen's "Open a net": the form, with nothing to pick first.
+    ///
+    /// WHY. Before this (0.10.0) the only way to the wifi and the room was
+    /// "Hand out files to the class", which demanded a folder before the
+    /// network would come up. A team leader arriving in a disaster area has
+    /// no folder and no class: they need the net open and the briefing read
+    /// by everybody who joins ("ZERO has been established"). The owner,
+    /// 2026-10-06: no relief team could have used the old front door.
+    fn open_net_form(&mut self) {
+        self.cable = false;
+        self.quick = false;
+        self.net = true;
+        self.net_folder = false;
+        self.chosen = None;
+        self.row = 0;
+        self.screen = if self.services_off().is_some_and(|off| !off.is_empty()) { Screen::FixOffer } else { Screen::Open };
+    }
+
+    /// The form a side trip (picker, fix offer) comes back to.
+    fn form_screen(&self) -> Screen {
+        if self.net {
+            Screen::Open
+        } else {
+            Screen::Send
+        }
+    }
+
+    /// Files for the team when the net was opened without a folder: an
+    /// empty folder next to the received one. Anything dropped into it
+    /// during the net appears unticked on the Files tab, where a tick
+    /// publishes it, exactly as a file added to a lesson folder does.
+    fn net_files_folder(&self) -> PathBuf {
+        let base = self.receive_dir.parent().map(|p| p.to_path_buf()).unwrap_or_else(starting_folder);
+        base.join("Gorilla Hub files for the team")
+    }
+
+    /// OPEN THE NET. The wifi, the server and the room, one press. A folder
+    /// chosen on the form is reviewed first (the tick screen, as handing out
+    /// does: nothing goes to the team unseen); with none, an empty folder is
+    /// made and the net opens at once.
+    fn open_the_net(&mut self) {
+        if !self.net_folder {
+            let f = self.net_files_folder();
+            if let Err(e) = std::fs::create_dir_all(&f) {
+                self.note(&format!("Could not make the folder for the team's files:\n\n{}\n\n{e}", f.display()));
+                self.back = Screen::Open;
+                return;
+            }
+            self.folder = f.to_string_lossy().into_owned();
+            self.chosen = None;
+        }
+        self.open_tick(true);
+        if !matches!(self.screen, Screen::Tick { .. }) {
+            return; // a note is showing instead
+        }
+        if self.net_folder && !self.tick.is_empty() {
+            return; // review what the team will see; START there goes on
+        }
+        self.apply_ticks();
+        self.begin_sending();
+        self.after_net_start();
+    }
+
+    /// Once a net is up: the operator's name and the briefing go into the
+    /// room, so the first person to join reads them. Only when the start
+    /// succeeded (the screen moved on to the lesson); a failure left a note.
+    fn after_net_start(&mut self) {
+        if !self.net || !matches!(self.screen, Screen::Sending) {
+            return;
+        }
+        let name = self.op_name.trim();
+        if !name.is_empty() {
+            crate::room::set_op_nick(name);
+        }
+        let b = self.briefing.trim().to_string();
+        if !b.is_empty() {
+            crate::room::set_topic(&b);
+        }
+    }
+
     fn quick_start(&mut self) {
         if !self.quick || self.cable {
             return;
@@ -3317,7 +3418,11 @@ impl App {
                 // "Close this and start it again" was true before 0.9.9, when
                 // Stop could not stop the server. It can now, so the way on is
                 // the menu, not a restart.
-                self.note("Stopped handing out.\n\nThe wifi network is off, and the phones can no longer reach the class page.\n\nWhat you chose to send has been forgotten, so the next lesson starts from nothing.\n\nTo hand out again, choose \"Hand out files to the class\" on the first screen.");
+                self.note(if self.net {
+                    "The net is closed.\n\nThe wifi network is off, and nobody can reach the channel any more.\n\nThe briefing and what was said are in messages.txt and sign-ins.txt, in the received folder.\n\nTo open a net again, choose \"Open a net\" on the first screen."
+                } else {
+                    "Stopped handing out.\n\nThe wifi network is off, and the phones can no longer reach the class page.\n\nWhat you chose to send has been forgotten, so the next lesson starts from nothing.\n\nTo hand out again, choose \"Hand out files to the class\" on the first screen."
+                });
                 self.back = Screen::Home;
             }
             Key::Quit => return true,
@@ -3538,6 +3643,7 @@ impl App {
                     self.apply_ticks();
                     if pre {
                         self.begin_sending();
+                        self.after_net_start();
                     } else {
                         self.screen = Screen::Sending;
                         self.row = 0;
@@ -3569,7 +3675,7 @@ impl App {
             }
             Key::Esc => {
                 if pre {
-                    self.screen = Screen::Send;
+                    self.screen = self.form_screen();
                 } else {
                     self.apply_ticks();
                     self.screen = Screen::Sending;
@@ -4165,12 +4271,12 @@ impl App {
             Key::Enter => {
                 let msg = crate::services::fix();
                 self.refresh_services();
-                self.screen = Screen::Send;
+                self.screen = self.form_screen();
                 self.note(&msg);
                 self.back = Screen::Send;
             }
             Key::Esc | Key::Char('q') => {
-                self.screen = Screen::Send;
+                self.screen = self.form_screen();
                 self.row = 0;
             }
             Key::Quit => return true,

@@ -39,6 +39,8 @@ pub struct Person {
     pub op: bool,
     pub online: bool,
     pub answered: String,
+    /// "HH:MM" they read the briefing as it stands, empty if not.
+    pub read: String,
     pub muted: bool,
 }
 
@@ -72,7 +74,11 @@ pub struct State {
     pub my_key: String,
     pub my_nick: String,
     pub op_nick: String,
+    /// The briefing (the room's topic) and when it was set.
     pub topic: String,
+    pub topic_at: String,
+    /// This member has read the briefing as it stands.
+    pub read: bool,
     pub quiet: bool,
     pub muted: bool,
     /// (number, "HH:MM", answered by me)
@@ -210,6 +216,12 @@ impl Member {
         self.post("/net/help", format!("token={}", token()));
     }
 
+    /// I HAVE READ IT, under the briefing.
+    pub fn read_brief(&self) {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).read = true;
+        self.post("/net/readbrief", String::new());
+    }
+
     pub fn answer(&self) {
         if let Some(c) = self.state.lock().unwrap_or_else(|e| e.into_inner()).check.as_mut() {
             c.2 = true;
@@ -271,6 +283,8 @@ fn apply(s: &mut State, j: &J, first: bool) {
     s.my_nick = j.get("me").get("nick").str().to_string();
     s.op_nick = j.get("opnick").str().to_string();
     let topic = j.get("topic").str().to_string();
+    s.topic_at = j.get("topicat").str().to_string();
+    s.read = j.get("me").get("read").bool();
     s.quiet = j.get("quiet").bool();
     s.muted = j.get("muted").bool();
     let check = match j.get("check") {
@@ -317,6 +331,7 @@ fn apply(s: &mut State, j: &J, first: bool) {
             op: p.get("op").bool(),
             online: p.get("on").bool(),
             answered: p.get("ans").str().into(),
+            read: p.get("read").str().into(),
             muted: p.get("muted").bool(),
         })
         .collect();
