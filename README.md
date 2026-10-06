@@ -28,6 +28,29 @@ screen.
 
 ---
 
+## New in 0.11.0: a window, a net with a briefing, one room
+
+- **The hub is a window now**: every screen the person in charge sees has
+  buttons, lists and menus. The terminal is no longer the product.
+- **Open a net.** A team leader's way in: your name on the net, the wifi name
+  and password, and the briefing. One button brings the wifi up and opens the
+  main channel. No folder needed; files can be handed out later from inside.
+  Built for a rescue team in a disaster area or a medical team at an outbreak
+  as much as for a class: "ZERO has been established", read by everybody who
+  joins.
+- **The briefing comes first** on every phone and every joining laptop, with
+  an **I HAVE READ IT** button; the list of people says who has read it, and a
+  changed briefing is unread by everybody again.
+- **One room, like a radio net**: everybody writes in # main, a **comms
+  check** counts who can hear, HELP is one tap and always on, private chats
+  open as windows. **Join a net nearby** puts a laptop in the room with one
+  button.
+
+In plain language: [docs/0.11.0-WHAT-CHANGED.md](docs/0.11.0-WHAT-CHANGED.md).
+For developers: [docs/0.11.0-DEVELOPER-NOTES.md](docs/0.11.0-DEVELOPER-NOTES.md).
+The guide below still shows the terminal screens of 0.10.0; the window's
+pictures follow.
+
 ## New in 0.10.0: talking both ways, and private help for children
 
 <a href="docs/screenshots/gallery/phone-0.10.0-help-page.png"><img src="docs/screenshots/gallery/phone-0.10.0-help-page.png" width="240" align="right" alt="The private help page on a phone: HIDE THIS, I NEED TO TALK TO SOMEONE, and a box to write privately"></a>

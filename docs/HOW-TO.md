@@ -2,7 +2,14 @@
 
 This guide is for the person standing at the front of the room. You do not
 need to know what a terminal is, and you do not need to install anything on the
-children's phones. It describes **version 0.10.0**.
+children's phones. It describes **version 0.11.0**.
+
+> **0.11.0 is a window**, with buttons and menus, and the pictures below are
+> still the terminal screens of 0.10.0, which the window replaced. The words
+> on the buttons are the same as the choices described here; the keys
+> (**h**, **m**, **c**...) are now buttons and tabs with those words on them.
+> New pictures follow. The part that is new in 0.11.0, opening a net for a
+> team, is Part 2a.
 
 Every picture is a real screen. Click any of them to see it full size. The
 pictures of Windows use a made-up teacher's folder and a made-up password.
@@ -135,6 +142,73 @@ sudo pacman -U gorilla-portable-network-hub-0.9.5-1-x86_64.pkg.tar.zst
 ```
 
 Then find **Portable Network Hub** in your applications menu, or type `hub`.
+
+---
+
+## Part 2a: Open a net for a team
+
+For a team leader, a camp, a rescue or medical team: the net first, files
+later or never. On the start screen the first two cards are **Open a net: you
+are in charge** and **Join a net nearby**.
+
+### Open a net
+
+Press **OPEN A NET**. One form:
+
+| Line | What it means | What to do |
+|---|---|---|
+| **Your name on the net** | What people see next to what you write | A callsign (*ZERO*), a title (*Dr Mensah*), or your name |
+| **Name of the net** | The wifi name people look for on their phones | *Gorilla Hub* is ready. Change it if you like; keep it short |
+| **Password for it** | The wifi password | Filled in for you. At least 8 letters. The same name keeps the same password next time |
+| **Wifi band** (Windows) | Which radio band | Leave it on **2.4 GHz**: every phone sees it |
+| **The briefing** | The one thing everybody must know | Where you are, what to do on arrival. *ZERO has been established at the school, north gate. Report to ZERO on arrival.* You can change it at any time |
+| **Files to hand out** | Optional | Maps, forms, lesson sheets. Leave it as *None yet* and add files later from inside the net |
+| **Work sent to you goes to** | Where files people send you land | *Documents\Gorilla Hub received* |
+
+Press **OPEN THE NET**. The wifi comes up and the net screen appears, with
+your name and the briefing already in the channel.
+
+### The net screen
+
+- **Left**: the wifi name and password to write on the board or say out
+  loud; the tabs **Main channel**, **Who is on**, **Sent to you**, **Files for
+  the team**, **Join code for cameras**; a notice for the top of every phone;
+  and **CLOSE THE NET**.
+- **Middle**: the briefing, pinned, with **Change briefing**; **COMMS
+  CHECK** and **Quiet the channel**; the channel itself; the line you type in.
+- **Right**: who is on, with **read it** or **not read yet** next to each
+  name, and the count (*3 of 5 read the briefing*). During a comms check the
+  same list counts the answers.
+
+Press a name on the right for a private chat, to mute that person in the
+channel, or to remove their device. A person who taps **HELP** turns red at
+the top of the window, with a sound.
+
+### What a phone sees
+
+The phone joins the wifi, the net page opens by itself and asks for a name.
+Then the briefing, first, with a big **I HAVE READ IT** button, and under it
+the channel, a **SEND** button and a red **HELP** button. The rooms and the
+list of people are behind the **☰** button at the top left.
+
+### What a laptop sees
+
+On its own start screen, **Join a net nearby**: join the net's wifi from the
+wifi list, press **JOIN**, give a name, choose the net found. The briefing
+fills the screen with **I HAVE READ IT, OPEN THE CHANNEL**; after that the
+channel, with the same tabs as the phone.
+
+### Changing the briefing
+
+**Change briefing**, write the new one, **SET THE BRIEFING**. Everybody sees
+it at once, the channel says *set the briefing*, and every name goes back to
+*not read yet* until they press the button again.
+
+### When the net ends
+
+**CLOSE THE NET**. The wifi goes off. Everything said is in `messages.txt`,
+and every sign-in, comms check, briefing read and removed device in
+`sign-ins.txt`, in the received folder.
 
 ---
 
