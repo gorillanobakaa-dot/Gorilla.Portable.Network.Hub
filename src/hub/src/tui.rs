@@ -419,28 +419,29 @@ fn relative_to(root: &Path, full: &Path) -> Option<String> {
 
 /// Copy `from` to `to`, or to `name (2)` and so on when a DIFFERENT file of
 /// that name is already there. The same file (same size) is simply kept.
-/// Returns the name it ended up under, relative to `to`'s folder.
-fn copy_in(from: &Path, to: &Path) -> std::io::Result<String> {
+/// Returns the name it ended up under, relative to `to`'s folder, and
+/// whether anything was actually copied.
+fn copy_in(from: &Path, to: &Path) -> std::io::Result<(String, bool)> {
     let size = from.metadata()?.len();
     let stem = to.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
     let ext = to.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
     let dir = to.parent().map(|p| p.to_path_buf()).unwrap_or_default();
     let mut target = to.to_path_buf();
     let mut n = 1;
-    loop {
+    let copied = loop {
         match target.metadata() {
-            Ok(m) if m.len() == size => break,
+            Ok(m) if m.len() == size => break false,
             Ok(_) => {
                 n += 1;
                 target = dir.join(format!("{stem} ({n}){ext}"));
             }
             Err(_) => {
                 std::fs::copy(from, &target)?;
-                break;
+                break true;
             }
         }
-    }
-    Ok(target.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default())
+    };
+    Ok((target.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default(), copied))
 }
 
 /// The picker's file-type filter: (what the button says, extensions).
@@ -3312,7 +3313,11 @@ impl App {
         let back = if self.add_from_chat { Screen::Sending } else { Screen::Tick { pre: false } };
         let root = PathBuf::from(shellexpand(&self.folder));
         let picked = std::mem::take(&mut self.picked);
+        // Every file ticked (to tick), and the ones that are NEWS: copied
+        // in, or not handed out before. Sending the same file twice says
+        // nothing the second time.
         let mut added: Vec<String> = Vec::new();
+        let mut fresh: Vec<String> = Vec::new();
         let mut failed: Vec<String> = Vec::new();
         for p in &picked {
             let Some(name) = p.file_name().map(|n| n.to_string_lossy().to_string()) else { continue };
@@ -3327,16 +3332,25 @@ impl App {
                         // The tick list names files folder/sub/name with
                         // slashes, as all_files does; the last part may have
                         // been renamed by copy_in.
-                        Ok(dest) => {
+                        Ok((dest, copied)) => {
                             let rel_dir = rel.rsplit_once('/').map(|(d, _)| format!("{d}/")).unwrap_or_default();
-                            added.push(format!("{name}/{rel_dir}{dest}"));
+                            let r = format!("{name}/{rel_dir}{dest}");
+                            if copied {
+                                fresh.push(r.clone());
+                            }
+                            added.push(r);
                         }
                         Err(e) => failed.push(format!("{}: {e}", from.display())),
                     }
                 }
             } else {
                 match copy_in(p, &root.join(&name)) {
-                    Ok(dest) => added.push(dest),
+                    Ok((dest, copied)) => {
+                        if copied {
+                            fresh.push(dest.clone());
+                        }
+                        added.push(dest);
+                    }
                     Err(e) => failed.push(format!("{}: {e}", p.display())),
                 }
             }
@@ -3345,10 +3359,14 @@ impl App {
         self.open_tick(false);
         for t in &mut self.tick {
             if added.iter().any(|a| *a == t.0) {
+                if !t.2 && !fresh.contains(&t.0) {
+                    fresh.push(t.0.clone()); // was there, but not handed out: news too
+                }
                 t.2 = true;
             }
         }
         self.apply_ticks();
+        let added = fresh;
         if !added.is_empty() {
             let op = crate::room::op_nick();
             let shown: Vec<&str> = added.iter().map(|a| a.rsplit('/').next().unwrap_or(a)).take(6).collect();
@@ -3362,6 +3380,8 @@ impl App {
             crate::room::announce(&line);
             serve::note_line(&root, "messages.txt", &line);
             self.tick_said = format!("Sent to the team: {}{more}", shown.join(", "));
+        } else if !picked.is_empty() && failed.is_empty() {
+            self.tick_said = "Already sent: everybody has those.".to_string();
         }
         self.screen = back.clone();
         self.row = 0;
@@ -3389,6 +3409,9 @@ impl App {
         self.net = true;
         self.net_folder = false;
         self.chosen = None;
+        if self.op_name.trim().is_empty() {
+            self.op_name = "ZERO".to_string();
+        }
         self.row = 0;
         self.screen = if self.services_off().is_some_and(|off| !off.is_empty()) { Screen::FixOffer } else { Screen::Open };
     }
@@ -3426,12 +3449,13 @@ impl App {
             self.folder = f.to_string_lossy().into_owned();
             self.chosen = None;
         }
+        // No review screen on the way in: what was ticked in the picker is
+        // what goes out, and a leader with no files has nothing to review.
+        // (The first install showed "Check what the class will see" here:
+        // the owner, 2026-10-06, "it falls back into hand files to the class".)
         self.open_tick(true);
         if !matches!(self.screen, Screen::Tick { .. }) {
             return; // a note is showing instead
-        }
-        if self.net_folder && !self.tick.is_empty() {
-            return; // review what the team will see; START there goes on
         }
         self.apply_ticks();
         self.begin_sending();
@@ -3446,9 +3470,7 @@ impl App {
             return;
         }
         let name = self.op_name.trim();
-        if !name.is_empty() {
-            crate::room::set_op_nick(name);
-        }
+        crate::room::set_op_nick(if name.is_empty() { "ZERO" } else { name });
         let b = self.briefing.trim().to_string();
         if !b.is_empty() {
             crate::room::set_topic(&b);
@@ -4164,6 +4186,7 @@ impl App {
     }
 
     fn begin_sending(&mut self) {
+        crate::room::set_team(self.net);
         let folder = PathBuf::from(shellexpand(&self.folder));
         if !folder.is_dir() {
             self.note(&format!(
@@ -4959,10 +4982,10 @@ mod tests {
         std::fs::create_dir_all(&src).unwrap();
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(src.join("map.pdf"), b"version one").unwrap();
-        assert_eq!(copy_in(&src.join("map.pdf"), &root.join("map.pdf")).unwrap(), "map.pdf");
-        assert_eq!(copy_in(&src.join("map.pdf"), &root.join("map.pdf")).unwrap(), "map.pdf", "the same file again is kept");
+        assert_eq!(copy_in(&src.join("map.pdf"), &root.join("map.pdf")).unwrap(), ("map.pdf".to_string(), true));
+        assert_eq!(copy_in(&src.join("map.pdf"), &root.join("map.pdf")).unwrap(), ("map.pdf".to_string(), false), "the same file again is kept, and is not news");
         std::fs::write(src.join("map.pdf"), b"version two, longer").unwrap();
-        assert_eq!(copy_in(&src.join("map.pdf"), &root.join("map.pdf")).unwrap(), "map (2).pdf");
+        assert_eq!(copy_in(&src.join("map.pdf"), &root.join("map.pdf")).unwrap(), ("map (2).pdf".to_string(), true));
         assert_eq!(std::fs::read(root.join("map.pdf")).unwrap(), b"version one", "the first is untouched");
         assert_eq!(std::fs::read(root.join("map (2).pdf")).unwrap(), b"version two, longer");
     }

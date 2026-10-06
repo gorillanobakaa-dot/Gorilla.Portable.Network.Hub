@@ -30,7 +30,22 @@
 //! removed devices go to sign-ins.txt. In memory everything is forgotten when
 //! the lesson stops.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
+
+/// This lesson was opened as a NET (a team, a camp), not a class: the
+/// operator is ZERO by default, and every page says "net", never "class",
+/// "teacher" or "child". The owner, 2026-10-06: the people this part is for
+/// are NGOs, Red Cross and rescue teams, highly structured organisations.
+static TEAM: AtomicBool = AtomicBool::new(false);
+
+pub fn set_team(on: bool) {
+    TEAM.store(on, Ordering::Relaxed);
+}
+
+pub fn team() -> bool {
+    TEAM.load(Ordering::Relaxed)
+}
 use std::time::{Duration, Instant};
 
 /// A line is a line. Longer thoughts go in two.
@@ -206,7 +221,7 @@ pub fn clear() {
 
 /// What the operator is called on the net.
 pub fn op_nick() -> String {
-    with(|r| if r.op_nick.is_empty() { "Teacher".to_string() } else { r.op_nick.clone() })
+    with(|r| if r.op_nick.is_empty() { if team() { "ZERO".to_string() } else { "Teacher".to_string() } } else { r.op_nick.clone() })
 }
 
 pub fn set_op_nick(nick: &str) -> bool {
@@ -361,7 +376,7 @@ pub fn set_topic(text: &str) {
         for p in &mut r.people {
             p.read.clear();
         }
-        let who = if r.op_nick.is_empty() { "Teacher".to_string() } else { r.op_nick.clone() };
+        let who = if r.op_nick.is_empty() { if team() { "ZERO".to_string() } else { "Teacher".to_string() } } else { r.op_nick.clone() };
         push(r, "", "", LineKind::Event, &format!("{who} set the briefing: {text}"));
     });
     pulse(None);
@@ -572,7 +587,7 @@ pub fn state(v: &Viewer, since: u64, line: u64) -> String {
         };
         let check = r.check.clone();
         let people = r.people.clone();
-        let op = if r.op_nick.is_empty() { "Teacher".to_string() } else { r.op_nick.clone() };
+        let op = if r.op_nick.is_empty() { if team() { "ZERO".to_string() } else { "Teacher".to_string() } } else { r.op_nick.clone() };
         (fresh, r.topic.clone(), r.topic_at.clone(), r.quiet, r.muted.clone(), check, people, op)
     });
     // chat.rs is read after the room's lock is let go: never both at once.

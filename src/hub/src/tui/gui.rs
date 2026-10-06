@@ -1245,7 +1245,10 @@ impl Gui {
     /// The tick list: before starting (`pre`), and during the lesson as the
     /// Files tab, where a tick publishes a file at once.
     fn tick_body(&mut self, ui: &mut egui::Ui, pre: bool) {
-        ui.label(if pre {
+        let net = self.app.net;
+        ui.label(if pre && net {
+            "Everything ticked is what the team will see. Untick anything that should stay private."
+        } else if pre {
             "Everything ticked is what the class will see. Untick anything that should stay private."
         } else {
             "Tick a file and it appears on every device at once; untick it and it goes. A file put in the folder \
@@ -1349,7 +1352,8 @@ impl Gui {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 let n = self.app.tick.iter().filter(|t| t.2).count();
-                if big(ui, &format!("START HANDING OUT ({} files)", count(n)), GREEN).clicked() {
+                let label = if self.app.net { format!("OPEN THE NET ({} files)", count(n)) } else { format!("START HANDING OUT ({} files)", count(n)) };
+                if big(ui, &label, GREEN).clicked() {
                     self.app.row = 0;
                     self.app.tick_key(Key::Enter, pre);
                 }
@@ -1360,7 +1364,7 @@ impl Gui {
             ui.add_space(6.0);
         });
         egui::CentralPanel::default().show(ctx, |ui| {
-            heading(ui, "Check what the class will see");
+            heading(ui, if self.app.net { "Check what the team will see" } else { "Check what the class will see" });
             self.tick_body(ui, pre);
         });
     }
@@ -1420,7 +1424,11 @@ impl Gui {
                         .map(|k| room.people.iter().find(|p| &p.key == k).map(|p| p.nick.clone()).unwrap_or_else(|| k.clone()))
                         .collect();
                     ui.label(
-                        RichText::new(format!("\u{270b} {} ASKED FOR HELP: {}", if help == 1 { "A CHILD" } else { "CHILDREN" }, names.join(", ")))
+                        RichText::new(format!(
+                            "\u{270b} {} ASKED FOR HELP: {}",
+                            if self.app.net { if help == 1 { "SOMEBODY" } else { "PEOPLE" } } else if help == 1 { "A CHILD" } else { "CHILDREN" },
+                            names.join(", ")
+                        ))
                             .size(20.0)
                             .strong()
                             .color(Color32::WHITE),
@@ -1452,7 +1460,7 @@ impl Gui {
                 } else {
                     card(ui, Color32::WHITE, GREEN, |ui| {
                         ui.set_width(ui.available_width());
-                        ui.label(RichText::new(if self.app.cable { "THE OTHER COMPUTER TYPES" } else { "THE CLASS TYPES" }).small().strong().color(GREEN));
+                        ui.label(RichText::new(if self.app.cable { "THE OTHER COMPUTER TYPES" } else if self.app.net { "EVERYBODY TYPES" } else { "THE CLASS TYPES" }).small().strong().color(GREEN));
                         for a in self.app.addresses_to_give().iter().take(2) {
                             let url = if serve::on_port_80() { format!("http://{a}") } else { format!("http://{a}:{}", port()) };
                             ui.label(RichText::new(url).size(18.0).strong());
@@ -1492,7 +1500,7 @@ impl Gui {
                 }
                 ui.add_space(8.0);
                 ui.label(RichText::new("A notice at the top of every phone's page").small().strong());
-                ui.add(egui::TextEdit::singleline(&mut self.notice_draft).hint_text("for example: Open lesson 2").desired_width(f32::INFINITY));
+                ui.add(egui::TextEdit::singleline(&mut self.notice_draft).hint_text(if self.app.net { "for example: Trucks leave at 15:00" } else { "for example: Open lesson 2" }).desired_width(f32::INFINITY));
                 ui.horizontal(|ui| {
                     if plain(ui, "Show it").clicked() {
                         crate::page::set_notice(&self.notice_draft);
@@ -1556,7 +1564,7 @@ impl Gui {
                 }
                 let r = ui
                     .add(egui::TextEdit::singleline(&mut self.nick_draft).desired_width(110.0))
-                    .on_hover_text("Your name in the class chat. Type a new one and press Enter.");
+                    .on_hover_text(if self.app.net { "Your name on the net. Type a new one and press Enter." } else { "Your name in the class chat. Type a new one and press Enter." });
                 if r.lost_focus() && self.nick_draft != op && !crate::room::set_op_nick(&self.nick_draft) {
                     self.nick_draft = op.clone();
                 }
@@ -1638,7 +1646,7 @@ impl Gui {
                                 if sure {
                                     if let Some((ip, name)) = crate::room::remove(&p.key) {
                                         let label = serve::block_device(&ip);
-                                        note_record(&self.app, &format!("{label}  removed from the lesson by @{op} ({name}); paused, the teacher can let them back"));
+                                        note_record(&self.app, &format!("{label}  removed from the {} by @{op} ({name}); paused, @{op} can let them back", if self.app.net { "net" } else { "lesson" }));
                                     }
                                     self.menu_for = None;
                                     self.sure_remove = None;
@@ -1742,7 +1750,7 @@ impl Gui {
                 }
                 let quiet = room.quiet;
                 if ui
-                    .add(egui::Button::new(RichText::new(if quiet { "\u{1f50a} Open the room" } else { "\u{1f507} Quiet the room" }).strong()).min_size(Vec2::new(170.0, 48.0)))
+                    .add(egui::Button::new(RichText::new(if quiet { "\u{1f50a} Open the channel" } else { "\u{1f507} Quiet the channel" }).strong()).min_size(Vec2::new(170.0, 48.0)))
                     .on_hover_text("While the room is quiet only you can write in # main. HELP and private chats still work.")
                     .clicked()
                 {
@@ -1760,7 +1768,7 @@ impl Gui {
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
                     if room.lines.is_empty() {
-                        ui.label(RichText::new("Nothing yet. Say good morning, or call a comms check.").weak());
+                        ui.label(RichText::new(if self.app.net { "Nothing yet. Open the net: say who you are and where, or call a comms check." } else { "Nothing yet. Say good morning, or call a comms check." }).weak());
                     }
                     for l in &room.lines {
                         line_row(ui, &l.at, &l.nick, l.key == "op", l.kind, &l.text, l.key == "op", false);
@@ -1925,8 +1933,12 @@ impl Gui {
 
     fn who(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            heading(ui, "Who is connected");
-            ui.label("Pause a device that misbehaves: it keeps the wifi but loses the class page, the files and the chat, until you let it back.");
+            heading(ui, if self.app.net { "Who is on" } else { "Who is connected" });
+            ui.label(if self.app.net {
+                "Pause a device that misbehaves: it keeps the wifi but loses the net page, the files and the channel, until you let it back."
+            } else {
+                "Pause a device that misbehaves: it keeps the wifi but loses the class page, the files and the chat, until you let it back."
+            });
             ui.add_space(6.0);
             let rows = self.app.class_rows();
             if rows.is_empty() {
@@ -1978,10 +1990,11 @@ impl Gui {
 
     fn work(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            heading(ui, "Work handed in");
+            heading(ui, if self.app.net { "Sent to you" } else { "Work handed in" });
             let root = PathBuf::from(shellexpand(&self.app.folder));
             ui.label(format!(
-                "Work a child sends waits here. Nothing lands in your folder until you accept it. Accepted work goes to {}",
+                "{} Nothing lands in your folder until you accept it. Accepted files go to {}",
+                if self.app.net { "What anybody on the net sends you waits here." } else { "Work a child sends waits here." },
                 crate::page::handed_in_dir(&root).display()
             ));
             ui.add_space(6.0);

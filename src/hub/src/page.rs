@@ -1721,7 +1721,8 @@ pub fn net_page(peer_ip: &str, operator: bool) -> String {
         .collect();
     let help = help_word(l).replace("&middot;", "\u{b7}");
     let boot = format!(
-        "var BOOT={{op:{operator},lang:{},langs:[{}],help:{},T:{words}}};",
+        "var BOOT={{op:{operator},team:{},lang:{},langs:[{}],help:{},T:{words}}};",
+        crate::room::team(),
         crate::room::json_str(l),
         langs.join(","),
         crate::room::json_str(&help)
