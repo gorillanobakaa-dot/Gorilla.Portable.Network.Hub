@@ -25,6 +25,7 @@ mod scratchdir;
 mod term;
 mod dns;
 mod net;
+mod radio;
 mod cable;
 mod dhcp;
 mod tune;
@@ -240,6 +241,9 @@ fn wifi_lines() -> Vec<String> {
             "  wifi adapter   the hub switches Windows' Mobile Hotspot on itself".to_string(),
             "                 when you start handing out (2.4 GHz unless you choose 5)".to_string(),
         ];
+        for r in radio::read() {
+            v.push(format!("  wifi radio     {}: {}  [{}]{}", r.name, r.line(), r.status, if r.carries_hotspot { "  carries the hotspot" } else { "" }));
+        }
         if let Some(card) = net::wifi_card_summary() {
             v.push(format!("  wifi card      {card}"));
         }

@@ -14,6 +14,9 @@ gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
   * FILES IN THE CHANNEL FROM THE WINDOW TOO: Open and Keep under a file
     line for the person in charge; GET IT on a laptop that joined the net.
     The same file sent twice is one file and one line ("Already here").
+  * THE HUB KNOWS ITS RADIO: every wifi radio by what it is (ALFA
+    AWUS036NH, not "802.11n USB Wireless LAN Card"), and which one carries
+    the net, in the status bar, the fix screen and hub doctor.
   * A NET ACCEPTS BY ITSELF: a report lands in the received folder the
     moment it arrives; the waiting area and Accept are a classroom's.
   * A NET IS A NET ON THE PHONE TOO: the name page, the files list, the

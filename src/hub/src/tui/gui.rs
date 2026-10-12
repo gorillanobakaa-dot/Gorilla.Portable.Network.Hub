@@ -586,6 +586,14 @@ impl Gui {
                         ))
                         .small(),
                     );
+                    // The radio the net runs on, by what it is, not what
+                    // Windows calls it (radio.rs): the owner ran a whole
+                    // afternoon on an ALFA long-range adapter that every
+                    // screen called "802.11n USB Wireless LAN Card".
+                    if let Some(line) = crate::radio::carrier_line() {
+                        ui.separator();
+                        ui.label(RichText::new(line).small()).on_hover_text("Which wifi radio carries the net, read from the device's own ids. The WifiRadios tool in Documents says more.");
+                    }
                     if let Some(ch) = net::hotspot_channel() {
                         ui.separator();
                         ui.label(RichText::new(format!("Broadcasting on {}", net::describe_channel(ch))).small());

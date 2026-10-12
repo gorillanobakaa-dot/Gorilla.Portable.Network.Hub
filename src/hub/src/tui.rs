@@ -4388,6 +4388,10 @@ impl App {
             Some(false) => f.push("  Firewall         not opened for the hub yet: others may be blocked"),
             None => {}
         }
+        // What the radios really are, before the driver's words: see radio.rs.
+        for r in crate::radio::snapshot() {
+            f.push(&format!("  Wifi radio       {}: {}  [{}]{}", r.name, r.line(), r.status, if r.carries_hotspot { ", carries the net" } else { "" }));
+        }
         if let Some(card) = net::wifi_card_summary() {
             let measure = f.cols.saturating_sub(21).min(70).max(24);
             for (i, chunk) in wrap(&card, measure).into_iter().enumerate() {
