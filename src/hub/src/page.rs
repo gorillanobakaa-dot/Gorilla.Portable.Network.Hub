@@ -299,7 +299,7 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, 
          button.need{{background:#b3261e;font-size:1.2em;margin-top:10px}}\
          .ok{{background:#e6f4ea;border:2px solid #1a7f37;padding:10px;margin:8px 0}}\
          </style></head><body>\n",
-        t(l, "Class page")
+        tw(l, "Class page", "Net page")
     ));
     // WHO ARE YOU comes before everything else. Thirty identical phones make
     // device models useless to a teacher, so the first thing a device is
@@ -318,12 +318,12 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, 
              style=\"width:100%;font-size:1.2em;margin:8px 0;padding:8px\"><br>\
              <button type=\"submit\">{}</button></form>\n\
              <p class=small>{}</p>\n",
-            t(l, "Welcome to the class page"),
-            t(l, "First, type your name."),
-            t(l, "Use the name your teacher calls you. When you send work, your teacher sees this name on it."),
+            tw(l, "Welcome to the class page", "Join the net"),
+            tw(l, "First, type your name.", "First, type your name or callsign."),
+            tw(l, "Use the name your teacher calls you. When you send work, your teacher sees this name on it.", "The name the net knows you by. Everything you send carries it."),
             html_escape(&current),
             t(l, "THAT'S ME"),
-            t(l, "You only do this once. This page comes from your teacher's laptop through the class wifi. It works with no internet.")
+            tw(l, "You only do this once. This page comes from your teacher's laptop through the class wifi. It works with no internet.", "You only do this once. This page comes from the net's laptop through its wifi. It works with no internet.")
         ));
         s.push_str("</body></html>\n");
         return s;
@@ -331,16 +331,16 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, 
     let me = claimed.unwrap_or_default();
     s.push_str(&format!(
         "<h1>{}</h1>\n<p>{} <a href=\"/?rename=1\">{}</a></p>\n",
-        t(l, "Class page"),
+        tw(l, "Class page", "Net page"),
         tf(l, "You are <b>{name}</b>.", &[("name", &html_escape(&me))]),
         t(l, "Not you? Tap here to change it.")
     ));
     let result = match done {
-        Some("handin") => Some(("done", t(l, "<b>Your work arrived.</b> It is on your teacher's laptop now, waiting for your teacher to accept it. You can send more, or close this page."))),
-        Some("note") => Some(("done", t(l, "<b>Your note arrived.</b> Your teacher can read it on the laptop."))),
-        Some("empty") => Some(("bad", t(l, "<b>Nothing was sent</b>, because no file was chosen. Under \"Send your work\", tap Choose files and pick your work first."))),
-        Some("toobig") => Some(("bad", t(l, "<b>That file is too big to send this way</b> (more than 1 GB). Ask your teacher what to do."))),
-        Some("cantsave") => Some(("bad", t(l, "<b>Your teacher's laptop could not keep it.</b> Nothing is lost: your work is still on your phone. Tell your teacher."))),
+        Some("handin") => Some(("done", tw(l, "<b>Your work arrived.</b> It is on your teacher's laptop now, waiting for your teacher to accept it. You can send more, or close this page.", "<b>Your file arrived.</b> It is on the net's laptop now, waiting to be accepted. You can send more, or close this page."))),
+        Some("note") => Some(("done", tw(l, "<b>Your note arrived.</b> Your teacher can read it on the laptop.", "<b>Your note arrived.</b> It can be read on the net's laptop."))),
+        Some("empty") => Some(("bad", tw(l, "<b>Nothing was sent</b>, because no file was chosen. Under \"Send your work\", tap Choose files and pick your work first.", "<b>Nothing was sent</b>, because no file was chosen. Under \"Send a file\", tap Choose files and pick it first."))),
+        Some("toobig") => Some(("bad", tw(l, "<b>That file is too big to send this way</b> (more than 1 GB). Ask your teacher what to do.", "<b>That file is too big to send this way</b> (more than 1 GB). Ask the person in charge what to do."))),
+        Some("cantsave") => Some(("bad", tw(l, "<b>Your teacher's laptop could not keep it.</b> Nothing is lost: your work is still on your phone. Tell your teacher.", "<b>The net's laptop could not keep it.</b> Nothing is lost: the file is still on your phone. Tell the person in charge."))),
         _ => None,
     };
     if let Some((class, words)) = result {
@@ -349,7 +349,7 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, 
     if !notice.is_empty() {
         s.push_str(&format!(
             "<div class=notice><b>{}</b><br>{}</div>\n",
-            t(l, "From your teacher"),
+            tw(l, "From your teacher", "From the net"),
             linkify(&html_escape(&notice))
         ));
     }
@@ -359,7 +359,7 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, 
     s.push_str(&format!(
         "<h2>1. {}</h2>\n<p class=hint>{}</p>\n<iframe src=\"/files\"></iframe>\n\
          <details><summary>{}</summary><p>{}</p></details>\n",
-        t(l, "Files from your teacher"),
+        tw(l, "Files from your teacher", "Files for the team"),
         t(l, "<b>READ</b> or <b>PLAY</b>: look at it now. <b>GET IT</b>: keep a copy on this phone. Slide the list up and down to see every file; new files appear by themselves."),
         t(l, "Where do the files I GET go?"),
         t(l, "<b>Android:</b> open the <b>Files</b> app (on Samsung: <b>My Files</b>), then <b>Downloads</b>.<br><b>iPhone:</b> open the <b>Files</b> app, then <b>Downloads</b>.<br><b>Any phone:</b> your browser's menu (the three dots) has <b>Downloads</b> too.")
@@ -378,20 +378,20 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, 
              <button type=\"submit\" id=\"sendbtn\">{}</button>\
              <button type=\"reset\" class=\"again\">{}</button>\
              <div id=\"sendmsg\" class=\"bad\" style=\"display:none\"></div></form>\n",
-            t(l, "Send your work to your teacher"),
-            t(l, "Tap <b>Choose files</b> below (some phones say <b>Browse</b>) and pick your work: a photo of your page, a document, a drawing."),
+            tw(l, "Send your work to your teacher", "Send a file to the net"),
+            tw(l, "Tap <b>Choose files</b> below (some phones say <b>Browse</b>) and pick your work: a photo of your page, a document, a drawing.", "Tap <b>Choose files</b> below (some phones say <b>Browse</b>) and pick it: a report, a form, photographs, a zip."),
             t(l, "Check the list. Picked the wrong one? Tap <b>REMOVE</b> next to it."),
-            t(l, "Tap <b>SEND IT TO YOUR TEACHER</b>. Keep this page open until the green box says it arrived."),
-            attr(t(l, "Choose your work first: tap the Choose files button above and pick a file.")),
+            tw(l, "Tap <b>SEND IT TO YOUR TEACHER</b>. Keep this page open until the green box says it arrived.", "Tap <b>SEND IT</b>. Keep this page open until the green box says it arrived."),
+            attr(tw(l, "Choose your work first: tap the Choose files button above and pick a file.", "Choose the file first: tap the Choose files button above and pick it.")),
             attr(t(l, "SENDING... KEEP THIS PAGE OPEN")),
             attr(t(l, "SENDING... {n}% - KEEP THIS PAGE OPEN")),
-            attr(t(l, "SEND IT TO YOUR TEACHER")),
-            attr(t(l, "It did not arrive. Check that this phone is still joined to the class wifi, then tap SEND IT TO YOUR TEACHER again.")),
+            attr(tw(l, "SEND IT TO YOUR TEACHER", "SEND IT")),
+            attr(tw(l, "It did not arrive. Check that this phone is still joined to the class wifi, then tap SEND IT TO YOUR TEACHER again.", "It did not arrive. Check that this phone is still joined to the net's wifi, then tap SEND IT again.")),
             attr(t(l, "REMOVE")),
             attr(t(l, "1 file will be sent.")),
             attr(t(l, "{n} files will be sent.")),
             t(l, "You can pick more than one, and pick again to add more."),
-            t(l, "SEND IT TO YOUR TEACHER"),
+            tw(l, "SEND IT TO YOUR TEACHER", "SEND IT"),
             t(l, "START AGAIN")
         ));
         section += 1;
@@ -440,7 +440,7 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, 
              <a class=\"btn escapealt\" href=\"http://{}/\">{}</a>\
              <br><small>{}</small></details>\n",
             t(l, "Tapping Choose files does nothing?"),
-            t(l, "Then this page is open in the small wifi sign-in window some phones use. That window can show and download files, but it cannot send them. Open the page in your normal browser instead; you stay on the class wifi."),
+            tw(l, "Then this page is open in the small wifi sign-in window some phones use. That window can show and download files, but it cannot send them. Open the page in your normal browser instead; you stay on the class wifi.", "Then this page is open in the small wifi sign-in window some phones use. That window can show and download files, but it cannot send them. Open the page in your normal browser instead; you stay on the net's wifi."),
             t(l, "OPEN THIS IN MY BROWSER"),
             html_escape(here),
             t(l, "or tap here"),
@@ -455,12 +455,22 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, 
     s.push_str(&help_door(peer_ip, section));
     s.push_str(&format!(
         "<p class=small>{}</p>\n",
-        t(l, "This page comes from your teacher's laptop through the class wifi, and works with no internet. If it stops working, check that your phone is still joined to the class wifi, then reload the page.")
+        tw(l, "This page comes from your teacher's laptop through the class wifi, and works with no internet. If it stops working, check that your phone is still joined to the class wifi, then reload the page.", "This page comes from the net's laptop through its wifi, and works with no internet. If it stops working, check that your phone is still joined to the net's wifi, then reload the page.")
     ));
     s.push_str(&lang_picker(l, ""));
     let _ = root;
     s.push_str("</body></html>\n");
     s
+}
+
+/// A sentence for a class, or its counterpart for a net: a team of adults
+/// who are not pupils and have no teacher. The owner, 2026-10-12, as a
+/// member joining a net from a phone: "Welcome to the class page", "the
+/// name your teacher calls you". A command hub for a rescue team has
+/// nothing to do with a school yard. Both sentences go through the table,
+/// so a French or Swahili team gets its own words too.
+fn tw(l: &str, class: &'static str, team: &'static str) -> &'static str {
+    if crate::room::team() { t(l, team) } else { t(l, class) }
 }
 
 /// A translated sentence inside an HTML attribute.
@@ -498,15 +508,15 @@ pub fn talk_fragment(key: &str, private: bool) -> String {
             if private {
                 t(l, "Nothing here yet. Only you and the trusted adult can see this.")
             } else {
-                t(l, "No messages yet. Write to your teacher below.")
+                tw(l, "No messages yet. Write to your teacher below.", "No messages yet. Write to the person in charge below.")
             }
         ));
     }
-    let adult = if private { t(l, "Trusted adult") } else { t(l, "Teacher") };
+    let adult = if private { t(l, "Trusted adult") } else { tw(l, "Teacher", "In charge") };
     for m in &msgs {
         let (class, who) = if m.from_child { ("me", t(l, "You")) } else { ("them", adult) };
         let seen = if m.from_child && m.seen {
-            format!(" &middot; {}", if private { t(l, "read") } else { t(l, "seen by your teacher") })
+            format!(" &middot; {}", if private { t(l, "read") } else { tw(l, "seen by your teacher", "seen on the laptop") })
         } else {
             String::new()
         };
@@ -585,8 +595,8 @@ pub fn talk_section(peer_ip: &str, section: usize) -> String {
          <button type=\"submit\" class=need>&#9995; {}</button></form>\n\
          <p class=hint>{}</p>\n\
          <div id=talkok class=ok style=\"display:none\" data-sent=\"{}\"></div>\n{TALK_SCRIPT}",
-        t(l, "Talk to your teacher"),
-        t(l, "Write a question or a message. Your teacher reads it on the laptop and can answer you here. New answers appear by themselves."),
+        tw(l, "Talk to your teacher", "Talk to the person in charge"),
+        tw(l, "Write a question or a message. Your teacher reads it on the laptop and can answer you here. New answers appear by themselves.", "Write a question or a message. It is read on the net's laptop and answered here. New answers appear by themselves."),
         talk_fragment(&key, false),
         fresh_token(),
         attr(t(l, "Type your message here")),
@@ -594,8 +604,8 @@ pub fn talk_section(peer_ip: &str, section: usize) -> String {
         talk_msg_line(l),
         fresh_token(),
         help_word(l),
-        t(l, "Need help? One tap is enough. Only your teacher sees it."),
-        attr(t(l, "Sent. Your teacher will find a safe moment to talk to you."))
+        tw(l, "Need help? One tap is enough. Only your teacher sees it.", "Need help? One tap is enough. Only the person in charge sees it."),
+        attr(tw(l, "Sent. Your teacher will find a safe moment to talk to you.", "Sent. Only the person in charge sees it; they will come to you."))
     )
 }
 
@@ -657,7 +667,7 @@ pub fn help_page(peer_ip: &str) -> String {
          </style></head><body>\n\
          <a class=hide href=\"/\" onclick=\"location.replace('/');return false;\">{} {}</a>\n\
          <h1>{}</h1>\n<p class=hint>{}</p>\n",
-        t(l, "Class page"),
+        tw(l, "Class page", "Net page"),
         if crate::i18n::rtl(l) { "&#8594;" } else { "&#8592;" },
         t(l, "HIDE THIS (back to the files)"),
         t(l, "Talk privately"),
@@ -761,14 +771,14 @@ pub fn files_frame(root: &Path, l: &str) -> String {
     if !root.exists() {
         s.push_str(&format!(
             "<p>{}</p>\n",
-            t(l, "<b>The folder cannot be reached right now.</b> If the files live on a USB drive, it may have been unplugged. Tell your teacher.")
+            tw(l, "<b>The folder cannot be reached right now.</b> If the files live on a USB drive, it may have been unplugged. Tell your teacher.", "<b>The folder cannot be reached right now.</b> If the files live on a USB drive, it may have been unplugged. Tell the person in charge.")
         ));
     }
     let files = serve::visible_files(root);
     if files.is_empty() && root.exists() {
         s.push_str(&format!(
             "<p>{}</p>\n",
-            t(l, "Your teacher is not sharing any files yet. Just wait: this list checks again every 10 seconds by itself.")
+            tw(l, "Your teacher is not sharing any files yet. Just wait: this list checks again every 10 seconds by itself.", "No files for the team yet. Just wait: this list checks again every 10 seconds by itself.")
         ));
     }
     // The one button a browser CAN take a whole folder with. A browser
@@ -837,9 +847,9 @@ pub fn paused_page(l: &str) -> String {
         crate::i18n::html_open(l),
         t(l, "Paused"),
         t(l, "Paused"),
-        t(l, "Your teacher has paused this device."),
-        t(l, "You cannot get the class files or hand anything in right now. Nothing you send will arrive."),
-        t(l, "Speak to your teacher. When they let you back in, this page comes back by itself. You do not need to do anything.")
+        tw(l, "Your teacher has paused this device.", "This device has been taken off the net."),
+        tw(l, "You cannot get the class files or hand anything in right now. Nothing you send will arrive.", "You cannot get the net's files or send anything right now. Nothing you send will arrive."),
+        tw(l, "Speak to your teacher. When they let you back in, this page comes back by itself. You do not need to do anything.", "Speak to the person in charge. When they let you back in, this page comes back by itself. You do not need to do anything.")
     )
 }
 
@@ -1714,6 +1724,19 @@ pub const NET_WORDS: &[&str] = &[
     "Sent. Your teacher will find a safe moment to talk to you.",
     "GET IT", "Send a file to your teacher", "Sent to your teacher", "Sending", "Too big. The limit is 1 GB.",
     "The laptop could not save it. Tell the person in charge.", "Nothing was chosen.", "Or tap the paperclip next to SEND in # main.",
+    // the net's words for the same places ({name} is the operator's name)
+    "Files from {name}. READ opens one here, GET IT keeps a copy on your phone.", "Only you and {name} see this chat.",
+    "Open the channel", "Quiet the channel", "Press Send files to the team on the laptop, or put files in the team's folder, and they appear here for everybody.",
+    "Or tap the paperclip next to SEND: in # main the whole channel gets it, in your private chat only {name} does.",
+    "Send a file to {name}", "Sent to {name}", "Sent. Only {name} sees it; they will come to you.",
+    "{name} is talking. You can write again when they open the channel. HELP still works.",
+    "{name} is checking who can hear. Tap to answer.", "{name} muted you in this channel. HELP and your private chat still work.",
+    "{name} wrote to you",
+    // the wifi sign-in window
+    "This is the phone's wifi sign-in window. Talking and HELP work here. Sending files needs your browser.",
+    "or tap here",
+    "LATER", "OPEN THIS IN MY BROWSER", "If neither opens your browser: tap the three dots at the top of this window and choose \"Open in browser\" or \"Use this network as is\".",
+    "Sent to the channel: {name}. Everybody can get it.",
 ];
 
 /// The class net page (net.html) for one device: a child's, or the
@@ -1791,6 +1814,57 @@ mod tests {
             body.len()
         );
         (headers, body)
+    }
+
+    /// A net's phone pages say nothing of class, teacher, lesson or child:
+    /// the name page, the signed-in page with every result box, the files
+    /// list and the paused page. The HTML attribute "class" is not a word.
+    #[test]
+    fn a_nets_pages_say_nothing_of_the_school_yard() {
+        let _g = crate::serve::SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _r = crate::room::tests::LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::room::set_team(true);
+        let dir = crate::scratchdir::scratch("net-words");
+        let _ = std::fs::create_dir_all(&dir);
+        let ip = "10.42.0.77";
+        serve::forget_claim(ip);
+        let mut pages = vec![("name page", class_page(&dir, None, ip, false, "10.42.0.1"))];
+        serve::set_claimed_name(ip, "Muie");
+        for done in [None, Some("handin"), Some("note"), Some("empty"), Some("toobig"), Some("cantsave")] {
+            pages.push((done.unwrap_or("signed in"), class_page(&dir, done, ip, false, "10.42.0.1")));
+        }
+        pages.push(("files", files_frame(&dir, "en")));
+        pages.push(("paused", paused_page("en")));
+        pages.push(("net page", net_page(ip, false)));
+        serve::forget_claim(ip);
+        crate::room::set_team(false);
+        let forbidden = ["teacher", "lesson", "child", "homework", "pupil", "class page", "class wifi", "the class", "your work"];
+        for (what, html) in &pages {
+            // visible words only: tags and their attributes (class=...) are not
+            // words, and neither is the page's script, which carries both
+            // vocabularies and picks one at run time
+            let mut html = html.clone();
+            for (open, close) in [("<script", "</script>"), ("<style", "</style>")] {
+                while let Some(a) = html.find(open) {
+                    let b = html[a..].find(close).map(|b| a + b + close.len()).unwrap_or(html.len());
+                    html.replace_range(a..b, "");
+                }
+            }
+            let mut text = String::new();
+            let mut in_tag = false;
+            for c in html.chars() {
+                match c {
+                    '<' => in_tag = true,
+                    '>' => in_tag = false,
+                    c if !in_tag => text.push(c),
+                    _ => {}
+                }
+            }
+            let low = text.to_lowercase();
+            for w in forbidden {
+                assert!(!low.contains(w), "{what}: a net's page says \"{w}\":\n{text}");
+            }
+        }
     }
 
     fn upload(dir: &Path, peer: &str, filename: &str, content: &[u8]) -> UploadOutcome {

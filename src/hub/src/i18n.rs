@@ -794,6 +794,213 @@ pub const TABLE: &[(&str, [&str; 5])] = &[
         "فرستاده نشد. شاید وای‌فای قطع شده باشد. دوباره امتحان کنید.",
         "ونه لیږل شو. کېدای شي وای فای پرې شوی وي. بیا هڅه وکړئ.",
     ]),
+    // ---- a NET (a team of adults, no teacher): the same places in team words.
+    // {name} is the person in charge (ZERO unless renamed). AI DRAFTS, 2026-10-12,
+    // unchecked by native speakers, like everything above.
+    ("Net page", ["Page du réseau", "Ukurasa wa mtandao", "Página da rede", "صفحهٔ شبکه", "د شبکې پاڼه"]),
+    ("Join the net", ["Rejoindre le réseau", "Jiunge na mtandao", "Entrar na rede", "به شبکه بپیوندید", "شبکې سره یوځای شئ"]),
+    ("First, type your name or callsign.", ["D'abord, tape ton nom ou ton indicatif.", "Kwanza, andika jina lako au jina la mawasiliano.", "Primeiro, escreve o teu nome ou indicativo.", "اول نام یا نشانهٔ تماس خود را بنویسید.", "لومړی خپل نوم یا د اړیکې نښه ولیکئ."]),
+    ("The name the net knows you by. Everything you send carries it.", [
+        "Le nom sous lequel le réseau te connaît. Tout ce que tu envoies le porte.",
+        "Jina ambalo mtandao unakujua nalo. Kila unachotuma kinabeba jina hilo.",
+        "O nome pelo qual a rede te conhece. Tudo o que envias leva-o.",
+        "نامی که شبکه شما را با آن می‌شناسد. هر چه بفرستید این نام را دارد.",
+        "هغه نوم چې شبکه تاسو پرې پېژني. هر څه چې لیږئ دا نوم لري.",
+    ]),
+    ("You only do this once. This page comes from the net's laptop through its wifi. It works with no internet.", [
+        "Tu ne le fais qu'une fois. Cette page vient de l'ordinateur du réseau par son wifi. Ça marche sans internet.",
+        "Unafanya hivi mara moja tu. Ukurasa huu unatoka kwenye kompyuta ya mtandao kupitia wifi yake. Unafanya kazi bila intaneti.",
+        "Só fazes isto uma vez. Esta página vem do computador da rede pelo seu wifi. Funciona sem internet.",
+        "فقط یک بار این کار را می‌کنید. این صفحه از لپ‌تاپ شبکه از طریق وای‌فای آن می‌آید. بدون انترنت کار می‌کند.",
+        "دا یوازې یو ځل کوئ. دا پاڼه د شبکې له لپ ټاپ څخه د هغې د وای فای له لارې راځي. له انټرنېټ پرته کار کوي.",
+    ]),
+    ("<b>Your file arrived.</b> It is on the net's laptop now, waiting to be accepted. You can send more, or close this page.", [
+        "<b>Ton fichier est arrivé.</b> Il est sur l'ordinateur du réseau, en attente d'acceptation. Tu peux en envoyer d'autres ou fermer cette page.",
+        "<b>Faili yako imefika.</b> Iko kwenye kompyuta ya mtandao sasa, ikisubiri kukubaliwa. Unaweza kutuma zaidi, au kufunga ukurasa huu.",
+        "<b>O teu ficheiro chegou.</b> Está no computador da rede, à espera de ser aceite. Podes enviar mais, ou fechar esta página.",
+        "<b>فایل شما رسید.</b> حالا روی لپ‌تاپ شبکه است و منتظر پذیرش. می‌توانید بیشتر بفرستید یا این صفحه را ببندید.",
+        "<b>ستاسو فایل ورسېد.</b> اوس د شبکې په لپ ټاپ کې دی او د منلو په تمه دی. نور هم لیږلی شئ، یا دا پاڼه وتړئ.",
+    ]),
+    ("<b>Your note arrived.</b> It can be read on the net's laptop.", [
+        "<b>Ta note est arrivée.</b> Elle peut être lue sur l'ordinateur du réseau.",
+        "<b>Ujumbe wako umefika.</b> Unaweza kusomwa kwenye kompyuta ya mtandao.",
+        "<b>A tua nota chegou.</b> Pode ser lida no computador da rede.",
+        "<b>یادداشت شما رسید.</b> روی لپ‌تاپ شبکه خوانده می‌شود.",
+        "<b>ستاسو یادښت ورسېد.</b> د شبکې په لپ ټاپ کې لوستل کېدای شي.",
+    ]),
+    ("<b>Nothing was sent</b>, because no file was chosen. Under \"Send a file\", tap Choose files and pick it first.", [
+        "<b>Rien n'a été envoyé</b>, car aucun fichier n'a été choisi. Sous « Envoyer un fichier », touche Choisir des fichiers et choisis-le d'abord.",
+        "<b>Hakuna kilichotumwa</b>, kwa sababu hakuna faili iliyochaguliwa. Chini ya \"Tuma faili\", gusa Chagua faili na uichague kwanza.",
+        "<b>Nada foi enviado</b>, porque nenhum ficheiro foi escolhido. Em \"Enviar um ficheiro\", toca em Escolher ficheiros e escolhe-o primeiro.",
+        "<b>چیزی فرستاده نشد</b>، چون فایلی انتخاب نشده بود. زیر «فرستادن فایل» روی «انتخاب فایل‌ها» بزنید و اول آن را انتخاب کنید.",
+        "<b>هیڅ شی ونه لیږل شو</b>، ځکه چې فایل نه و ټاکل شوی. د «فایل لیږل» لاندې «فایلونه وټاکئ» ټک کړئ او لومړی یې وټاکئ.",
+    ]),
+    ("<b>That file is too big to send this way</b> (more than 1 GB). Ask the person in charge what to do.", [
+        "<b>Ce fichier est trop gros pour être envoyé ainsi</b> (plus de 1 Go). Demande au responsable quoi faire.",
+        "<b>Faili hiyo ni kubwa mno kutumwa hivi</b> (zaidi ya GB 1). Muulize mhusika ufanye nini.",
+        "<b>Esse ficheiro é demasiado grande para enviar assim</b> (mais de 1 GB). Pergunta ao responsável o que fazer.",
+        "<b>این فایل برای فرستادن از این راه خیلی بزرگ است</b> (بیش از ۱ گیگابایت). از مسئول بپرسید چه کنید.",
+        "<b>دا فایل د دې لارې لپاره ډیر لوی دی</b> (له ۱ ګیګابایټ زیات). له مسؤل څخه وپوښتئ چې څه وکړئ.",
+    ]),
+    ("<b>The net's laptop could not keep it.</b> Nothing is lost: the file is still on your phone. Tell the person in charge.", [
+        "<b>L'ordinateur du réseau n'a pas pu le garder.</b> Rien n'est perdu : le fichier est toujours sur ton téléphone. Préviens le responsable.",
+        "<b>Kompyuta ya mtandao haikuweza kuihifadhi.</b> Hakuna kilichopotea: faili bado iko kwenye simu yako. Mwambie mhusika.",
+        "<b>O computador da rede não conseguiu guardá-lo.</b> Nada se perdeu: o ficheiro ainda está no teu telemóvel. Avisa o responsável.",
+        "<b>لپ‌تاپ شبکه نتوانست آن را نگه دارد.</b> چیزی از دست نرفته: فایل هنوز روی تلفن شماست. به مسئول بگویید.",
+        "<b>د شبکې لپ ټاپ ونه شو کولی ویې ساتي.</b> هیڅ شی نه دی ورک شوی: فایل لا هم ستاسو په تلیفون کې دی. مسؤل ته ووایاست.",
+    ]),
+    ("From the net", ["Du réseau", "Kutoka mtandaoni", "Da rede", "از شبکه", "له شبکې"]),
+    ("Files for the team", ["Fichiers pour l'équipe", "Faili za timu", "Ficheiros para a equipa", "فایل‌ها برای تیم", "د ټیم لپاره فایلونه"]),
+    ("Send a file to the net", ["Envoyer un fichier au réseau", "Tuma faili kwa mtandao", "Enviar um ficheiro para a rede", "فرستادن فایل به شبکه", "شبکې ته فایل ولیږئ"]),
+    ("Tap <b>Choose files</b> below (some phones say <b>Browse</b>) and pick it: a report, a form, photographs, a zip.", [
+        "Touche <b>Choisir des fichiers</b> ci-dessous (certains téléphones disent <b>Parcourir</b>) et choisis-le : un rapport, un formulaire, des photos, un zip.",
+        "Gusa <b>Chagua faili</b> hapa chini (simu zingine zinasema <b>Vinjari</b>) na uichague: ripoti, fomu, picha, zip.",
+        "Toca em <b>Escolher ficheiros</b> abaixo (alguns telemóveis dizem <b>Procurar</b>) e escolhe-o: um relatório, um formulário, fotografias, um zip.",
+        "در پایین روی <b>انتخاب فایل‌ها</b> بزنید (بعضی تلفن‌ها می‌گویند <b>مرور</b>) و آن را انتخاب کنید: گزارش، فورم، عکس، زیپ.",
+        "لاندې <b>فایلونه وټاکئ</b> ټک کړئ (ځینې تلیفونونه <b>لټول</b> وایي) او ویې ټاکئ: راپور، فورمه، عکسونه، زیپ.",
+    ]),
+    ("Tap <b>SEND IT</b>. Keep this page open until the green box says it arrived.", [
+        "Touche <b>ENVOYER</b>. Garde cette page ouverte jusqu'à ce que la case verte dise qu'il est arrivé.",
+        "Gusa <b>TUMA</b>. Acha ukurasa huu wazi hadi kisanduku cha kijani kiseme imefika.",
+        "Toca em <b>ENVIAR</b>. Mantém esta página aberta até a caixa verde dizer que chegou.",
+        "روی <b>بفرست</b> بزنید. این صفحه را باز نگه دارید تا کادر سبز بگوید رسید.",
+        "<b>ولیږئ</b> ټک کړئ. دا پاڼه خلاصه وساتئ تر هغه چې شنه بکس ووایي ورسېد.",
+    ]),
+    ("Choose the file first: tap the Choose files button above and pick it.", [
+        "Choisis d'abord le fichier : touche le bouton Choisir des fichiers ci-dessus et choisis-le.",
+        "Chagua faili kwanza: gusa kitufe cha Chagua faili hapo juu na uichague.",
+        "Escolhe o ficheiro primeiro: toca no botão Escolher ficheiros acima e escolhe-o.",
+        "اول فایل را انتخاب کنید: روی دکمهٔ «انتخاب فایل‌ها» در بالا بزنید و آن را انتخاب کنید.",
+        "لومړی فایل وټاکئ: پورته د «فایلونه وټاکئ» تڼۍ ټک کړئ او ویې ټاکئ.",
+    ]),
+    ("SEND IT", ["ENVOYER", "TUMA", "ENVIAR", "بفرست", "ولیږئ"]),
+    ("It did not arrive. Check that this phone is still joined to the net's wifi, then tap SEND IT again.", [
+        "Il n'est pas arrivé. Vérifie que ce téléphone est toujours connecté au wifi du réseau, puis touche ENVOYER à nouveau.",
+        "Haikufika. Hakikisha simu hii bado imeunganishwa na wifi ya mtandao, kisha gusa TUMA tena.",
+        "Não chegou. Confirma que este telemóvel ainda está ligado ao wifi da rede, depois toca em ENVIAR outra vez.",
+        "نرسید. بررسی کنید این تلفن هنوز به وای‌فای شبکه وصل است، بعد دوباره روی «بفرست» بزنید.",
+        "ونه رسېد. وګورئ چې دا تلیفون لا هم د شبکې له وای فای سره وصل دی، بیا «ولیږئ» بیا ټک کړئ.",
+    ]),
+    ("Then this page is open in the small wifi sign-in window some phones use. That window can show and download files, but it cannot send them. Open the page in your normal browser instead; you stay on the net's wifi.", [
+        "Alors cette page est ouverte dans la petite fenêtre de connexion wifi de certains téléphones. Cette fenêtre peut afficher et télécharger des fichiers, mais pas les envoyer. Ouvre la page dans ton navigateur habituel ; tu restes sur le wifi du réseau.",
+        "Basi ukurasa huu umefunguliwa kwenye dirisha dogo la kuingia wifi ambalo simu zingine hutumia. Dirisha hilo linaweza kuonyesha na kupakua faili, lakini haliwezi kuzituma. Fungua ukurasa kwenye kivinjari chako cha kawaida; unabaki kwenye wifi ya mtandao.",
+        "Então esta página está aberta na pequena janela de início de sessão wifi que alguns telemóveis usam. Essa janela mostra e descarrega ficheiros, mas não os envia. Abre a página no teu navegador normal; continuas no wifi da rede.",
+        "پس این صفحه در پنجرهٔ کوچک ورود به وای‌فای باز است که بعضی تلفن‌ها دارند. آن پنجره فایل‌ها را نشان می‌دهد و دانلود می‌کند، اما نمی‌تواند بفرستد. صفحه را در مرورگر عادی خود باز کنید؛ روی وای‌فای شبکه می‌مانید.",
+        "نو دا پاڼه د وای فای د ننوتلو په کوچنۍ کړکۍ کې خلاصه ده چې ځینې تلیفونونه یې کاروي. هغه کړکۍ فایلونه ښودلی او ډاونلوډ کولی شي، خو لیږلی یې نه شي. پاڼه په خپل عادي براوزر کې خلاصه کړئ؛ د شبکې په وای فای پاتې کېږئ.",
+    ]),
+    ("This page comes from the net's laptop through its wifi, and works with no internet. If it stops working, check that your phone is still joined to the net's wifi, then reload the page.", [
+        "Cette page vient de l'ordinateur du réseau par son wifi et marche sans internet. Si elle s'arrête, vérifie que ton téléphone est toujours connecté au wifi du réseau, puis recharge la page.",
+        "Ukurasa huu unatoka kwenye kompyuta ya mtandao kupitia wifi yake, na unafanya kazi bila intaneti. Ukiacha kufanya kazi, hakikisha simu yako bado imeunganishwa na wifi ya mtandao, kisha upakie ukurasa upya.",
+        "Esta página vem do computador da rede pelo seu wifi e funciona sem internet. Se deixar de funcionar, confirma que o teu telemóvel ainda está ligado ao wifi da rede e recarrega a página.",
+        "این صفحه از لپ‌تاپ شبکه از طریق وای‌فای آن می‌آید و بدون انترنت کار می‌کند. اگر کار نکرد، بررسی کنید تلفن شما هنوز به وای‌فای شبکه وصل است، بعد صفحه را دوباره بارگذاری کنید.",
+        "دا پاڼه د شبکې له لپ ټاپ څخه د هغې د وای فای له لارې راځي او له انټرنېټ پرته کار کوي. که ودرېږي، وګورئ چې ستاسو تلیفون لا هم د شبکې له وای فای سره وصل دی، بیا پاڼه بیا راوړئ.",
+    ]),
+    ("Talk to the person in charge", ["Parler au responsable", "Ongea na mhusika", "Falar com o responsável", "با مسئول صحبت کنید", "له مسؤل سره خبرې وکړئ"]),
+    ("Write a question or a message. It is read on the net's laptop and answered here. New answers appear by themselves.", [
+        "Écris une question ou un message. Il est lu sur l'ordinateur du réseau et la réponse arrive ici. Les nouvelles réponses apparaissent d'elles-mêmes.",
+        "Andika swali au ujumbe. Unasomwa kwenye kompyuta ya mtandao na kujibiwa hapa. Majibu mapya yanaonekana yenyewe.",
+        "Escreve uma pergunta ou uma mensagem. É lida no computador da rede e respondida aqui. As novas respostas aparecem sozinhas.",
+        "یک پرسش یا پیام بنویسید. روی لپ‌تاپ شبکه خوانده و اینجا پاسخ داده می‌شود. پاسخ‌های تازه خودبه‌خود ظاهر می‌شوند.",
+        "یوه پوښتنه یا پیغام ولیکئ. د شبکې په لپ ټاپ کې لوستل کېږي او دلته ځواب ورکول کېږي. نوي ځوابونه پخپله ښکاري.",
+    ]),
+    ("Need help? One tap is enough. Only the person in charge sees it.", [
+        "Besoin d'aide ? Un seul appui suffit. Seul le responsable le voit.",
+        "Unahitaji msaada? Kugusa mara moja kunatosha. Mhusika pekee ndiye anayeona.",
+        "Precisas de ajuda? Um toque chega. Só o responsável o vê.",
+        "کمک لازم دارید؟ یک ضربه کافی است. فقط مسئول آن را می‌بیند.",
+        "مرستې ته اړتیا لرئ؟ یو ټک بس دی. یوازې مسؤل یې ویني.",
+    ]),
+    ("Sent. Only the person in charge sees it; they will come to you.", [
+        "Envoyé. Seul le responsable le voit ; il viendra te voir.",
+        "Imetumwa. Mhusika pekee ndiye anayeona; atakuja kwako.",
+        "Enviado. Só o responsável o vê; ele virá ter contigo.",
+        "فرستاده شد. فقط مسئول آن را می‌بیند؛ نزد شما می‌آید.",
+        "ولیږل شو. یوازې مسؤل یې ویني؛ تاسو ته به راشي.",
+    ]),
+    ("No messages yet. Write to the person in charge below.", ["Pas encore de message. Écris au responsable ci-dessous.", "Hakuna ujumbe bado. Mwandikie mhusika hapa chini.", "Ainda sem mensagens. Escreve ao responsável abaixo.", "هنوز پیامی نیست. در پایین برای مسئول بنویسید.", "تر اوسه پیغام نشته. لاندې مسؤل ته ولیکئ."]),
+    ("In charge", ["Responsable", "Mhusika", "Responsável", "مسئول", "مسؤل"]),
+    ("seen on the laptop", ["vu sur l'ordinateur", "imeonekana kwenye kompyuta", "visto no computador", "روی لپ‌تاپ دیده شد", "په لپ ټاپ کې ولیدل شو"]),
+    ("<b>The folder cannot be reached right now.</b> If the files live on a USB drive, it may have been unplugged. Tell the person in charge.", [
+        "<b>Le dossier est inaccessible pour le moment.</b> Si les fichiers sont sur une clé USB, elle a peut-être été débranchée. Préviens le responsable.",
+        "<b>Folda haipatikani sasa hivi.</b> Ikiwa faili ziko kwenye USB, huenda imechomolewa. Mwambie mhusika.",
+        "<b>A pasta não está acessível agora.</b> Se os ficheiros estão numa pen USB, pode ter sido desligada. Avisa o responsável.",
+        "<b>پوشه فعلاً در دسترس نیست.</b> اگر فایل‌ها روی یو‌اس‌بی هستند، شاید جدا شده باشد. به مسئول بگویید.",
+        "<b>فولډر اوس نه شي رسېدلی.</b> که فایلونه په USB کې وي، شاید ایستل شوی وي. مسؤل ته ووایاست.",
+    ]),
+    ("No files for the team yet. Just wait: this list checks again every 10 seconds by itself.", [
+        "Pas encore de fichiers pour l'équipe. Attends : cette liste se vérifie toute seule toutes les 10 secondes.",
+        "Hakuna faili za timu bado. Subiri tu: orodha hii inajiangalia tena kila sekunde 10 yenyewe.",
+        "Ainda sem ficheiros para a equipa. Espera: esta lista verifica-se sozinha a cada 10 segundos.",
+        "هنوز فایلی برای تیم نیست. فقط صبر کنید: این فهرست هر ۱۰ ثانیه خودبه‌خود دوباره بررسی می‌شود.",
+        "تر اوسه د ټیم لپاره فایلونه نشته. یوازې انتظار وکړئ: دا لیست هر ۱۰ ثانیې پخپله بیا ګوري.",
+    ]),
+    ("This device has been taken off the net.", ["Cet appareil a été retiré du réseau.", "Kifaa hiki kimeondolewa kwenye mtandao.", "Este aparelho foi retirado da rede.", "این دستگاه از شبکه خارج شده است.", "دا وسیله له شبکې لرې شوې ده."]),
+    ("You cannot get the net's files or send anything right now. Nothing you send will arrive.", [
+        "Tu ne peux pas prendre les fichiers du réseau ni rien envoyer pour l'instant. Rien de ce que tu envoies n'arrivera.",
+        "Huwezi kupata faili za mtandao wala kutuma chochote sasa hivi. Hakuna unachotuma kitakachofika.",
+        "Não podes obter os ficheiros da rede nem enviar nada agora. Nada do que envias chegará.",
+        "فعلاً نمی‌توانید فایل‌های شبکه را بگیرید یا چیزی بفرستید. هیچ چیزی که بفرستید نمی‌رسد.",
+        "اوس د شبکې فایلونه نه شئ اخیستلی او نه څه لیږلی شئ. هر څه چې ولیږئ نه رسېږي.",
+    ]),
+    ("Speak to the person in charge. When they let you back in, this page comes back by itself. You do not need to do anything.", [
+        "Parle au responsable. Quand il te laisse revenir, cette page revient d'elle-même. Tu n'as rien à faire.",
+        "Ongea na mhusika. Akikurudisha, ukurasa huu unarudi wenyewe. Huhitaji kufanya chochote.",
+        "Fala com o responsável. Quando te deixar voltar, esta página volta sozinha. Não precisas de fazer nada.",
+        "با مسئول صحبت کنید. وقتی شما را برگرداند، این صفحه خودبه‌خود برمی‌گردد. لازم نیست کاری بکنید.",
+        "له مسؤل سره خبرې وکړئ. کله چې بېرته پرېږدي، دا پاڼه پخپله راځي. تاسو څه کولو ته اړتیا نه لرئ.",
+    ]),
+    // the chat page's net words ({name} = the person in charge)
+    ("Files from {name}. READ opens one here, GET IT keeps a copy on your phone.", [
+        "Fichiers de {name}. LIRE en ouvre un ici, PRENDRE en garde une copie sur ton téléphone.",
+        "Faili kutoka kwa {name}. SOMA inafungua moja hapa, IPATE inaweka nakala kwenye simu yako.",
+        "Ficheiros de {name}. LER abre um aqui, GUARDAR guarda uma cópia no teu telemóvel.",
+        "فایل‌ها از {name}. «خواندن» اینجا باز می‌کند، «گرفتن» یک نسخه در تلفن شما نگه می‌دارد.",
+        "د {name} فایلونه. «لوستل» دلته پرانیزي، «اخیستل» یوه کاپي ستاسو په تلیفون کې ساتي.",
+    ]),
+    ("Only you and {name} see this chat.", ["Seuls toi et {name} voyez cette discussion.", "Wewe na {name} pekee mnaona mazungumzo haya.", "Só tu e {name} veem esta conversa.", "فقط شما و {name} این گفتگو را می‌بینید.", "یوازې تاسو او {name} دا خبرې وینئ."]),
+    ("Open the channel", ["Ouvrir le canal", "Fungua chaneli", "Abrir o canal", "کانال را باز کن", "چینل پرانیزه"]),
+    ("Quiet the channel", ["Silence sur le canal", "Nyamazisha chaneli", "Silenciar o canal", "کانال را ساکت کن", "چینل چوپ کړه"]),
+    ("Press Send files to the team on the laptop, or put files in the team's folder, and they appear here for everybody.", [
+        "Appuie sur Envoyer des fichiers à l'équipe sur l'ordinateur, ou mets des fichiers dans le dossier de l'équipe, et ils apparaissent ici pour tout le monde.",
+        "Bonyeza Tuma faili kwa timu kwenye kompyuta, au weka faili kwenye folda ya timu, na zinaonekana hapa kwa kila mtu.",
+        "Carrega em Enviar ficheiros para a equipa no computador, ou põe ficheiros na pasta da equipa, e aparecem aqui para todos.",
+        "روی لپ‌تاپ «فرستادن فایل به تیم» را بزنید، یا فایل‌ها را در پوشهٔ تیم بگذارید، و اینجا برای همه ظاهر می‌شوند.",
+        "په لپ ټاپ کې «ټیم ته فایلونه ولیږئ» کېکاږئ، یا فایلونه د ټیم په فولډر کې کېږدئ، او دلته د ټولو لپاره ښکاري.",
+    ]),
+    ("Or tap the paperclip next to SEND: in # main the whole channel gets it, in your private chat only {name} does.", [
+        "Ou touche le trombone à côté de ENVOYER : dans # main tout le canal le reçoit, dans ta discussion privée seulement {name}.",
+        "Au gusa kipini karibu na TUMA: katika # main chaneli nzima inaipata, katika mazungumzo yako ya faragha {name} pekee.",
+        "Ou toca no clipe ao lado de ENVIAR: em # main todo o canal o recebe, na tua conversa privada só {name}.",
+        "یا روی گیره کاغذ کنار «فرستادن» بزنید: در # main همهٔ کانال آن را می‌گیرد، در گفتگوی خصوصی فقط {name}.",
+        "یا د «لیږل» تر څنګ پر کلیپ ټک وکړئ: په # main کې ټول چینل یې اخلي، ستاسو په شخصي خبرو کې یوازې {name}.",
+    ]),
+    ("Send a file to {name}", ["Envoyer un fichier à {name}", "Tuma faili kwa {name}", "Enviar um ficheiro a {name}", "فرستادن فایل به {name}", "{name} ته فایل ولیږئ"]),
+    ("Sent to {name}", ["Envoyé à {name}", "Imetumwa kwa {name}", "Enviado a {name}", "به {name} فرستاده شد", "{name} ته ولیږل شو"]),
+    ("Sent. Only {name} sees it; they will come to you.", ["Envoyé. Seul {name} le voit ; il viendra te voir.", "Imetumwa. {name} pekee anaona; atakuja kwako.", "Enviado. Só {name} o vê; virá ter contigo.", "فرستاده شد. فقط {name} آن را می‌بیند؛ نزد شما می‌آید.", "ولیږل شو. یوازې {name} یې ویني؛ تاسو ته به راشي."]),
+    ("{name} is talking. You can write again when they open the channel. HELP still works.", [
+        "{name} parle. Tu pourras écrire à nouveau quand le canal sera rouvert. AIDE marche toujours.",
+        "{name} anaongea. Unaweza kuandika tena akifungua chaneli. MSAADA bado unafanya kazi.",
+        "{name} está a falar. Podes escrever de novo quando abrir o canal. AJUDA continua a funcionar.",
+        "{name} صحبت می‌کند. وقتی کانال را باز کند دوباره می‌توانید بنویسید. «کمک» هنوز کار می‌کند.",
+        "{name} خبرې کوي. کله چې چینل پرانیزي بیا لیکلی شئ. مرسته لا هم کار کوي.",
+    ]),
+    ("{name} is checking who can hear. Tap to answer.", ["{name} vérifie qui entend. Touche pour répondre.", "{name} anaangalia nani anasikia. Gusa kujibu.", "{name} está a verificar quem ouve. Toca para responder.", "{name} بررسی می‌کند چه کسی می‌شنود. برای پاسخ بزنید.", "{name} ګوري چې څوک اوري. ځواب لپاره ټک وکړئ."]),
+    ("{name} muted you in this channel. HELP and your private chat still work.", [
+        "{name} t'a mis en sourdine sur ce canal. AIDE et ta discussion privée marchent toujours.",
+        "{name} amekunyamazisha kwenye chaneli hii. MSAADA na mazungumzo yako ya faragha bado yanafanya kazi.",
+        "{name} silenciou-te neste canal. AJUDA e a tua conversa privada continuam a funcionar.",
+        "{name} شما را در این کانال ساکت کرد. «کمک» و گفتگوی خصوصی شما هنوز کار می‌کند.",
+        "{name} تاسو په دې چینل کې چوپ کړئ. مرسته او ستاسو شخصي خبرې لا هم کار کوي.",
+    ]),
+    ("{name} wrote to you", ["{name} t'a écrit", "{name} amekuandikia", "{name} escreveu-te", "{name} برای شما نوشت", "{name} تاسو ته ولیکل"]),
+    ("Sent to the channel: {name}. Everybody can get it.", ["Envoyé sur le canal : {name}. Tout le monde peut le prendre.", "Imetumwa kwenye chaneli: {name}. Kila mtu anaweza kuipata.", "Enviado para o canal: {name}. Todos podem obtê-lo.", "به کانال فرستاده شد: {name}. همه می‌توانند آن را بگیرند.", "چینل ته ولیږل شو: {name}. هر څوک یې اخیستلی شي."]),
+    ("This is the phone's wifi sign-in window. Talking and HELP work here. Sending files needs your browser.", [
+        "Ceci est la fenêtre de connexion wifi du téléphone. Parler et AIDE marchent ici. Envoyer des fichiers demande ton navigateur.",
+        "Hili ni dirisha la kuingia wifi la simu. Kuongea na MSAADA vinafanya kazi hapa. Kutuma faili kunahitaji kivinjari chako.",
+        "Esta é a janela de início de sessão wifi do telemóvel. Falar e AJUDA funcionam aqui. Enviar ficheiros precisa do teu navegador.",
+        "این پنجرهٔ ورود به وای‌فای تلفن است. صحبت و «کمک» اینجا کار می‌کند. فرستادن فایل به مرورگر شما نیاز دارد.",
+        "دا د تلیفون د وای فای د ننوتلو کړکۍ ده. خبرې او مرسته دلته کار کوي. د فایلونو لیږل ستاسو براوزر ته اړتیا لري.",
+    ]),
 ];
 
 #[cfg(test)]
@@ -825,7 +1032,7 @@ mod tests {
         let src = include_str!("page.rs");
         let mut missing = Vec::new();
         let mut found = 0;
-        for marker in ["t(l, \"", "tf(l, \""] {
+        for marker in ["t(l, \"", "tf(l, \"", "tw(l, \""] {
             let mut rest = src;
             while let Some(at) = rest.find(marker) {
                 rest = &rest[at + marker.len()..];
@@ -851,6 +1058,38 @@ mod tests {
             }
         }
         assert!(found > 60, "only {found} sentences found: the scan is not reading page.rs");
+        // tw(l, "class", "team"): the second sentence, after `", "`
+        let marker = "tw(l, \"";
+        let mut rest = src;
+        while let Some(at) = rest.find(marker) {
+            rest = &rest[at + marker.len()..];
+            let Some(sep) = rest.find("\", \"") else { break };
+            rest = &rest[sep + 4..];
+            let mut s = String::new();
+            let mut chars = rest.chars();
+            while let Some(c) = chars.next() {
+                match c {
+                    '\\' => match chars.next() {
+                        Some('"') => s.push('"'),
+                        Some('n') => s.push('\n'),
+                        Some(o) => { s.push('\\'); s.push(o); }
+                        None => break,
+                    },
+                    '"' => break,
+                    c => s.push(c),
+                }
+            }
+            found += 1;
+            if !TABLE.iter().any(|(e, _)| *e == s) {
+                missing.push(s);
+            }
+        }
+        // and every word the chat page is handed
+        for w in crate::page::NET_WORDS {
+            if !TABLE.iter().any(|(e, _)| e == w) {
+                missing.push(w.to_string());
+            }
+        }
         assert!(missing.is_empty(), "not in the table: {missing:#?}");
     }
 

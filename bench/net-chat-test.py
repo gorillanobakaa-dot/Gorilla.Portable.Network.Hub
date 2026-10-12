@@ -1,6 +1,6 @@
 """The class chat end to end: a teacher and several phones, all at once, in real browsers.
 
-Version 1.1.0, 2026-10-12, for 0.11.0 (1.0.0 was 2026-09-25).
+Version 1.2.0, 2026-10-12, for 0.11.0 (1.0.0 was 2026-09-25, 1.1.0 earlier today).
 
 Why: the owner's two-phone test of 0.10.0 (2026-09-25) found the messages
 could not handle two phones at once and had no room the class shares. This
@@ -250,7 +250,7 @@ def main():
         check(fatima.is_disabled("#text"), "quiet: a phone cannot type in # main")
         check(fatima.is_visible("#helpbtn"), "quiet: HELP is still there")
         teacher.click("[data-act=quiet]")
-        check(sees(fatima, "#log", "opened the room"), "the room opens again")
+        check(sees(fatima, "#log", "opened the channel" if a.net else "opened the room"), "the room opens again")
 
         # mute
         teacher.click("#nicks [data-nick]:has-text('Fatima')")
@@ -284,6 +284,38 @@ def main():
             files_ok = False
         check(files_ok, "# files shows the lesson's files on a phone")
         shot(amina, "9-phone-files")
+        # the phone's wifi sign-in window (Android's captive-portal sheet): a
+        # WebView whose user agent carries "wv". No file chooser there, so the
+        # page offers the way out, thumb-sized, and the paperclip opens it.
+        WV = dict(PHONE, user_agent="Mozilla/5.0 (Linux; Android 13; Phone; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/120 Mobile Safari/537.36")
+        wv = browser.new_context(**WV).new_page()
+        relay(18160, u.hostname, u.port or 80, "127.0.0.61")
+        wv.goto("http://127.0.0.1:18160/?lang=en&rename=1")
+        name_page = wv.inner_text("body")
+        if a.net:
+            check("Join the net" in name_page and "teacher" not in name_page.lower() and "class" not in name_page.lower(),
+                  "on a net the name page says Join the net and nothing of class or teacher")
+        wv.fill("input[name=who]", "Glove")
+        wv.click("button[type=submit]")
+        check(sees(wv, "#above", "wifi sign-in window"), "in the sign-in window the page offers the way out at once")
+        box = wv.locator(".escape .big").first.bounding_box()
+        check(box is not None and box["height"] >= 56, "the way-out button is thumb-sized (%s px)" % (box and int(box["height"])))
+        href = wv.get_attribute(".escape a.okb", "href") or ""
+        check(href.startswith("intent://127.0.0.1:18160/#Intent;scheme=http"), "the button hands this page's own address to the real browser (" + href + ")")
+        wv.click("[data-act=escape-later]")
+        check(not wv.is_visible(".escape"), "LATER folds it away")
+        wv.click("#attbtn")
+        check(wv.is_visible(".escape"), "the paperclip in the sign-in window brings the way out back, not a picker")
+        shot(wv, "9-signin-window-way-out")
+        if a.net:
+            wv.click("#menu")
+            wv.click("#side [data-buf='#files']")
+            frame = wv.frame_locator("#filesframe")
+            files_text = frame.locator("body").inner_text()
+            check("teacher" not in files_text.lower() and "lesson" not in files_text.lower(), "on a net the files list says nothing of teacher or lesson")
+        att = kofi.locator("#attbtn").bounding_box()
+        check(att is not None and att["height"] >= 56 and att["width"] >= 60, "the paperclip is thumb-sized on a phone (%s x %s px)" % (att and int(att["width"]), att and int(att["height"])))
+
         sw = browser.new_context(**PHONE).new_page()
         relay(18150, u.hostname, u.port or 80, "127.0.0.60")
         sw.goto("http://127.0.0.1:18150/?lang=sw&rename=1")

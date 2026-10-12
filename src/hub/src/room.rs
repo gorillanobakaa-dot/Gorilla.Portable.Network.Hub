@@ -46,6 +46,11 @@ pub fn set_team(on: bool) {
 pub fn team() -> bool {
     TEAM.load(Ordering::Relaxed)
 }
+
+/// What # main is called in an event line: a class's room, a net's channel.
+fn place() -> &'static str {
+    if team() { "channel" } else { "room" }
+}
 use std::time::{Duration, Instant};
 
 /// A line is a line. Longer thoughts go in two.
@@ -478,9 +483,9 @@ pub fn set_quiet(on: bool) {
         r.quiet = on;
         let who = if r.op_nick.is_empty() { "Teacher".to_string() } else { r.op_nick.clone() };
         let text = if on {
-            format!("{who} quieted the room. Only {who} can write here. HELP and private messages still work.")
+            format!("{who} quieted the {}. Only {who} can write here. HELP and private messages still work.", place())
         } else {
-            format!("{who} opened the room. Everybody can write.")
+            format!("{who} opened the {}. Everybody can write.", place())
         };
         push(r, "", "", LineKind::Event, &text);
         true
@@ -506,7 +511,7 @@ pub fn set_muted(key: &str, on: bool) -> bool {
         } else {
             r.muted.retain(|k| k != key);
         }
-        push(r, "", "", LineKind::Event, &format!("{nick} {}", if on { "was muted in this room" } else { "can write again" }));
+        push(r, "", "", LineKind::Event, &format!("{nick} {}", if on { format!("was muted in this {}", place()) } else { "can write again".to_string() }));
         true
     });
     if changed {
@@ -521,7 +526,7 @@ pub fn remove(key: &str) -> Option<(String, String)> {
     let out = with(|r| {
         let i = r.people.iter().position(|p| p.key == key)?;
         let p = r.people.remove(i);
-        push(r, "", "", LineKind::Event, &format!("{} was removed from the lesson", p.nick));
+        push(r, "", "", LineKind::Event, &format!("{} was removed from the {}", p.nick, if team() { "net" } else { "lesson" }));
         Some((p.ip, p.nick))
     });
     if out.is_some() {

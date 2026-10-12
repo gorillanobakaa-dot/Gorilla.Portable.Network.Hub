@@ -192,6 +192,14 @@ the channel, a **SEND** button, a blue **📎** paperclip and a red **HELP**
 button. The rooms and the list of people are behind the **☰** button at the
 top left.
 
+**The small sign-in window.** On Android the page first opens in the
+phone's *Sign in to network* window. Talking, HELP and the comms check
+work there. Sending files does not, so the page shows a card at once with
+a big **OPEN THIS IN MY BROWSER** button, and the paperclip opens the same
+card. One tap, nothing to type; if the phone ignores it, **or tap here**,
+and under that the two menu words. You arrive in the channel already
+signed in.
+
 **Sending a report.** A few typed words go with SEND. A daily operations
 report, a sitrep, a form, photographs or a zip go with the **📎** paperclip:
 tap it, pick one file or several, and the phone shows *Sending... 43%* above
