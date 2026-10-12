@@ -2130,7 +2130,15 @@ fn serve_net(
         if outcome.tag != "handin" {
             return respond(out, 200, "text/plain; charset=utf-8", outcome.tag.as_bytes()).map(|_| false);
         }
-        for (name, on_disk, bytes) in &outcome.landed {
+        let mut fresh = 0;
+        for (name, on_disk, bytes, repeat) in &outcome.landed {
+            if *repeat {
+                // Already here, byte for byte: the channel was told the first
+                // time. The record notes the repeat; the sender is told "same".
+                note_line(root, "messages.txt", &format!("{who}  sent {name} again (already here as waiting/{on_disk})"));
+                continue;
+            }
+            fresh += 1;
             let text = format!("sent a file: {name} ({})", crate::page::human(*bytes));
             if to_channel {
                 let (w, line) = crate::room::sent_file(&key, &nick, &text, on_disk, operator);
@@ -2155,7 +2163,7 @@ fn serve_net(
                 note_line(root, "messages.txt", &format!("{who}  -> waiting/{on_disk}"));
             }
         }
-        return respond(out, 200, "text/plain; charset=utf-8", b"ok").map(|_| false);
+        return respond(out, 200, "text/plain; charset=utf-8", if fresh == 0 { b"same" as &[u8] } else { b"ok" }).map(|_| false);
     }
     // GET IT on a file line: served from the waiting area, or from the
     // received folder once the operator has accepted it. A net only: in a
@@ -2600,6 +2608,24 @@ mod block_tests {
 
         let record = fs::read_to_string(crate::page::handed_in_dir(&root).join("messages.txt")).unwrap_or_default();
         assert!(record.contains("sent a file: SITREP 12OCT.txt") && record.contains("-> waiting/"), "the record says where it went: {record}");
+
+        // The same bytes again (a retry, or a second tap): one file on disk,
+        // one line in the channel, and the sender is told "same".
+        let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        write!(
+            s,
+            "POST /net/file?to=%23main&token=t2 HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: multipart/form-data; boundary={b}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .unwrap();
+        s.write_all(&body).unwrap();
+        let mut out = Vec::new();
+        let _ = s.read_to_end(&mut out);
+        assert!(String::from_utf8_lossy(&out).ends_with("same"), "a repeat is answered with same");
+        let again = get(port, "/net/wait?since=0&line=0");
+        assert_eq!(again.matches("\"kind\":\"file\"").count(), 1, "one line for one file: {again}");
+        assert_eq!(fs::read_dir(crate::page::waiting_dir(&root)).unwrap().count(), 1, "one file on disk");
 
         // In a class, nothing a child sent is handed back out.
         crate::room::set_team(false);

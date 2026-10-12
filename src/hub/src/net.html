@@ -277,7 +277,10 @@ function upload(files){
       muted:tw("Your teacher muted you in this room. HELP and your private chat still work.", "{name} muted you in this channel. HELP and your private chat still work."),
       lost:tr("Not sent. The wifi may have dropped. Try again."), toobig:tr("Too big. The limit is 1 GB."),
       cantsave:tr("The laptop could not save it. Tell the person in charge."), empty:tr("Nothing was chosen."), no:tr("Not sent. The wifi may have dropped. Try again.")}[r];
-    if (r == "ok") {
+    if (r == "same") {
+      okNote = tr("Already here: {name}. Everybody has it.").replace("{name}", shown);
+      setTimeout(function(){ okNote = null; render(); }, 12000);
+    } else if (r == "ok") {
       okNote = (to == "#main" && TEAM) ? tr("Sent to the channel: {name}. Everybody can get it.").replace("{name}", shown) : tw("Sent to your teacher", "Sent to {name}") + ": " + shown;
       setTimeout(function(){ okNote = null; render(); }, 12000);
     } else note = why || tr("Not sent. The wifi may have dropped. Try again.");

@@ -1179,8 +1179,11 @@ pub struct UploadOutcome {
     /// What the roster shows, e.g. "homework.jpg" or "3 files".
     pub shown: Option<String>,
     /// Every file that landed: (the name the device gave it, the name in the
-    /// waiting area, bytes). The channel's file line is written from this.
-    pub landed: Vec<(String, String, u64)>,
+    /// waiting area, bytes, already here). The channel's file line is written
+    /// from this; a file already here, byte for byte, is a retry or a second
+    /// tap and gets no second line (the owner sent one screenshot three times
+    /// on 2026-10-12 and the channel said three files for one on disk).
+    pub landed: Vec<(String, String, u64, bool)>,
 }
 
 /// Where work waits for the teacher to look at it.
@@ -1246,7 +1249,7 @@ pub fn take_upload<R: Read>(
     }
 
     let who = sanitize_filename(&serve::device_label(peer_ip));
-    let mut landed: Vec<(String, String, u64)> = Vec::new();
+    let mut landed: Vec<(String, String, u64, bool)> = Vec::new();
     let mut trouble: Option<&'static str> = None;
     let mut line = Vec::new();
 
@@ -1322,9 +1325,9 @@ pub fn take_upload<R: Read>(
             let _ = std::fs::remove_file(&tmp);
         } else {
             match place(&dir, &tmp, &who, &clean, &digest) {
-                Some(final_name) => {
+                Some((final_name, repeat)) => {
                     serve::note_pending(peer_ip, &clean, &final_name, written);
-                    landed.push((clean, final_name, written));
+                    landed.push((clean, final_name, written, repeat));
                 }
                 None => {
                     let _ = std::fs::remove_file(&tmp);
@@ -1427,8 +1430,9 @@ fn skip_to_boundary<R: Read>(body: &mut BodyReader<R>, full_boundary: &str) -> s
 }
 
 /// Give the finished file its name, keeping a genuine resubmission and
-/// dropping a retry. Returns the name it landed under.
-fn place(dir: &Path, tmp: &Path, who: &str, clean: &str, digest: &str) -> Option<String> {
+/// dropping a retry. Returns the name it landed under, and whether it was
+/// already there (a retry: the same device, name and bytes).
+fn place(dir: &Path, tmp: &Path, who: &str, clean: &str, digest: &str) -> Option<(String, bool)> {
     let base = format!("{who}--{clean}");
     let mut final_name = base.clone();
     let mut version = 1;
@@ -1442,7 +1446,7 @@ fn place(dir: &Path, tmp: &Path, who: &str, clean: &str, digest: &str) -> Option
         // the child doing anything.
         if file_digest(&candidate).as_deref() == Some(digest) {
             let _ = std::fs::remove_file(tmp);
-            return Some(final_name);
+            return Some((final_name, true));
         }
         version += 1;
         final_name = versioned(&base, version);
@@ -1450,7 +1454,7 @@ fn place(dir: &Path, tmp: &Path, who: &str, clean: &str, digest: &str) -> Option
     if std::fs::rename(tmp, dir.join(&final_name)).is_err() {
         return None;
     }
-    Some(final_name)
+    Some((final_name, false))
 }
 
 /// "name.ext" -> "name--v2.ext", keeping the extension where the phone's
@@ -1736,7 +1740,7 @@ pub const NET_WORDS: &[&str] = &[
     "This is the phone's wifi sign-in window. Talking and HELP work here. Sending files needs your browser.",
     "or tap here",
     "LATER", "OPEN THIS IN MY BROWSER", "If neither opens your browser: tap the three dots at the top of this window and choose \"Open in browser\" or \"Use this network as is\".",
-    "Sent to the channel: {name}. Everybody can get it.",
+    "Sent to the channel: {name}. Everybody can get it.", "Already here: {name}. Everybody has it.",
 ];
 
 /// The class net page (net.html) for one device: a child's, or the

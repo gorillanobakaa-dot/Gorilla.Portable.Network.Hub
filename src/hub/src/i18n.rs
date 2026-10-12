@@ -994,6 +994,7 @@ pub const TABLE: &[(&str, [&str; 5])] = &[
     ]),
     ("{name} wrote to you", ["{name} t'a écrit", "{name} amekuandikia", "{name} escreveu-te", "{name} برای شما نوشت", "{name} تاسو ته ولیکل"]),
     ("Sent to the channel: {name}. Everybody can get it.", ["Envoyé sur le canal : {name}. Tout le monde peut le prendre.", "Imetumwa kwenye chaneli: {name}. Kila mtu anaweza kuipata.", "Enviado para o canal: {name}. Todos podem obtê-lo.", "به کانال فرستاده شد: {name}. همه می‌توانند آن را بگیرند.", "چینل ته ولیږل شو: {name}. هر څوک یې اخیستلی شي."]),
+    ("Already here: {name}. Everybody has it.", ["Déjà là : {name}. Tout le monde l'a.", "Tayari ipo: {name}. Kila mtu anayo.", "Já aqui está: {name}. Todos o têm.", "از قبل اینجاست: {name}. همه آن را دارند.", "له پخوا دلته دی: {name}. هر څوک یې لري."]),
     ("This is the phone's wifi sign-in window. Talking and HELP work here. Sending files needs your browser.", [
         "Ceci est la fenêtre de connexion wifi du téléphone. Parler et AIDE marchent ici. Envoyer des fichiers demande ton navigateur.",
         "Hili ni dirisha la kuingia wifi la simu. Kuongea na MSAADA vinafanya kazi hapa. Kutuma faili kunahitaji kivinjari chako.",

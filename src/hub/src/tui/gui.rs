@@ -253,6 +253,8 @@ struct Gui {
     /// Joining another hub's chat (member.rs): the form, then the chat.
     join: Option<JoinForm>,
     member: Option<std::sync::Arc<super::member::Member>>,
+    /// Files taken from the channel with GET IT: where each landed, or why not.
+    member_got: std::collections::HashMap<String, Result<PathBuf, String>>,
     member_files: bool,
     member_private: bool,
     member_note: Option<String>,
@@ -304,6 +306,7 @@ impl Gui {
             last_line: 0,
             join: None,
             member: None,
+            member_got: std::collections::HashMap::new(),
             member_files: false,
             member_private: false,
             member_note: None,
@@ -1774,6 +1777,38 @@ impl Gui {
                     }
                     for l in &room.lines {
                         line_row(ui, &l.at, &l.nick, l.key == "op", l.kind, &l.text, l.key == "op", false);
+                        // A file somebody sent: open it where it waits, or keep it
+                        // (accept into the received folder) without leaving the
+                        // channel. The owner, 2026-10-12: the lines could be
+                        // looked at and nothing more.
+                        if l.kind == crate::room::LineKind::File && !l.file.is_empty() {
+                            let root = PathBuf::from(shellexpand(&self.app.folder));
+                            let waiting = crate::page::waiting_dir(&root).join(&l.file);
+                            let kept = crate::page::handed_in_dir(&root).join(&l.file);
+                            ui.horizontal(|ui| {
+                                ui.add_space(170.0);
+                                let here = if waiting.is_file() { Some(&waiting) } else if kept.is_file() { Some(&kept) } else { None };
+                                if let Some(p) = here {
+                                    if ui.button("\u{1f441} Open").on_hover_text(p.display().to_string()).clicked() {
+                                        open_with_system(p);
+                                    }
+                                }
+                                if waiting.is_file() {
+                                    if ui.add(egui::Button::new(RichText::new("\u{2714} Keep").color(Color32::WHITE)).fill(GREEN_OK))
+                                        .on_hover_text("Into the received folder, off the Sent to you list")
+                                        .clicked()
+                                    {
+                                        if let Err(e) = serve::accept_pending(&root, &l.file) {
+                                            self.app.note(&format!("Could not keep {}: {e}", l.file));
+                                        }
+                                    }
+                                } else if kept.is_file() {
+                                    ui.label(RichText::new("kept").weak());
+                                } else {
+                                    ui.label(RichText::new("refused, or moved").weak());
+                                }
+                            });
+                        }
                     }
                     let newest = room.lines.last().map(|l| l.id).unwrap_or(0);
                     if newest != self.last_line {
@@ -3017,6 +3052,34 @@ impl Gui {
                             _ => crate::room::LineKind::Text,
                         };
                         line_row(ui, &l.at, &l.who, l.key == "op", kind, &l.text, l.key == s.my_key, false);
+                        if kind == crate::room::LineKind::File && !l.file.is_empty() {
+                            ui.horizontal(|ui| {
+                                ui.add_space(170.0);
+                                let got = self.member_got.get(&l.file).cloned();
+                                match got {
+                                    Some(Ok(p)) => {
+                                        if ui.button("\u{1f441} Open").on_hover_text(p.display().to_string()).clicked() {
+                                            open_with_system(&p);
+                                        }
+                                        ui.label(RichText::new(format!("in {}", p.parent().map(|d| d.display().to_string()).unwrap_or_default())).weak());
+                                    }
+                                    Some(Err(e)) => {
+                                        ui.label(RichText::new(e).color(RED));
+                                        if ui.button("Try again").clicked() {
+                                            self.member_got.remove(&l.file);
+                                        }
+                                    }
+                                    None => {
+                                        if ui.add(egui::Button::new(RichText::new("\u{2b07} GET IT").color(Color32::WHITE)).fill(BLUE_FILE)).clicked() {
+                                            if let Some(m) = &self.member {
+                                                let r = m.get_file(&l.file).map_err(|e| e.to_string());
+                                                self.member_got.insert(l.file.clone(), r);
+                                            }
+                                        }
+                                    }
+                                }
+                            });
+                        }
                     }
                     let newest = s.lines.last().map(|l| l.id).unwrap_or(0);
                     if newest != self.member_line {

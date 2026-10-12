@@ -167,7 +167,9 @@ def main():
         # a file from a phone: the paperclip next to SEND
         report = os.path.join(a.out, "DOR 12OCT.txt")
         with open(report, "w", encoding="utf-8") as fh:
-            fh.write("DAILY OPERATIONS REPORT 12 OCT 2026\nAll stations: water point 2 open, 340 served.\n")
+            # the time makes each run's report new bytes: the hub folds a repeat of
+            # the same bytes into the file already waiting, on purpose
+            fh.write("DAILY OPERATIONS REPORT 12 OCT 2026, run of %s\nAll stations: water point 2 open, 340 served.\n" % time.strftime("%H:%M:%S"))
         check(kofi.is_visible("#attbtn"), "the phone has a paperclip next to SEND")
         kofi.set_input_files("#pick", report)
         check(sees(kofi, "#above", "Sent to", 15), "the phone says the file was sent (" + kofi.inner_text("#above").strip()[:80] + ")")
@@ -185,6 +187,11 @@ def main():
             check(not sees(amina, "#log", "sent a file", 3), "in a class the other phones do NOT see a child's file")
             check(sees(kofi, "#above", "Sent to your teacher"), "in a class the phone says it went to the teacher")
             check(sees(teacher, "#side", "Kofi", 8), "the teacher's page lists Kofi's private chat")
+        # the same file again (a second tap, a retry): no second line, and the phone is told
+        before = kofi.locator("#log .row.file").count()
+        kofi.set_input_files("#pick", report)
+        check(sees(kofi, "#above", "Already here", 15), "sending the same file again: the phone says it is already here")
+        check(kofi.locator("#log .row.file").count() == before, "and the channel gets no second line for it")
         waiting = os.path.join(a.received, "waiting")
         landed = [n for n in (os.listdir(waiting) if os.path.isdir(waiting) else []) if "DOR 12OCT" in n]
         check(bool(landed), "the file waits for the operator in received/waiting (" + ", ".join(landed) + ")")

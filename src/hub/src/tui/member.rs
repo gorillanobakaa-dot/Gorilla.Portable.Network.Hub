@@ -30,6 +30,8 @@ pub struct Line {
     pub who: String,
     pub kind: String,
     pub text: String,
+    /// kind "file": the name /net/f/ serves it under.
+    pub file: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -203,6 +205,45 @@ impl Member {
         });
     }
 
+    /// GET IT on a file line: the file into this computer's Downloads folder
+    /// (next to the received folder when there is no Downloads), returning
+    /// where it landed. The owner, 2026-10-12: a laptop on the net could see
+    /// the reports in the channel and had no way to take them.
+    pub fn get_file(&self, on_disk: &str) -> std::io::Result<std::path::PathBuf> {
+        let mut s = TcpStream::connect_timeout(&self.addr, Duration::from_secs(5))?;
+        s.set_read_timeout(Some(Duration::from_secs(600)))?;
+        s.set_write_timeout(Some(Duration::from_secs(10)))?;
+        let req = format!(
+            "GET /net/f/{} HTTP/1.1\r\nHost: {}\r\nUser-Agent: GorillaHub/{} (the hub's own window)\r\nConnection: close\r\n\r\n",
+            enc(on_disk),
+            self.addr,
+            env!("CARGO_PKG_VERSION")
+        );
+        s.write_all(req.as_bytes())?;
+        let mut raw = Vec::new();
+        s.read_to_end(&mut raw)?;
+        let split = raw.windows(4).position(|w| w == b"\r\n\r\n").ok_or_else(|| std::io::Error::other("no answer"))?;
+        let head = String::from_utf8_lossy(&raw[..split]).into_owned();
+        if !head.starts_with("HTTP/1.1 200") {
+            return Err(std::io::Error::other(format!("the hub said {}", head.lines().next().unwrap_or(""))));
+        }
+        let body = &raw[split + 4..];
+        let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(std::path::PathBuf::from).unwrap_or_else(|| ".".into());
+        let dir = if home.join("Downloads").is_dir() { home.join("Downloads") } else { crate::page::default_receive_dir() };
+        std::fs::create_dir_all(&dir)?;
+        // the sender's own name for it, without the device prefix the hub added
+        let shown = on_disk.split_once("--").map(|(_, n)| n).unwrap_or(on_disk);
+        let mut path = dir.join(shown);
+        let mut n = 1;
+        while path.exists() {
+            n += 1;
+            let (stem, ext) = match shown.rsplit_once('.') { Some((s, e)) => (s.to_string(), format!(".{e}")), None => (shown.to_string(), String::new()) };
+            path = dir.join(format!("{stem} ({n}){ext}"));
+        }
+        std::fs::write(&path, body)?;
+        Ok(path)
+    }
+
     pub fn say_to_room(&self, text: &str) {
         self.post("/net/say", format!("to=%23main&text={}&token={}", enc(text), token()));
     }
@@ -316,6 +357,7 @@ fn apply(s: &mut State, j: &J, first: bool) {
             who: l.get("who").str().into(),
             kind: l.get("kind").str().into(),
             text: l.get("text").str().into(),
+            file: l.get("file").str().into(),
         });
     }
     if s.lines.len() > 600 {
