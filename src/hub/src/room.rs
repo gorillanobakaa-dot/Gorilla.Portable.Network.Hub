@@ -72,6 +72,9 @@ pub enum LineKind {
     Answer,
     /// Joins, topic changes, quiet, mute: said by nobody.
     Event,
+    /// Somebody sent a file to the channel: a report, a picture, a zip. The
+    /// line carries the file's name on disk so a page can offer GET IT.
+    File,
 }
 
 impl LineKind {
@@ -81,6 +84,7 @@ impl LineKind {
             LineKind::Call => "call",
             LineKind::Answer => "ans",
             LineKind::Event => "ev",
+            LineKind::File => "file",
         }
     }
 }
@@ -94,6 +98,8 @@ pub struct Line {
     pub nick: String,
     pub kind: LineKind,
     pub text: String,
+    /// LineKind::File only: the name in the waiting area that /net/f/ serves.
+    pub file: String,
 }
 
 #[derive(Clone, Debug)]
@@ -205,7 +211,7 @@ fn clock() -> String {
 
 fn push(r: &mut Room, key: &str, nick: &str, kind: LineKind, text: &str) -> Line {
     r.next_id += 1;
-    let l = Line { id: r.next_id, at: clock(), key: key.into(), nick: nick.into(), kind, text: text.into() };
+    let l = Line { id: r.next_id, at: clock(), key: key.into(), nick: nick.into(), kind, text: text.into(), file: String::new() };
     r.lines.push(l.clone());
     if r.lines.len() > KEPT {
         r.lines.drain(..r.lines.len() - KEPT);
@@ -302,6 +308,51 @@ pub fn say(key: &str, nick: &str, text: &str, token: &str, operator: bool) -> (&
         pulse(None);
     }
     out
+}
+
+/// Somebody sent a file to the channel. The same gate as `say`: a muted
+/// person or a quiet channel refuses it, and the caller has to know BEFORE
+/// reading a 200 MB body off the wire, so this is asked twice: `may_send`
+/// first with no file, then this once it has landed. The operator is never
+/// refused. No rate limit: a report is one upload, and the upload itself is
+/// slower than any tap.
+///
+/// WHY A LINE IN THE CHANNEL. The owner, 2026-10-12: a member of a relief team
+/// had no way to send a daily operations report or a sitrep to the net; a few
+/// typed words went through, a .docx or a zip of photographs did not, and an
+/// NGO works on written, typed reports for accountability. The file lands in
+/// the operator's waiting area as a hand-in always did, AND the channel is
+/// told, with the file's name and size, so ZERO and every station see it
+/// arrive and can get it.
+pub fn may_send(key: &str, operator: bool) -> &'static str {
+    with(|r| {
+        if !operator {
+            if r.muted.iter().any(|k| k == key) {
+                return "muted";
+            }
+            if r.quiet {
+                return "quiet";
+            }
+        }
+        "ok"
+    })
+}
+
+pub fn sent_file(key: &str, nick: &str, text: &str, on_disk: &str, operator: bool) -> (&'static str, Option<Line>) {
+    let w = may_send(key, operator);
+    if w != "ok" {
+        return (w, None);
+    }
+    let l = with(|r| {
+        let mut l = push(r, key, nick, LineKind::File, text);
+        l.file = on_disk.to_string();
+        if let Some(last) = r.lines.last_mut() {
+            last.file = on_disk.to_string();
+        }
+        l
+    });
+    pulse(None);
+    ("ok", Some(l))
 }
 
 /// The operator calls a comms check. With one running and people still to
@@ -612,13 +663,14 @@ pub fn state(v: &Viewer, since: u64, line: u64) -> String {
             s.push(',');
         }
         s.push_str(&format!(
-            "{{\"id\":{},\"at\":{},\"k\":{},\"who\":{},\"kind\":\"{}\",\"text\":{}}}",
+            "{{\"id\":{},\"at\":{},\"k\":{},\"who\":{},\"kind\":\"{}\",\"text\":{},\"file\":{}}}",
             l.id,
             json_str(&l.at),
             json_str(&l.key),
             json_str(&l.nick),
             l.kind.word(),
-            json_str(&l.text)
+            json_str(&l.text),
+            json_str(&l.file)
         ));
     }
     s.push(']');
@@ -712,6 +764,29 @@ pub(crate) mod tests {
 
     fn kid(key: &str, nick: &str) -> Viewer {
         Viewer { key: key.into(), nick: nick.into(), operator: false }
+    }
+
+    /// A station sends its report: the channel gets a file line with the
+    /// name on disk; a muted station or a quiet channel is refused before
+    /// any bytes are read.
+    #[test]
+    fn a_file_sent_to_the_channel_is_a_line_everybody_sees_and_mute_refuses_it() {
+        let _l = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear();
+        here("kA", "Muie", "10.0.0.2");
+        let (w, l) = sent_file("kA", "Muie", "sent a file: DOR-12OCT.docx (1.2 MB)", "Muie--DOR-12OCT.docx", false);
+        assert_eq!(w, "ok");
+        assert_eq!(l.unwrap().file, "Muie--DOR-12OCT.docx");
+        let s = state(&kid("kB", "Kofi"), 0, 0);
+        assert!(s.contains("\"kind\":\"file\"") && s.contains("\"file\":\"Muie--DOR-12OCT.docx\""), "{s}");
+        set_muted("kA", true);
+        assert_eq!(may_send("kA", false), "muted");
+        assert_eq!(sent_file("kA", "Muie", "x", "y", false).0, "muted");
+        set_muted("kA", false);
+        set_quiet(true);
+        assert_eq!(may_send("kA", false), "quiet");
+        assert_eq!(may_send("op", true), "ok", "the operator is never refused");
+        set_quiet(false);
     }
 
     /// The radio net, end to end: the operator opens, everybody talks in the

@@ -1,6 +1,6 @@
 """The class chat end to end: a teacher and several phones, all at once, in real browsers.
 
-Version 1.0.0, 2026-09-25, for 0.11.0.
+Version 1.1.0, 2026-10-12, for 0.11.0 (1.0.0 was 2026-09-25).
 
 Why: the owner's two-phone test of 0.10.0 (2026-09-25) found the messages
 could not handle two phones at once and had no room the class shares. This
@@ -18,6 +18,10 @@ Steps, each checked, with pictures:
   people       the teacher's list shows all three, online
   # main       a line from one phone reaches the others and the teacher
   at once      two phones write in the same second; both lines reach everybody
+  a file       a phone sends a file with the paperclip. In a class it goes to
+               the teacher's private chat and the waiting area; with --net
+               (hub serve --net) it is a line in # main on every phone with
+               GET IT, and GET IT gives the same bytes back
   comms check  the teacher calls it; every phone shows I READ YOU; answers count up
   HELP         one phone taps HELP; the teacher gets a red card and a red entry
   private      the teacher answers two children in two windows at once;
@@ -32,6 +36,8 @@ started with no name set for this test, for example:
 
     hub serve <folder> --port 8089
     python bench/net-chat-test.py --url http://127.0.0.1:8089 --received <received folder> --out <pictures>
+
+With --net the hub must have been started with --net too.
 """
 import argparse
 import os
@@ -90,6 +96,7 @@ def main():
     ap.add_argument("--received", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--headed", action="store_true", help="show the browser windows")
+    ap.add_argument("--net", action="store_true", help="the hub was started with --net: a file to # main is for everybody")
     a = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     os.makedirs(a.out, exist_ok=True)
@@ -157,6 +164,31 @@ def main():
         check(all(sees(p, "#log", "Kofi at the same time") and sees(p, "#log", "Fatima at the same time")
                   for p in (amina, kofi, fatima, teacher)),
               "two phones writing in the same second both reach everybody")
+        # a file from a phone: the paperclip next to SEND
+        report = os.path.join(a.out, "DOR 12OCT.txt")
+        with open(report, "w", encoding="utf-8") as fh:
+            fh.write("DAILY OPERATIONS REPORT 12 OCT 2026\nAll stations: water point 2 open, 340 served.\n")
+        check(kofi.is_visible("#attbtn"), "the phone has a paperclip next to SEND")
+        kofi.set_input_files("#pick", report)
+        check(sees(kofi, "#above", "Sent to", 15), "the phone says the file was sent (" + kofi.inner_text("#above").strip()[:80] + ")")
+        shot(kofi, "2a-phone-file-sent")
+        if a.net:
+            check(all(sees(p, "#log", "sent a file: DOR 12OCT.txt") for p in (amina, fatima, teacher)),
+                  "on a net the file line reaches every phone and the operator")
+            check(amina.is_visible("#log a.get"), "the other phones get a GET IT button on it")
+            with amina.expect_download() as dl:
+                amina.click("#log a.get")
+            got = dl.value.path()
+            check(open(got, "rb").read() == open(report, "rb").read(), "GET IT gives the same bytes back")
+            shot(amina, "2b-phone-file-get-it")
+        else:
+            check(not sees(amina, "#log", "sent a file", 3), "in a class the other phones do NOT see a child's file")
+            check(sees(kofi, "#above", "Sent to your teacher"), "in a class the phone says it went to the teacher")
+            check(sees(teacher, "#side", "Kofi", 8), "the teacher's page lists Kofi's private chat")
+        waiting = os.path.join(a.received, "waiting")
+        landed = [n for n in (os.listdir(waiting) if os.path.isdir(waiting) else []) if "DOR 12OCT" in n]
+        check(bool(landed), "the file waits for the operator in received/waiting (" + ", ".join(landed) + ")")
+
         teacher.fill("#text", "Good morning. The worksheet is in # files.")
         teacher.click("#sendbtn")
         check(sees(amina, "#log", "The worksheet is in # files"), "the teacher's line reaches the phones")
@@ -176,7 +208,7 @@ def main():
 
         # HELP
         kofi.click("#helpbtn")
-        check(sees(kofi, "#above", "safe moment"), "Kofi is told what happens next")
+        check(sees(kofi, "#above", "they will come to you" if a.net else "safe moment"), "Kofi is told what happens next")
         check(sees(teacher, "#toasts", "Kofi asked for HELP"), "the teacher gets a red HELP card for Kofi")
         check(sees(teacher, "#side", "HELP Kofi"), "and a red HELP Kofi in the private chats")
         check(not sees(amina, "#log", "HELP", 2) and not sees(amina, "#toasts", "HELP", 1), "Amina sees nothing of Kofi's HELP")
@@ -214,7 +246,7 @@ def main():
 
         # quiet
         teacher.click("[data-act=quiet]")
-        check(sees(fatima, "#above", "teacher is talking"), "quiet: the phones are told the teacher is talking")
+        check(sees(fatima, "#above", "is talking"), "quiet: the phones are told the person in charge is talking")
         check(fatima.is_disabled("#text"), "quiet: a phone cannot type in # main")
         check(fatima.is_visible("#helpbtn"), "quiet: HELP is still there")
         teacher.click("[data-act=quiet]")
@@ -270,6 +302,7 @@ def main():
         return open(p, encoding="utf-8").read() if os.path.exists(p) else ""
     msgs, signs = read("messages.txt"), read("sign-ins.txt")
     check("#main" in msgs and "hello everybody from Amina" in msgs, "messages.txt has the # main lines")
+    check("DOR 12OCT.txt" in msgs and "-> waiting/" in msgs, "messages.txt says the file arrived and where it went")
     check("tapped HELP" in msgs and "teacher -> " in msgs, "messages.txt has the HELP and the teacher's answers")
     check("COMMS CHECK" in signs and "answered the comms check" in signs, "sign-ins.txt has the comms check and the answers")
     check("removed from the lesson" in signs, "sign-ins.txt has the removed device")

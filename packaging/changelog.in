@@ -1,5 +1,12 @@
 gorilla-portable-network-hub (@VERSION@) unstable; urgency=medium
 
+  * A FILE INTO THE CHANNEL (2026-10-12). A paperclip next to SEND on every
+    phone: a daily operations report, a sitrep, pictures or a zip, up to
+    1 GB each, several at once. On a net the channel gets a line naming the
+    file and its size with GET IT for every station; the laptop has it on
+    Sent to you; messages.txt says who sent what and where it went. In a
+    class the paperclip sends to the teacher only. hub serve --net.
+
   * TWO-WAY MESSAGES. Each child has a conversation with the teacher: the
     child writes on the class page, the teacher answers from the Messages
     screen (m), and the answer appears on the phone within seconds (4 s

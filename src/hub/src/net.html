@@ -61,6 +61,11 @@ button:focus,input:focus{outline:3px solid #3d5a1e;outline-offset:1px}
 .row.call{background:#fff4d6;border-left:4px solid #e0b545;border-radius:4px;padding:6px 0}
 .row.call .txt{font-weight:700}
 .row.help .txt{color:#b3261e;font-weight:700}
+.row.file .txt{font-weight:700;color:#28527a}
+.row.file .get{display:inline-block;background:#28527a;color:#fff;border-radius:8px;padding:8px 14px;text-decoration:none;font-weight:700;margin-left:10px;min-height:20px}
+.say .att{background:#28527a;color:#fff;padding:0 12px;font-size:20px}
+.say .att:disabled{opacity:.5}
+#pick{display:none}
 .row.ans .txt{color:#1c7a3a;font-weight:600}
 .row.c .who{width:7em}
 .row.c .t{width:40px}
@@ -160,6 +165,8 @@ button:focus,input:focus{outline:3px solid #3d5a1e;outline-offset:1px}
     <form class="say" id="say">
       <input id="text" autocomplete="off" maxlength="500" aria-label="Message">
       <button class="send" type="submit" id="sendbtn"></button>
+      <button class="att" type="button" data-act="attach" id="attbtn" hidden>&#128206;</button>
+      <input type="file" id="pick" multiple>
       <button class="hb" type="button" data-act="help" id="helpbtn" hidden></button>
     </form>
   </div>
@@ -176,7 +183,7 @@ var OP = !!B.op, TEAM = !!B.team;
 function tw(classText, teamText){ return TEAM ? teamText : tr(classText); }
 var S = { v:0, line:0, me:{key:"", nick:"", op:OP}, opnick:"Teacher", topic:"", topicat:"", read:OP, quiet:false, muted:false,
   check:null, lines:[], people:[], convs:[], threads:{}, buf:"#main", wins:[], toasts:[], unread:{} };
-var first = true, fails = 0, sound = true, actx = null, note = null, okNote = null, sure = null;
+var first = true, fails = 0, sound = true, actx = null, note = null, okNote = null, sure = null, up = null;
 
 function $(id){ return document.getElementById(id); }
 function esc(s){ return String(s).replace(/[&<>"]/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]; }); }
@@ -229,6 +236,38 @@ function post(path, fields, done){
   x.onload = function(){ if (x.status == 403) { location.reload(); return; } if (done) done(x.status == 200 ? x.responseText : "lost"); };
   x.onerror = function(){ if (done) done("lost"); };
   x.send(b.join("&"));
+}
+
+// A file for the channel, or for the private chat: a report, a picture, a
+// zip, as many as were picked. Multipart to /net/file; the hub lands it in
+// the operator's waiting area and says so in the channel (on a net) or in
+// the private chat (in a class). Progress shows above the typing line, since
+// a report over wifi is seconds, not an instant.
+function upload(files){
+  if (!files || !files.length) return;
+  var fd = new FormData(), names = [], to = S.buf;
+  for (var i = 0; i < files.length; i++) { fd.append("file", files[i]); names.push(files[i].name); }
+  var shown = names.length > 3 ? names.slice(0, 3).join(", ") + " +" + (names.length - 3) : names.join(", ");
+  up = { name: shown, pct: 0 }; note = null; okNote = null; render();
+  var x = new XMLHttpRequest();
+  x.open("POST", "/net/file?to=" + encodeURIComponent(to) + "&token=" + token());
+  x.setRequestHeader("X-Hub", "1");
+  if (x.upload) x.upload.onprogress = function(ev){ if (ev.lengthComputable && up) { up.pct = Math.floor(ev.loaded * 100 / ev.total); render(); } };
+  function done(r){
+    up = null; $("pick").value = "";
+    var why = {toofast:tr("Slow down a little, then send again."), quiet:tr("The room is quiet. Your message was not sent."),
+      muted:tw("Your teacher muted you in this room. HELP and your private chat still work.", S.opnick + " muted you in this channel. HELP and your private chat still work."),
+      lost:tr("Not sent. The wifi may have dropped. Try again."), toobig:tr("Too big. The limit is 1 GB."),
+      cantsave:tr("The laptop could not save it. Tell the person in charge."), empty:tr("Nothing was chosen."), no:tr("Not sent. The wifi may have dropped. Try again.")}[r];
+    if (r == "ok") {
+      okNote = (to == "#main" && TEAM) ? "Sent to the channel: " + shown + ". Everybody can get it." : tw("Sent to your teacher", "Sent to " + S.opnick) + ": " + shown;
+      setTimeout(function(){ okNote = null; render(); }, 12000);
+    } else note = why || tr("Not sent. The wifi may have dropped. Try again.");
+    render();
+  }
+  x.onload = function(){ if (x.status == 403) { location.reload(); return; } done(x.status == 200 ? x.responseText : "lost"); };
+  x.onerror = function(){ done("lost"); };
+  x.send(fd);
 }
 
 // ---- what the hub said ------------------------------------------------------
@@ -296,10 +335,10 @@ function beep(loud){
 }
 
 // ---- drawing ----------------------------------------------------------------
-function lineHtml(who, whoKey, at, kind, text, compact){
+function lineHtml(who, whoKey, at, kind, text, compact, extra){
   var cls = "row " + kind + (whoKey && whoKey == S.me.key ? " mine" : "") + (compact ? " c" : "");
   var w = who ? '<span class="who mono" style="color:' + colour(who) + '">' + (whoKey == "op" ? "@" : "") + esc(who) + "</span>" : '<span class="who"></span>';
-  return '<div class="' + cls + '"><span class="t mono">' + esc(at) + "</span>" + w + '<span class="txt">' + esc(text) + "</span></div>";
+  return '<div class="' + cls + '"><span class="t mono">' + esc(at) + "</span>" + w + '<span class="txt">' + esc(text) + (extra || "") + "</span></div>";
 }
 function mainHtml(){
   if (!S.lines.length) return '<p class="empty">' + esc(tr("Nothing here yet. Say hello.")) + "</p>";
@@ -307,7 +346,10 @@ function mainHtml(){
   each(S.lines, function(l){
     var text = l.text;
     if (l.kind == "call" && OP && S.check) text += "  (" + answeredCount() + ")";
-    h += lineHtml(l.who, l.k, l.at, l.kind, text, false);
+    // a file in the channel: GET IT keeps a copy on this device (a net only;
+    // the operator's laptop has it under Sent to you already)
+    var get = l.kind == "file" && l.file && !OP ? '<a class="get" href="/net/f/' + encodeURIComponent(l.file) + '" download>' + esc(tr("GET IT")) + "</a>" : "";
+    h += lineHtml(l.who, l.k, l.at, l.kind, text, false, get);
   });
   return h;
 }
@@ -392,7 +434,8 @@ function render(){
     log.hidden = true; files.hidden = false;
     var fr = $("filesframe"); if (!fr.getAttribute("src")) fr.setAttribute("src", "/files");
     $("filesmore").innerHTML = OP ? esc(tw("Put files in the lesson folder and they appear here for everybody.", "Press Send files to the team on the laptop, or put files in the team's folder, and they appear here for everybody.")) :
-      '<a class="btn" href="/classic#handin">' + esc(tw("Send your work to the teacher", "Send a file to " + S.opnick)) + "</a>";
+      '<a class="btn" href="/classic#handin">' + esc(tw("Send your work to the teacher", "Send a file to " + S.opnick)) + "</a>" +
+      '<span style="display:block;margin-top:8px;color:#5d6b5f">' + esc(tw("Or tap the paperclip next to SEND in # main.", "Or tap the paperclip next to SEND: in # main the whole channel gets it, in your private chat only " + S.opnick + " does.")) + "</span>";
   } else {
     files.hidden = true; log.hidden = false;
     var atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
@@ -407,6 +450,7 @@ function render(){
     a += '<div class="answer"><p>' + esc(tw("Your teacher is checking who can hear. Tap to answer.", S.opnick + " is checking who can hear. Tap to answer.")) + '</p><button type="button" class="big okb" data-act="answer">✔ ' + esc(tr("I READ YOU")) + "</button></div>";
   if (!OP && cur == "#main" && (S.quiet || S.muted))
     a += '<div class="note">' + esc(S.muted ? tw("Your teacher muted you in this room. HELP and your private chat still work.", S.opnick + " muted you in this channel. HELP and your private chat still work.") : tw("The teacher is talking. You can write again when they open the room. HELP still works.", S.opnick + " is talking. You can write again when they open the channel. HELP still works.")) + "</div>";
+  if (up) a += '<div class="note ok">' + esc(tr("Sending") + " " + up.name + "\u2026 " + up.pct + "%") + "</div>";
   if (okNote) a += '<div class="note ok">' + esc(okNote) + "</div>";
   if (note) a += '<div class="note bad">' + esc(note) + "</div>";
   $("above").innerHTML = a;
@@ -419,6 +463,11 @@ function render(){
   $("sendbtn").disabled = inp.disabled;
   // # files is for reading: no typing line there, only HELP
   inp.hidden = cur == "#files"; $("sendbtn").hidden = cur == "#files";
+  // the paperclip: a file to the channel (a net), or to the teacher (a class)
+  var ab = $("attbtn");
+  ab.hidden = cur == "#files"; ab.disabled = blocked || !!up;
+  ab.title = cur == "#main" ? (TEAM ? "Send a file to the channel" : tr("Send a file to your teacher")) : tw("Send a file to your teacher", "Send a file to " + label(cur));
+  ab.setAttribute("aria-label", ab.title);
   var hb = $("helpbtn"); hb.hidden = OP; hb.textContent = "✋ " + (B.help || "HELP");
 
   drawWins(); drawToasts(); drawNicks();
@@ -541,6 +590,7 @@ document.addEventListener("click", function(e){
   if ((act == "min" || act == "toggle") && w) { e.stopPropagation(); if (w.min) return open(wb); w.min = true; w.max = false; render(); return; }
   if (act == "max" && w) { e.stopPropagation(); var to = !w.max; each(S.wins, function(x){ x.max = false; }); w.max = to; render(); return; }
   if (act == "close") { e.stopPropagation(); S.wins = S.wins.filter(function(x){ return x.b != wb; }); render(); return; }
+  if (act == "attach") { if (!up) $("pick").click(); return; }
   if (act == "check") { post("/net/check", {}); return; }
   if (act == "quiet") { post("/net/quiet", {on: S.quiet ? "0" : "1"}); return; }
   if (act == "topic") { var i = $("text"); i.value = "/topic " + S.topic; i.focus(); return; }
@@ -584,6 +634,7 @@ document.addEventListener("submit", function(e){
   if (to == "#files") return;
   send(to, v, inp);
 });
+$("pick").addEventListener("change", function(){ upload(this.files); });
 window.addEventListener("resize", function(){ render(); });
 render();
 poll();

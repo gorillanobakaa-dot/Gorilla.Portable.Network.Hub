@@ -188,8 +188,21 @@ the top of the window, with a sound.
 
 The phone joins the wifi, the net page opens by itself and asks for a name.
 Then the briefing, first, with a big **I HAVE READ IT** button, and under it
-the channel, a **SEND** button and a red **HELP** button. The rooms and the
-list of people are behind the **☰** button at the top left.
+the channel, a **SEND** button, a blue **📎** paperclip and a red **HELP**
+button. The rooms and the list of people are behind the **☰** button at the
+top left.
+
+**Sending a report.** A few typed words go with SEND. A daily operations
+report, a sitrep, a form, photographs or a zip go with the **📎** paperclip:
+tap it, pick one file or several, and the phone shows *Sending... 43%* above
+the typing line, then *Sent to the channel*. Everybody on the net sees a
+blue line, *Muie sent a file: DOR 12OCT.docx (1.2 MB)*, with a **GET IT**
+button that keeps a copy on their own device. On the laptop the file is on
+the **Sent to you** tab, waiting for ZERO to accept it into the received
+folder, and `messages.txt` records who sent what and when. Up to 1 GB per
+file. The paperclip in a private chat sends the file to that person only.
+In a class the paperclip always sends to the teacher only, never to the
+other children.
 
 ### What a laptop sees
 
@@ -407,7 +420,9 @@ Press **w**.
 
 Accepted work is in **Documents\Gorilla Hub received** (or the folder you chose
 on the start screen). On the handing-out screen, **o** opens that folder.
-Nothing sent to you is ever handed back out to the class.
+Nothing sent to you is ever handed back out to the class. (On a net it is
+different on purpose: a report sent to # main with the paperclip is for the
+whole net, and every station can GET IT from the channel while it waits here.)
 
 Every piece is filed with the name the child typed, what the device is, and a
 short tag from the hardware, for example `Amina #wa3x [an Android phone]`. The

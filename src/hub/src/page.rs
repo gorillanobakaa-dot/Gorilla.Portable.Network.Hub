@@ -1155,6 +1155,9 @@ pub struct UploadOutcome {
     pub tag: &'static str,
     /// What the roster shows, e.g. "homework.jpg" or "3 files".
     pub shown: Option<String>,
+    /// Every file that landed: (the name the device gave it, the name in the
+    /// waiting area, bytes). The channel's file line is written from this.
+    pub landed: Vec<(String, String, u64)>,
 }
 
 /// Where work waits for the teacher to look at it.
@@ -1198,15 +1201,15 @@ pub fn take_upload<R: Read>(
     let boundary = header_value(headers, "content-type")
         .and_then(|ct| ct.split("boundary=").nth(1).map(|b| b.trim().trim_matches('"').to_string()));
     let Some(boundary) = boundary else {
-        return Ok(UploadOutcome { tag: "empty", shown: None });
+        return Ok(UploadOutcome { tag: "empty", shown: None, landed: Vec::new() });
     };
     if content_length == 0 {
-        return Ok(UploadOutcome { tag: "empty", shown: None });
+        return Ok(UploadOutcome { tag: "empty", shown: None, landed: Vec::new() });
     }
     if content_length > UPLOAD_CAP {
         // The body still has to be drained or the connection is poisoned, but
         // a body this size is exactly what we will not read. Close instead.
-        return Ok(UploadOutcome { tag: "toobig", shown: None });
+        return Ok(UploadOutcome { tag: "toobig", shown: None, landed: Vec::new() });
     }
 
     let mut body = BodyReader { r: reader, left: content_length, pushback: Vec::new() };
@@ -1216,11 +1219,11 @@ pub fn take_upload<R: Read>(
     let dir = waiting_dir(root);
     if std::fs::create_dir_all(&dir).is_err() {
         drain(&mut body)?;
-        return Ok(UploadOutcome { tag: "cantsave", shown: None });
+        return Ok(UploadOutcome { tag: "cantsave", shown: None, landed: Vec::new() });
     }
 
     let who = sanitize_filename(&serve::device_label(peer_ip));
-    let mut landed: Vec<String> = Vec::new();
+    let mut landed: Vec<(String, String, u64)> = Vec::new();
     let mut trouble: Option<&'static str> = None;
     let mut line = Vec::new();
 
@@ -1298,7 +1301,7 @@ pub fn take_upload<R: Read>(
             match place(&dir, &tmp, &who, &clean, &digest) {
                 Some(final_name) => {
                     serve::note_pending(peer_ip, &clean, &final_name, written);
-                    landed.push(clean);
+                    landed.push((clean, final_name, written));
                 }
                 None => {
                     let _ = std::fs::remove_file(&tmp);
@@ -1313,18 +1316,18 @@ pub fn take_upload<R: Read>(
     drain(&mut body)?;
 
     if let Some(t) = trouble {
-        return Ok(UploadOutcome { tag: t, shown: None });
+        return Ok(UploadOutcome { tag: t, shown: None, landed: Vec::new() });
     }
     if landed.is_empty() {
-        return Ok(UploadOutcome { tag: "empty", shown: None });
+        return Ok(UploadOutcome { tag: "empty", shown: None, landed: Vec::new() });
     }
-    serve::note_direction(peer_ip, &landed[0], 0, content_length, serve::Direction::Done);
+    serve::note_direction(peer_ip, &landed[0].0, 0, content_length, serve::Direction::Done);
     let shown = if landed.len() == 1 {
-        landed[0].clone()
+        landed[0].0.clone()
     } else {
         format!("{} files", landed.len())
     };
-    Ok(UploadOutcome { tag: "handin", shown: Some(shown) })
+    Ok(UploadOutcome { tag: "handin", shown: Some(shown), landed })
 }
 
 /// Stream one part's payload to `out`, stopping at the boundary.
@@ -1696,6 +1699,8 @@ pub const NET_WORDS: &[&str] = &[
     "gone", "in charge", "waiting", "muted", "Slow down a little, then send again.",
     "The room is quiet. Your message was not sent.", "Not sent. The wifi may have dropped. Try again.",
     "Sent. Your teacher will find a safe moment to talk to you.",
+    "GET IT", "Send a file to your teacher", "Sent to your teacher", "Sending", "Too big. The limit is 1 GB.",
+    "The laptop could not save it. Tell the person in charge.", "Nothing was chosen.", "Or tap the paperclip next to SEND in # main.",
 ];
 
 /// The class net page (net.html) for one device: a child's, or the

@@ -29,6 +29,8 @@ const AMBER: Color32 = Color32::from_rgb(0x9a, 0x5b, 0x00);
 const BLUE: Color32 = Color32::from_rgb(0x28, 0x52, 0x7a);
 const CALL_BG: Color32 = Color32::from_rgb(0xff, 0xf4, 0xd6);
 const MINE_BG: Color32 = Color32::from_rgb(0xdd, 0xe9, 0xd2);
+/// A file sent to the channel: a report arriving is news, in the blue of a link.
+const BLUE_FILE: Color32 = Color32::from_rgb(0x28, 0x52, 0x7a);
 const HELP_BG: Color32 = Color32::from_rgb(0xfd, 0xec, 0xea);
 /// Behind the briefing, wherever it is pinned.
 const BRIEF_BG: Color32 = Color32::from_rgb(0xee, 0xf4, 0xe6);
@@ -2101,6 +2103,7 @@ fn line_row(ui: &mut egui::Ui, at: &str, who: &str, op: bool, kind: crate::room:
                 LineKind::Event => t.italics().weak(),
                 LineKind::Call => t.strong(),
                 LineKind::Answer => t.color(GREEN_OK).strong(),
+                LineKind::File => t.color(BLUE_FILE).strong(),
                 LineKind::Text if text.starts_with('\u{270b}') => t.color(RED).strong(),
                 LineKind::Text => t,
             };
@@ -3010,6 +3013,7 @@ impl Gui {
                             "call" => crate::room::LineKind::Call,
                             "ans" => crate::room::LineKind::Answer,
                             "ev" => crate::room::LineKind::Event,
+                            "file" => crate::room::LineKind::File,
                             _ => crate::room::LineKind::Text,
                         };
                         line_row(ui, &l.at, &l.who, l.key == "op", kind, &l.text, l.key == s.my_key, false);

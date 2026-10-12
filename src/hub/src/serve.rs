@@ -1054,6 +1054,9 @@ hub serve  -  hand out the files in a folder to every device in the room
   --helpers <number>    how many devices to serve at once (default: 8 per core)
   --port <number>       which port to listen on (default 8080)
   --address <ip:port>   listen on one address only
+  --net                 a team's net, not a class: the operator is ZERO, the
+                        pages say team words, and a file sent to # main is
+                        for everybody (the window's Open a net does this)
   -h, --help            this text
 
   examples:
@@ -1121,6 +1124,7 @@ hub serve  -  hand out the files in a folder to every device in the room
             }
             "--port" => { port = value().and_then(|v| v.parse().ok()).unwrap_or(port); i += 2; }
             "--address" => { addr = value(); i += 2; }
+            "--net" => { crate::room::set_team(true); i += 1; }
             other if other.starts_with('-') => {
                 eprintln!("Not an option: {other}\n");
                 eprintln!("{USAGE}");
@@ -2066,19 +2070,6 @@ fn serve_net(
     root: &Path,
     keep: bool,
 ) -> std::io::Result<bool> {
-    let body = if method == "POST" {
-        let len: usize = head
-            .lines()
-            .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
-            .and_then(|l| l.split_once(':'))
-            .and_then(|(_, v)| v.trim().parse().ok())
-            .unwrap_or(0);
-        let mut b = vec![0u8; len.min(16 * 1024)];
-        reader.read_exact(&mut b)?;
-        String::from_utf8_lossy(&b).into_owned()
-    } else {
-        String::new()
-    };
     let operator = is_operator(peer_ip);
     let (key, nick) = if operator {
         ("op".to_string(), crate::room::op_nick())
@@ -2099,6 +2090,104 @@ fn serve_net(
             .find_map(|p| p.strip_prefix(name).and_then(|v| v.strip_prefix('=')))
             .and_then(|v| v.parse().ok())
             .unwrap_or(0)
+    };
+    let word = |name: &str| -> String {
+        query
+            .split('&')
+            .find_map(|p| p.strip_prefix(name).and_then(|v| v.strip_prefix('=')))
+            .map(|v| percent_decode(&v.replace('+', " ")))
+            .unwrap_or_default()
+    };
+
+    // A FILE SENT FROM THE PAGE: a report, a picture, a zip. Multipart, any
+    // size up to the hand-in cap, streamed to the waiting area exactly as a
+    // hand-in is (the operator's Sent-to-you list has it, accept moves it into
+    // the received folder). Then the channel, or the private chat, is told.
+    //
+    // The owner, 2026-10-12: a member of a relief team could type a few words
+    // into # main but had no way to send a daily operations report or a
+    // sitrep, which is what an NGO runs on. This is that way.
+    //
+    // Who sees it: on a NET (a team), a file sent to # main is a line in
+    // # main with GET IT for everybody, ZERO included. In a CLASS the same
+    // tap sends the file to the teacher only, in the child's private chat:
+    // what one child sends must not reach thirty others before the teacher
+    // has looked at it. A file sent from a private chat is private either way.
+    if method == "POST" && path == "/net/file" {
+        let to = word("to");
+        let to_channel = to == "#main" && crate::room::team();
+        let private_ok = to == "#main" || to == format!("@{key}") || (operator && to.starts_with('@'));
+        if !private_ok {
+            return respond(out, 200, "text/plain", b"no").map(|_| false);
+        }
+        // Refused before any byte of the body is read: a muted station does
+        // not get to fill the laptop's disk first. The connection closes.
+        let gate = crate::room::may_send(&key, operator);
+        if gate != "ok" {
+            return respond(out, 200, "text/plain; charset=utf-8", gate.as_bytes()).map(|_| false);
+        }
+        let outcome = crate::page::take_upload(reader, head, peer_ip, root)?;
+        if outcome.tag != "handin" {
+            return respond(out, 200, "text/plain; charset=utf-8", outcome.tag.as_bytes()).map(|_| false);
+        }
+        for (name, on_disk, bytes) in &outcome.landed {
+            let text = format!("sent a file: {name} ({})", crate::page::human(*bytes));
+            if to_channel {
+                let (w, line) = crate::room::sent_file(&key, &nick, &text, on_disk, operator);
+                if w != "ok" {
+                    return respond(out, 200, "text/plain; charset=utf-8", w.as_bytes()).map(|_| false);
+                }
+                if let Some(l) = line {
+                    note_line(root, "messages.txt", &format!("#main  {who}: {}  -> waiting/{}", l.text, l.file));
+                }
+            } else if operator {
+                let k = to.trim_start_matches('@');
+                if let Some(m) = crate::chat::from_adult(k, &text, crate::chat::Kind::Text, false) {
+                    note_line(root, "messages.txt", &format!("teacher -> {}: {}  -> waiting/{on_disk}", m.label, m.text));
+                }
+            } else {
+                let form = format!(
+                    "kind=text&p=0&token={}&text={}",
+                    crate::page::urlencode(&format!("file-{on_disk}")),
+                    crate::page::urlencode(&format!("\u{1f4ce} {text}"))
+                );
+                crate::page::take_talk(peer_ip, &form, root);
+                note_line(root, "messages.txt", &format!("{who}  -> waiting/{on_disk}"));
+            }
+        }
+        return respond(out, 200, "text/plain; charset=utf-8", b"ok").map(|_| false);
+    }
+    // GET IT on a file line: served from the waiting area, or from the
+    // received folder once the operator has accepted it. A net only: in a
+    // class nothing a child sent is handed back out (serve::work_children_sent_in
+    // test). Refused files are never served: refusing is the operator saying no.
+    if method == "GET" && path.starts_with("/net/f/") {
+        let name = percent_decode(&path["/net/f/".len()..]);
+        let clean = !name.is_empty() && !name.starts_with('.') && !name.contains('/') && !name.contains('\\');
+        if !clean || !(crate::room::team() || operator) {
+            return respond(out, 404, "text/plain", b"not found").map(|_| keep);
+        }
+        for dir in [crate::page::waiting_dir(root), crate::page::handed_in_dir(root)] {
+            let p = dir.join(&name);
+            if p.is_file() {
+                return send_file(out, &p, None, peer_ip, true).map(|_| keep);
+            }
+        }
+        return respond(out, 404, "text/plain", b"not found").map(|_| keep);
+    }
+
+    let body = if method == "POST" {
+        let len: usize = head
+            .lines()
+            .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
+            .and_then(|l| l.split_once(':'))
+            .and_then(|(_, v)| v.trim().parse().ok())
+            .unwrap_or(0);
+        let mut b = vec![0u8; len.min(16 * 1024)];
+        reader.read_exact(&mut b)?;
+        String::from_utf8_lossy(&b).into_owned()
+    } else {
+        String::new()
     };
 
     if method == "GET" && path == "/net/wait" {
@@ -2456,6 +2545,68 @@ mod block_tests {
         let mut out = Vec::new();
         let _ = s.read_to_end(&mut out);
         String::from_utf8_lossy(&out).to_string()
+    }
+
+    /// A report sent from the page on a net: one multipart POST lands the file
+    /// in the waiting area, # main gets a file line naming it, GET IT serves
+    /// the same bytes back as a download, and the record says where it went.
+    /// Loopback is the operator, which is allowed to send too.
+    #[test]
+    fn a_file_sent_to_the_channel_lands_is_announced_and_can_be_fetched() {
+        let _g = serialised();
+        let _r = crate::room::tests::LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::room::clear();
+        crate::room::set_team(true);
+        let root = tmproot("netfile");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        crate::page::set_receive_dir(None);
+        let port = serve_loopback(root.clone());
+
+        let content = b"SITREP 12 OCT 2026\r\nAll stations: nothing to report.\r\n";
+        let b = "----GorillaBoundary7";
+        let body = {
+            let mut v = Vec::new();
+            v.extend_from_slice(format!("--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"SITREP 12OCT.txt\"\r\nContent-Type: text/plain\r\n\r\n").as_bytes());
+            v.extend_from_slice(content);
+            v.extend_from_slice(format!("\r\n--{b}--\r\n").as_bytes());
+            v
+        };
+        let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        write!(
+            s,
+            "POST /net/file?to=%23main&token=t1 HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: multipart/form-data; boundary={b}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .unwrap();
+        s.write_all(&body).unwrap();
+        let mut out = Vec::new();
+        let _ = s.read_to_end(&mut out);
+        let answer = String::from_utf8_lossy(&out).to_string();
+        assert!(answer.ends_with("ok"), "the page is told ok: {answer}");
+
+        let state = get(port, "/net/wait?since=0&line=0");
+        assert!(state.contains("\"kind\":\"file\"") && state.contains("sent a file: SITREP 12OCT.txt (54 B)"), "{state}");
+        let on_disk = state.split("\"file\":\"").nth(1).and_then(|r| r.split('"').next()).expect("the name on disk").to_string();
+        assert!(crate::page::waiting_dir(&root).join(&on_disk).is_file(), "{on_disk} waits for the operator");
+        // PENDING is process-wide and other tests leave entries in it: ours is there.
+        assert!(pending().iter().any(|p| p.on_disk == on_disk), "and is on the Sent-to-you list");
+
+        let got = get(port, &format!("/net/f/{}", crate::page::urlencode(&on_disk)));
+        assert!(got.contains("Content-Disposition: attachment") && got.ends_with(std::str::from_utf8(content).unwrap()), "GET IT gives the bytes back: {got}");
+        assert!(get(port, "/net/f/..%2F..%2Fsecret.txt").contains("404"), "no walking out of the waiting area");
+        assert!(get(port, "/net/f/nothing-here.txt").contains("404"));
+
+        let record = fs::read_to_string(crate::page::handed_in_dir(&root).join("messages.txt")).unwrap_or_default();
+        assert!(record.contains("sent a file: SITREP 12OCT.txt") && record.contains("-> waiting/"), "the record says where it went: {record}");
+
+        // In a class, nothing a child sent is handed back out.
+        crate::room::set_team(false);
+        assert!(get(port, &format!("/net/f/{}", crate::page::urlencode(&on_disk))).contains("Content-Disposition: attachment"), "the operator still may");
+        crate::room::clear();
+        halt();
+        let _ = fs::remove_dir_all(&root);
     }
 
     /// The whole point of the feature, end to end over a real socket: a paused
