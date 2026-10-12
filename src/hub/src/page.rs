@@ -336,7 +336,7 @@ pub fn class_page(root: &Path, done: Option<&str>, peer_ip: &str, rename: bool, 
         t(l, "Not you? Tap here to change it.")
     ));
     let result = match done {
-        Some("handin") => Some(("done", tw(l, "<b>Your work arrived.</b> It is on your teacher's laptop now, waiting for your teacher to accept it. You can send more, or close this page.", "<b>Your file arrived.</b> It is on the net's laptop now, waiting to be accepted. You can send more, or close this page."))),
+        Some("handin") => Some(("done", tw(l, "<b>Your work arrived.</b> It is on your teacher's laptop now, waiting for your teacher to accept it. You can send more, or close this page.", "<b>Your file arrived.</b> It is in the net's received folder now. You can send more, or close this page."))),
         Some("note") => Some(("done", tw(l, "<b>Your note arrived.</b> Your teacher can read it on the laptop.", "<b>Your note arrived.</b> It can be read on the net's laptop."))),
         Some("empty") => Some(("bad", tw(l, "<b>Nothing was sent</b>, because no file was chosen. Under \"Send your work\", tap Choose files and pick your work first.", "<b>Nothing was sent</b>, because no file was chosen. Under \"Send a file\", tap Choose files and pick it first."))),
         Some("toobig") => Some(("bad", tw(l, "<b>That file is too big to send this way</b> (more than 1 GB). Ask your teacher what to do.", "<b>That file is too big to send this way</b> (more than 1 GB). Ask the person in charge what to do."))),
@@ -1327,6 +1327,17 @@ pub fn take_upload<R: Read>(
             match place(&dir, &tmp, &who, &clean, &digest) {
                 Some((final_name, repeat)) => {
                     serve::note_pending(peer_ip, &clean, &final_name, written);
+                    // A NET ACCEPTS BY ITSELF. The waiting area and the accept
+                    // button are a classroom's safeguard: nothing a child sends
+                    // lands in the teacher's folder unseen. A rescue team's
+                    // report must land the moment it arrives, with nobody to
+                    // press anything at 02:00. The owner, 2026-10-12: even
+                    // knowing the hub, it took a while to find the files in
+                    // waiting/; a ZERO under stress will not look. The record
+                    // still names every file (the caller writes the line).
+                    if crate::room::team() {
+                        let _ = serve::accept_pending(root, &final_name);
+                    }
                     landed.push((clean, final_name, written, repeat));
                 }
                 None => {
@@ -1429,6 +1440,11 @@ fn skip_to_boundary<R: Read>(body: &mut BodyReader<R>, full_boundary: &str) -> s
     }
 }
 
+/// The received folder that a waiting area belongs to (waiting/ sits inside it).
+fn handed_in_dir_of(waiting: &Path) -> PathBuf {
+    waiting.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| waiting.to_path_buf())
+}
+
 /// Give the finished file its name, keeping a genuine resubmission and
 /// dropping a retry. Returns the name it landed under, and whether it was
 /// already there (a retry: the same device, name and bytes).
@@ -1436,17 +1452,24 @@ fn place(dir: &Path, tmp: &Path, who: &str, clean: &str, digest: &str) -> Option
     let base = format!("{who}--{clean}");
     let mut final_name = base.clone();
     let mut version = 1;
+    // A net accepts by itself, so a file already taken sits in the received
+    // folder, not here: a retry has to be recognised there too, or the second
+    // send of the same report becomes "report (2)" and a second line.
+    let also = if crate::room::team() { Some(handed_in_dir_of(dir)) } else { None };
     loop {
         let candidate = dir.join(&final_name);
-        if !candidate.exists() {
+        let taken = also.as_ref().map(|d| d.join(&final_name)).filter(|p| p.exists());
+        if !candidate.exists() && taken.is_none() {
             break;
         }
         // Same device, same name, same bytes: the retry of an upload that
         // already landed. On the links this is for, a phone re-posts without
         // the child doing anything.
-        if file_digest(&candidate).as_deref() == Some(digest) {
-            let _ = std::fs::remove_file(tmp);
-            return Some((final_name, true));
+        for p in [Some(candidate), taken].into_iter().flatten() {
+            if p.exists() && file_digest(&p).as_deref() == Some(digest) {
+                let _ = std::fs::remove_file(tmp);
+                return Some((final_name, true));
+            }
         }
         version += 1;
         final_name = versioned(&base, version);

@@ -814,12 +814,12 @@ pub const TABLE: &[(&str, [&str; 5])] = &[
         "فقط یک بار این کار را می‌کنید. این صفحه از لپ‌تاپ شبکه از طریق وای‌فای آن می‌آید. بدون انترنت کار می‌کند.",
         "دا یوازې یو ځل کوئ. دا پاڼه د شبکې له لپ ټاپ څخه د هغې د وای فای له لارې راځي. له انټرنېټ پرته کار کوي.",
     ]),
-    ("<b>Your file arrived.</b> It is on the net's laptop now, waiting to be accepted. You can send more, or close this page.", [
-        "<b>Ton fichier est arrivé.</b> Il est sur l'ordinateur du réseau, en attente d'acceptation. Tu peux en envoyer d'autres ou fermer cette page.",
-        "<b>Faili yako imefika.</b> Iko kwenye kompyuta ya mtandao sasa, ikisubiri kukubaliwa. Unaweza kutuma zaidi, au kufunga ukurasa huu.",
-        "<b>O teu ficheiro chegou.</b> Está no computador da rede, à espera de ser aceite. Podes enviar mais, ou fechar esta página.",
-        "<b>فایل شما رسید.</b> حالا روی لپ‌تاپ شبکه است و منتظر پذیرش. می‌توانید بیشتر بفرستید یا این صفحه را ببندید.",
-        "<b>ستاسو فایل ورسېد.</b> اوس د شبکې په لپ ټاپ کې دی او د منلو په تمه دی. نور هم لیږلی شئ، یا دا پاڼه وتړئ.",
+    ("<b>Your file arrived.</b> It is in the net's received folder now. You can send more, or close this page.", [
+        "<b>Ton fichier est arrivé.</b> Il est dans le dossier reçu du réseau. Tu peux en envoyer d'autres ou fermer cette page.",
+        "<b>Faili yako imefika.</b> Iko kwenye folda ya mapokezi ya mtandao sasa. Unaweza kutuma zaidi, au kufunga ukurasa huu.",
+        "<b>O teu ficheiro chegou.</b> Está na pasta de recebidos da rede. Podes enviar mais, ou fechar esta página.",
+        "<b>فایل شما رسید.</b> حالا در پوشهٔ دریافتی شبکه است. می‌توانید بیشتر بفرستید یا این صفحه را ببندید.",
+        "<b>ستاسو فایل ورسېد.</b> اوس د شبکې په ترلاسه شوو فولډر کې دی. نور هم لیږلی شئ، یا دا پاڼه وتړئ.",
     ]),
     ("<b>Your note arrived.</b> It can be read on the net's laptop.", [
         "<b>Ta note est arrivée.</b> Elle peut être lue sur l'ordinateur du réseau.",

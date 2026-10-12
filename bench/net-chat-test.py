@@ -192,9 +192,22 @@ def main():
         kofi.set_input_files("#pick", report)
         check(sees(kofi, "#above", "Already here", 15), "sending the same file again: the phone says it is already here")
         check(kofi.locator("#log .row.file").count() == before, "and the channel gets no second line for it")
+        # a net accepts by itself: straight into received; a class keeps it waiting for the teacher
         waiting = os.path.join(a.received, "waiting")
-        landed = [n for n in (os.listdir(waiting) if os.path.isdir(waiting) else []) if "DOR 12OCT" in n]
-        check(bool(landed), "the file waits for the operator in received/waiting (" + ", ".join(landed) + ")")
+        where = a.received if a.net else waiting
+        # THIS run's report, by its bytes: the demo folder keeps earlier runs' copies
+        stamp = open(report, "rb").read()
+        def same_bytes(d, n):
+            try:
+                return open(os.path.join(d, n), "rb").read() == stamp
+            except OSError:
+                return False
+        landed = [n for n in (os.listdir(where) if os.path.isdir(where) else []) if "DOR 12OCT" in n and same_bytes(where, n)]
+        check(bool(landed), ("on a net the file is in the received folder at once (" if a.net else "in a class the file waits for the teacher in received/waiting (") + ", ".join(landed) + ")")
+        if a.net:
+            # the same name must not also sit in waiting (older runs' files may: a class run leaves them)
+            left = [n for n in (os.listdir(waiting) if os.path.isdir(waiting) else []) if n in landed and same_bytes(waiting, n)]
+            check(not left, "and nothing of it is left waiting")
 
         teacher.fill("#text", "Good morning. The worksheet is in # files.")
         teacher.click("#sendbtn")
@@ -341,7 +354,7 @@ def main():
         return open(p, encoding="utf-8").read() if os.path.exists(p) else ""
     msgs, signs = read("messages.txt"), read("sign-ins.txt")
     check("#main" in msgs and "hello everybody from Amina" in msgs, "messages.txt has the # main lines")
-    check("DOR 12OCT.txt" in msgs and "-> waiting/" in msgs, "messages.txt says the file arrived and where it went")
+    check("DOR 12OCT.txt" in msgs and ("-> received/" if a.net else "-> waiting/") in msgs, "messages.txt says the file arrived and where it went")
     check("tapped HELP" in msgs and "teacher -> " in msgs, "messages.txt has the HELP and the teacher's answers")
     check("COMMS CHECK" in signs and "answered the comms check" in signs, "sign-ins.txt has the comms check and the answers")
     check("removed from the lesson" in signs, "sign-ins.txt has the removed device")

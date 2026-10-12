@@ -1793,7 +1793,11 @@ impl Gui {
                                         open_with_system(p);
                                     }
                                 }
-                                if waiting.is_file() {
+                                if kept.is_file() && self.app.net {
+                                    if ui.button("\u{1f4c2} Show in folder").clicked() {
+                                        open_with_system(&crate::page::handed_in_dir(&root));
+                                    }
+                                } else if waiting.is_file() {
                                     if ui.add(egui::Button::new(RichText::new("\u{2714} Keep").color(Color32::WHITE)).fill(GREEN_OK))
                                         .on_hover_text("Into the received folder, off the Sent to you list")
                                         .clicked()
@@ -2029,9 +2033,17 @@ impl Gui {
         egui::CentralPanel::default().show(ctx, |ui| {
             heading(ui, if self.app.net { "Sent to you" } else { "Work handed in" });
             let root = PathBuf::from(shellexpand(&self.app.folder));
+            if self.app.net {
+                // A net accepts by itself (page::take_upload): nothing waits.
+                ui.label(format!("On a net, files go straight into the received folder the moment they arrive, and the channel says who sent what: {}", crate::page::handed_in_dir(&root).display()));
+                ui.add_space(6.0);
+                if big(ui, "Open the received folder", GREEN).clicked() {
+                    open_with_system(&crate::page::handed_in_dir(&root));
+                }
+                return;
+            }
             ui.label(format!(
-                "{} Nothing lands in your folder until you accept it. Accepted files go to {}",
-                if self.app.net { "What anybody on the net sends you waits here." } else { "Work a child sends waits here." },
+                "Work a child sends waits here. Nothing lands in your folder until you accept it. Accepted files go to {}",
                 crate::page::handed_in_dir(&root).display()
             ));
             ui.add_space(6.0);

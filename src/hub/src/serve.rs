@@ -2135,7 +2135,7 @@ fn serve_net(
             if *repeat {
                 // Already here, byte for byte: the channel was told the first
                 // time. The record notes the repeat; the sender is told "same".
-                note_line(root, "messages.txt", &format!("{who}  sent {name} again (already here as waiting/{on_disk})"));
+                note_line(root, "messages.txt", &format!("{who}  sent {name} again (already here as {}/{on_disk})", if crate::room::team() { "received" } else { "waiting" }));
                 continue;
             }
             fresh += 1;
@@ -2146,7 +2146,7 @@ fn serve_net(
                     return respond(out, 200, "text/plain; charset=utf-8", w.as_bytes()).map(|_| false);
                 }
                 if let Some(l) = line {
-                    note_line(root, "messages.txt", &format!("#main  {who}: {}  -> waiting/{}", l.text, l.file));
+                    note_line(root, "messages.txt", &format!("#main  {who}: {}  -> received/{}", l.text, l.file));
                 }
             } else if operator {
                 let k = to.trim_start_matches('@');
@@ -2597,9 +2597,11 @@ mod block_tests {
         let state = get(port, "/net/wait?since=0&line=0");
         assert!(state.contains("\"kind\":\"file\"") && state.contains("sent a file: SITREP 12OCT.txt (54 B)"), "{state}");
         let on_disk = state.split("\"file\":\"").nth(1).and_then(|r| r.split('"').next()).expect("the name on disk").to_string();
-        assert!(crate::page::waiting_dir(&root).join(&on_disk).is_file(), "{on_disk} waits for the operator");
-        // PENDING is process-wide and other tests leave entries in it: ours is there.
-        assert!(pending().iter().any(|p| p.on_disk == on_disk), "and is on the Sent-to-you list");
+        // A net accepts by itself: the file is in the received folder, not
+        // waiting, and not on the Sent-to-you list.
+        assert!(crate::page::handed_in_dir(&root).join(&on_disk).is_file(), "{on_disk} is in the received folder at once");
+        assert!(!crate::page::waiting_dir(&root).join(&on_disk).exists(), "and not left waiting");
+        assert!(!pending().iter().any(|p| p.on_disk == on_disk), "and not on the Sent-to-you list");
 
         let got = get(port, &format!("/net/f/{}", crate::page::urlencode(&on_disk)));
         assert!(got.contains("Content-Disposition: attachment") && got.ends_with(std::str::from_utf8(content).unwrap()), "GET IT gives the bytes back: {got}");
@@ -2607,7 +2609,7 @@ mod block_tests {
         assert!(get(port, "/net/f/nothing-here.txt").contains("404"));
 
         let record = fs::read_to_string(crate::page::handed_in_dir(&root).join("messages.txt")).unwrap_or_default();
-        assert!(record.contains("sent a file: SITREP 12OCT.txt") && record.contains("-> waiting/"), "the record says where it went: {record}");
+        assert!(record.contains("sent a file: SITREP 12OCT.txt") && record.contains("-> received/"), "the record says where it went: {record}");
 
         // The same bytes again (a retry, or a second tap): one file on disk,
         // one line in the channel, and the sender is told "same".
@@ -2625,7 +2627,8 @@ mod block_tests {
         assert!(String::from_utf8_lossy(&out).ends_with("same"), "a repeat is answered with same");
         let again = get(port, "/net/wait?since=0&line=0");
         assert_eq!(again.matches("\"kind\":\"file\"").count(), 1, "one line for one file: {again}");
-        assert_eq!(fs::read_dir(crate::page::waiting_dir(&root)).unwrap().count(), 1, "one file on disk");
+        let on_disk_files = fs::read_dir(crate::page::handed_in_dir(&root)).unwrap().flatten().filter(|e| e.path().is_file() && e.file_name() != "messages.txt").count();
+        assert_eq!(on_disk_files, 1, "one file on disk");
 
         // In a class, nothing a child sent is handed back out.
         crate::room::set_team(false);
