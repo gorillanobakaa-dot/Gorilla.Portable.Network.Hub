@@ -163,7 +163,7 @@ Press **OPEN A NET**. One form:
 | **Wifi band** (Windows) | Which radio band | Leave it on **2.4 GHz**: every phone sees it |
 | **The briefing** | The one thing everybody must know | Where you are, what to do on arrival. *ZERO has been established at the school, north gate. Report to ZERO on arrival.* You can change it at any time |
 | **Files to hand out** | Optional | Maps, forms, lesson sheets. Leave it as *None yet* and add files later from inside the net |
-| **Work sent to you goes to** | Where files people send you land | *Documents\Gorilla Hub received* |
+| **Work sent to you goes to** | Where files people send you land | *Documents\Gorilla Hub\received* |
 
 Press **OPEN THE NET**. The wifi comes up and the net screen appears, with
 your name and the briefing already in the channel.
@@ -254,7 +254,7 @@ table below is only for reading ahead.
 | **Private help password** | Locks the record of private help, and is the trusted adult's sign-in | At least 8 characters. Stars on the screen while you type. Without it, private help stays off |
 | **Second adult's password** | Optional: a second adult who may also sign in and read the record | Their own password, at least 8 characters, or leave it empty |
 | **Connections to serve at once** | How many requests at the same time | Leave it alone |
-| **Received files go to** | The folder children's work goes into | *Documents\Gorilla Hub received*. Enter lets you choose another folder |
+| **Received files go to** | The folder children's work goes into | *Documents\Gorilla Hub\received*. Enter lets you choose another folder |
 
 ### Step 3: choose *Start handing out*
 
@@ -418,7 +418,7 @@ Press **w**.
 
 [![Accepted 5 pieces of work. They are in ... Gorilla Hub received. Press o on the sending screen to open that folder](screenshots/gallery/windows-0.10.0-accepted-all.png)](screenshots/gallery/windows-0.10.0-accepted-all.png)
 
-Accepted work is in **Documents\Gorilla Hub received** (or the folder you chose
+Accepted work is in **Documents\Gorilla Hub\received** (or the folder you chose
 on the start screen). On the handing-out screen, **o** opens that folder.
 Nothing sent to you is ever handed back out to the class. (On a net it is
 different on purpose: a report sent to # main with the paperclip is for the

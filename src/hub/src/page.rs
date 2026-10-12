@@ -1119,8 +1119,16 @@ pub fn receive_dir_is_set() -> bool {
 }
 
 /// The place received files go unless the person chooses another:
-/// Documents\Gorilla Hub received (a folder name a person can find by
+/// Documents\Gorilla Hub\received (a folder name a person can find by
 /// looking, and search for by the program's name).
+///
+/// ONE FOLDER FOR EVERYTHING OF THE HUB'S. Until 2026-10-12 this was
+/// Documents\Gorilla Hub received, and the team's files folder sat beside it
+/// as Documents\Gorilla Hub files for the team; with the test folders the
+/// owner counted seven hub folders loose in Documents. Now everything lives
+/// under Documents\Gorilla Hub. An older install whose received folder is
+/// still in the old place keeps using it (checked below), so an upgrade
+/// never splits a person's received files across two folders.
 pub fn default_receive_dir() -> PathBuf {
     let home = std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
@@ -1128,7 +1136,12 @@ pub fn default_receive_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."));
     let docs = home.join("Documents");
     let base = if docs.is_dir() { docs } else { home };
-    base.join("Gorilla Hub received")
+    let new = base.join("Gorilla Hub").join("received");
+    let old = base.join("Gorilla Hub received");
+    if !new.is_dir() && old.is_dir() {
+        return old;
+    }
+    new
 }
 
 /// Strip a filename to something safe: no paths, no traversal, no leading

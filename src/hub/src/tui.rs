@@ -3426,12 +3426,18 @@ impl App {
     }
 
     /// Files for the team when the net was opened without a folder: an
-    /// empty folder next to the received one. Anything dropped into it
-    /// during the net appears unticked on the Files tab, where a tick
-    /// publishes it, exactly as a file added to a lesson folder does.
+    /// empty folder next to the received one (Documents\Gorilla Hub\files
+    /// for the team, when the received folder is the default). Anything
+    /// dropped into it during the net appears unticked on the Files tab,
+    /// where a tick publishes it, exactly as a file added to a lesson folder
+    /// does. An older install with its received folder still loose in
+    /// Documents keeps the old name beside it.
     fn net_files_folder(&self) -> PathBuf {
         let base = self.receive_dir.parent().map(|p| p.to_path_buf()).unwrap_or_else(starting_folder);
-        base.join("Gorilla Hub files for the team")
+        if self.receive_dir.file_name().map(|n| n == "Gorilla Hub received").unwrap_or(false) {
+            return base.join("Gorilla Hub files for the team");
+        }
+        base.join("files for the team")
     }
 
     /// OPEN THE NET. The wifi, the server and the room, one press. A folder
