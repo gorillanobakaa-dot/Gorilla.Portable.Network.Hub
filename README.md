@@ -466,7 +466,7 @@ somebody's life. Everything it gained since the first release cost 246,744
 bytes.
 
 The access point rig used to take the measurements lives separately in
-`Scripts.For.Work/wifi-ap-lab/`, because those are bench instruments rather
+`Scripts/wifi-ap-lab/`, because those are bench instruments rather
 than part of the product.
 
 ## Installing
